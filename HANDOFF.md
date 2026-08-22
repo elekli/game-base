@@ -37,7 +37,7 @@
 - [ ] **下一個 Batch 才能驗證：** 尚無 code，因此沒有 typecheck、測試、build、實際瀏覽器、手機或部署證據。
 - [ ] **需外部帳號條件：** 實作 API 串接前確認 BoardGameGeek 與 Twitch／IGDB 憑證已申請；不得把憑證送到瀏覽器。
 - [x] GitHub Wayfinder 驗證：主地圖已有 11 張 sub-issues；labels、空 assignee 與 native dependencies 已回讀。
-- [x] Git remote 與 `main` branch protection 已驗證：遠端 `main` 與本機 `17abaa0` 一致；必須經 PR、管理者也受規則約束、要求線性歷史與對話解決，並禁止 force push／刪除。尚無 CI，因此暫未設定 required status checks。
+- [x] Git remote 與 `main` branch protection 已驗證：首次 push 後已透過受保護的 PR 流程合併文件變更；`main` 必須經 PR、管理者也受規則約束、要求線性歷史與對話解決，並禁止 force push／刪除。尚無 CI，因此暫未設定 required status checks。
 
 ---
 
