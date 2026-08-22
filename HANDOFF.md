@@ -1,6 +1,6 @@
 # Puizeru Gamebase — HANDOFF
 
-**Last session:** 2026-08-22（Batch 1 complete：產品範圍與領域規格定稿）
+**Last session:** 2026-08-22（Batch 2 started：Git repository 與 Wayfinder 決策地圖建立）
 **For next session:** This file stands alone. You should not need the original conversation or a parent plan to proceed.
 
 ---
@@ -15,7 +15,14 @@
 - `/Users/elek/puizeru-gamebase/docs/research/neon-vs-supabase.md`（257 行）記錄 Neon／Supabase 比較；因真實產品經驗與求職目標，決定採 Supabase PostgreSQL＋Storage。
 - `/Users/elek/puizeru-gamebase/docs/adr/` 有 4 份 ADR。ADR 0001 已被 0003／0004 取代；現行正式方向是 Vercel＋Cloudflare Access＋Supabase，QNAP 只在 MVP 後做異地備份。
 - 已完成一次跨文件矛盾檢查並修正：一般中繼資料與每日 BGG 指標更新的例外、遊戲條目刪除與其他低風險刪除的主詞、線上應用程式與「離線瀏覽」誤寫、只有庫外引用之封存清單的還原入口。
-- 尚未建立應用程式、資料庫 migration、UI 原型或測試；目前目錄不是 Git repository，也沒有套件設定。
+- 尚未建立應用程式、資料庫 migration、UI 原型或測試；技術棧未裁決前不先建立套件設定。
+
+**Batch 2（in progress）：**
+
+- 本目錄已初始化為 Git repository；per-repo 身分是 `elek <elek.li@gmail.com>`，remote 是 `git@github.com-personal:elekli/game-base.git`，`.claude/security-tier` 為 `standard`，push guard 已安裝。
+- 本機基線提交為 `2140923 docs: establish gamebase product specification`。遠端仍是空 repository：`id_personal` 的 passphrase 尚未進 macOS Keychain，因此不能用規範要求的 SSH alias 推送；先執行 `ssh-add --apple-use-keychain ~/.ssh/id_personal`，再做首次 push。
+- GitHub Issues 是本專案的 tracker。Wayfinder 主地圖是 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1)，其下有 10 張 sub-issues，blocking edges 寫在各票的 `## Blocked by`。
+- 現在的 frontier 有 4 張：[裁決 Web 技術棧與專案骨架](https://github.com/elekli/game-base/issues/2)、[驗證真實檔案是否符合 Supabase Free 限制](https://github.com/elekli/game-base/issues/3)、[定稿 MVP 核心資料模型與不變式](https://github.com/elekli/game-base/issues/4)、[驗證行動版核心流程與筆記編輯器](https://github.com/elekli/game-base/issues/9)。
 
 ---
 
@@ -28,21 +35,21 @@
 - [x] 最後的封存清單不可達狀態已封閉：有庫內成員時從遊戲頁還原；只有庫外引用時，在建立同名清單時直接還原。
 - [ ] **下一個 Batch 才能驗證：** 尚無 code，因此沒有 typecheck、測試、build、實際瀏覽器、手機或部署證據。
 - [ ] **需外部帳號條件：** 實作 API 串接前確認 BoardGameGeek 與 Twitch／IGDB 憑證已申請；不得把憑證送到瀏覽器。
+- [x] GitHub Wayfinder 驗證：主地圖已有 10 張 sub-issues；labels、空 assignee 與 `Blocked by` 內容已回讀。
+- [ ] **Git remote 尚未驗證：** 本機提交尚未推上遠端；首次 push 後才能設定及驗證 `main` branch protection。
 
 ---
 
-## Next Actions（Batch 2：實作規劃）
+## Next Actions（Batch 2：依 Wayfinder 逐票裁決）
 
-Batch 2 要把已定稿的產品規格轉成可分批執行的工程計畫；現在不應重新進行產品逼問，也不應從 382 行需求直接跳到 coding。
+Batch 2 要把已定稿的產品規格轉成可分批執行的工程計畫；不得從 382 行需求直接跳到 coding，也不要在一個 session 解決超過一張非 research ticket。
 
-1. 讀 `/Users/elek/puizeru-gamebase/CONTEXT.md`、`TODOS.md`、ADR 0003／0004 與兩份研究文件；把 ADR 0001 視為已取代的歷史背景。
-2. 決定並記錄 Web 技術棧。預設應評估適合 Vercel 的 TypeScript 框架、Supabase PostgreSQL／Storage、migration、RLS、Supavisor transaction pooler、Cloudflare Access JWT 驗證及 Vercel Deployment Protection；不要把 Supabase Auth、Realtime 或 Edge Functions 加回 MVP。
-3. 產出資料模型與狀態機，至少涵蓋：遊戲與來源唯一性、一般／來源欄位分離、貢獻者三分類、遊戲人數、筆記軟刪除、媒體／縮圖狀態、一般清單／對稱關聯、庫外引用轉正、資源回收區、每日 BGG 指標更新及並行去重。
-4. 每個非平凡流程畫 ASCII 圖：新增遊戲、外部來源連結、批次圖片上傳、筆記自動儲存／清空確認、清單封存／還原、庫外引用轉成庫內遊戲、每日 BGG 更新、Cloudflare Access 請求邊界。
-5. 產出頁面／路由與手機流程：收藏庫網格、搜尋／篩選、新增確認、遊戲詳細頁、照片、筆記、附件、清單、資源回收區及背景更新狀態。
-6. 把實作拆成可驗收批次，逐批列出檔案、migration、測試、風險及部署驗證。先建立最小縱切，再加入媒體、筆記、清單與動態指標；不要用單次大批實作。
-7. 規劃完成後，因本產品含唯一約束、並行重試、軟刪除、權限邊界與衍生縮圖，套用 `gap-verification` 檢查不變式與交錯路徑，再開始 code。
-8. 若要正式初始化 Git，依個人 GitHub 身分設定 per-repo `user.name`／`user.email` 與正確 SSH host alias；功能實作不可直接在 `main` 進行。
+1. 先讓 `id_personal` 通過 Keychain 解鎖，將本機 `main` 首次推到遠端，再設定 GitHub branch protection；首次空 repository push 屬工程規範允許的例外，後續行為變更一律使用 feature branch＋worktree＋PR。
+2. 從 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1) 讀低解析地圖；未指定 ticket 時，依順序選第一張未阻擋、未指派的 frontier ticket。
+3. 工作前先 claim：把 ticket 指派給當前開發者；依票面型別使用 `domain-modeling`、`prototype` 或 grilling 流程。
+4. 解決後把答案寫成 resolution comment、關閉 ticket，並只在主地圖的 `Decisions so far` 加一行名稱連結與摘要；不要把詳細裁決複製到地圖。
+5. 每次裁決都重新檢查哪些 fog 已能成票、哪些 blocking edges 已解除；新增票時先建立、再補相依關係與 sub-issue。
+6. 最後由 [定稿 MVP 分批實作與驗證計畫](https://github.com/elekli/game-base/issues/11) 收斂工程計畫，並以 `gap-verification` 檢查唯一約束、並行重試、軟刪除、權限邊界與衍生縮圖，再進入 Batch 3 coding。
 
 **判斷分支：**
 
