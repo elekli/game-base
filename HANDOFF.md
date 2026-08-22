@@ -20,9 +20,9 @@
 **Batch 2（in progress）：**
 
 - 本目錄已初始化為 Git repository；per-repo 身分是 `elek <elek.li@gmail.com>`，remote 是 `git@github.com-personal:elekli/game-base.git`，`.claude/security-tier` 為 `standard`，push guard 已安裝。
-- 本機基線提交為 `2140923 docs: establish gamebase product specification`。遠端仍是空 repository：`id_personal` 的 passphrase 尚未進 macOS Keychain，因此不能用規範要求的 SSH alias 推送；先執行 `ssh-add --apple-use-keychain ~/.ssh/id_personal`，再做首次 push。
+- 本機最新提交為 `041a27f docs: record web stack decision`。遠端仍是空 repository。elek 明確不把 `id_personal` 存進 macOS Keychain；需要 push 時，改在自己的終端暫時執行 `SSH_AUTH_SOCK=~/.ssh/agent.sock ssh-add ~/.ssh/id_personal`，再由 agent 以同一個 `SSH_AUTH_SOCK` 推送。`~/.ssh/agent.sock` 已存在，但 2026-08-22 回讀時尚無 identity。
 - GitHub Issues 是本專案的 tracker。Wayfinder 主地圖是 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1)，其下有 11 張 sub-issues，並使用 GitHub native dependencies 表達 blocking edges。
-- 現在的 frontier 有 4 張：[裁決 Web 技術棧與專案骨架](https://github.com/elekli/game-base/issues/2)、[驗證真實檔案是否符合 Supabase Free 限制](https://github.com/elekli/game-base/issues/3)、[將既有領域模型轉成資料模型與不變式](https://github.com/elekli/game-base/issues/4)、[驗證行動版核心流程](https://github.com/elekli/game-base/issues/9)。
+- [裁決 Web 技術棧與專案骨架](https://github.com/elekli/game-base/issues/2) 已完成；決策記於 `docs/adr/0005-use-nextjs-deep-modular-monolith.md`。現在的 frontier 有 3 張：[驗證真實檔案是否符合 Supabase Free 限制](https://github.com/elekli/game-base/issues/3)、[將既有領域模型轉成資料模型與不變式](https://github.com/elekli/game-base/issues/4)、[驗證行動版核心流程](https://github.com/elekli/game-base/issues/9)。
 - 已回讀原始 session 並建立 `docs/plans/decision-traceability.md`；每張 ticket 都標出不可重開的固定輸入。GitHub 現成方案、BGG／IGDB、Neon／Supabase 與編輯器研究均不得重做；Vditor 另由 [並行驗證 Vditor ir 行動版編輯體驗](https://github.com/elekli/game-base/issues/12) 非阻塞追蹤。
 
 ---
@@ -45,7 +45,7 @@
 
 Batch 2 要把已定稿的產品規格轉成可分批執行的工程計畫；不得從 382 行需求直接跳到 coding，也不要在一個 session 解決超過一張非 research ticket。
 
-1. 先讓 `id_personal` 通過 Keychain 解鎖，將本機 `main` 首次推到遠端，再設定 GitHub branch protection；首次空 repository push 屬工程規範允許的例外，後續行為變更一律使用 feature branch＋worktree＋PR。
+1. 需要首次 push 時，由 elek 先以 `SSH_AUTH_SOCK=~/.ssh/agent.sock ssh-add ~/.ssh/id_personal` 暫時載入 key，不使用 `--apple-use-keychain`；確認 `SSH_AUTH_SOCK=~/.ssh/agent.sock ssh-add -l` 看得到 identity 後，將本機 `main` 首次推到遠端，再設定 GitHub branch protection。首次空 repository push 屬工程規範允許的例外，後續行為變更一律使用 feature branch＋worktree＋PR。
 2. 從 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1) 讀低解析地圖；未指定 ticket 時，依順序選第一張未阻擋、未指派的 frontier ticket。
 3. 工作前先 claim：把 ticket 指派給當前開發者；依票面型別使用 `domain-modeling`、`prototype` 或 grilling 流程。
 4. 解決後把答案寫成 resolution comment、關閉 ticket，並只在主地圖的 `Decisions so far` 加一行名稱連結與摘要；不要把詳細裁決複製到地圖。
