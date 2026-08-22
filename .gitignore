@@ -1,0 +1,11 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+.next/
+node_modules/
+coverage/
+playwright-report/
+test-results/
+.scratch/
+
