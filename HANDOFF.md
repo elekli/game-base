@@ -21,8 +21,9 @@
 
 - 本目錄已初始化為 Git repository；per-repo 身分是 `elek <elek.li@gmail.com>`，remote 是 `git@github.com-personal:elekli/game-base.git`，`.claude/security-tier` 為 `standard`，push guard 已安裝。
 - 本機基線提交為 `2140923 docs: establish gamebase product specification`。遠端仍是空 repository：`id_personal` 的 passphrase 尚未進 macOS Keychain，因此不能用規範要求的 SSH alias 推送；先執行 `ssh-add --apple-use-keychain ~/.ssh/id_personal`，再做首次 push。
-- GitHub Issues 是本專案的 tracker。Wayfinder 主地圖是 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1)，其下有 10 張 sub-issues，blocking edges 寫在各票的 `## Blocked by`。
-- 現在的 frontier 有 4 張：[裁決 Web 技術棧與專案骨架](https://github.com/elekli/game-base/issues/2)、[驗證真實檔案是否符合 Supabase Free 限制](https://github.com/elekli/game-base/issues/3)、[定稿 MVP 核心資料模型與不變式](https://github.com/elekli/game-base/issues/4)、[驗證行動版核心流程與筆記編輯器](https://github.com/elekli/game-base/issues/9)。
+- GitHub Issues 是本專案的 tracker。Wayfinder 主地圖是 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1)，其下有 11 張 sub-issues，並使用 GitHub native dependencies 表達 blocking edges。
+- 現在的 frontier 有 4 張：[裁決 Web 技術棧與專案骨架](https://github.com/elekli/game-base/issues/2)、[驗證真實檔案是否符合 Supabase Free 限制](https://github.com/elekli/game-base/issues/3)、[將既有領域模型轉成資料模型與不變式](https://github.com/elekli/game-base/issues/4)、[驗證行動版核心流程](https://github.com/elekli/game-base/issues/9)。
+- 已回讀原始 session 並建立 `docs/plans/decision-traceability.md`；每張 ticket 都標出不可重開的固定輸入。GitHub 現成方案、BGG／IGDB、Neon／Supabase 與編輯器研究均不得重做；Vditor 另由 [並行驗證 Vditor ir 行動版編輯體驗](https://github.com/elekli/game-base/issues/12) 非阻塞追蹤。
 
 ---
 
@@ -35,7 +36,7 @@
 - [x] 最後的封存清單不可達狀態已封閉：有庫內成員時從遊戲頁還原；只有庫外引用時，在建立同名清單時直接還原。
 - [ ] **下一個 Batch 才能驗證：** 尚無 code，因此沒有 typecheck、測試、build、實際瀏覽器、手機或部署證據。
 - [ ] **需外部帳號條件：** 實作 API 串接前確認 BoardGameGeek 與 Twitch／IGDB 憑證已申請；不得把憑證送到瀏覽器。
-- [x] GitHub Wayfinder 驗證：主地圖已有 10 張 sub-issues；labels、空 assignee 與 `Blocked by` 內容已回讀。
+- [x] GitHub Wayfinder 驗證：主地圖已有 11 張 sub-issues；labels、空 assignee 與 native dependencies 已回讀。
 - [ ] **Git remote 尚未驗證：** 本機提交尚未推上遠端；首次 push 後才能設定及驗證 `main` branch protection。
 
 ---
