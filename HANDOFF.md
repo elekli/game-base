@@ -1,6 +1,6 @@
 # Puizeru Gamebase — HANDOFF
 
-**Last session:** 2026-08-24（資料來源 ADR 補記並與現行 Vercel＋Supabase 架構對齊）
+**Last session:** 2026-08-24（Wayfinder 資料來源 adapter 決策完成，補記 ADR 0006）
 **For next session:** This file stands alone. You should not need the original conversation or a parent plan to proceed.
 
 ---
@@ -15,7 +15,7 @@
 - `/Users/elek/puizeru-gamebase/docs/research/neon-vs-supabase.md`（257 行）記錄 Neon／Supabase 比較；因真實產品經驗與求職目標，決定採 Supabase PostgreSQL＋Storage。
 - `/Users/elek/puizeru-gamebase/docs/adr/` 有 6 份 ADR。ADR 0001 已被 0003／0004 取代；現行正式方向是 Vercel＋Cloudflare Access＋Supabase，QNAP 只在 MVP 後做異地備份；ADR 0006 補記 BoardGameGeek／IGDB 與來源資料分層。
 - 已完成一次跨文件矛盾檢查並修正：一般中繼資料與每日 BGG 指標更新的例外、遊戲條目刪除與其他低風險刪除的主詞、線上應用程式與「離線瀏覽」誤寫、只有庫外引用之封存清單的還原入口。
-- 尚未建立應用程式、資料庫 migration、UI 原型或測試；技術棧未裁決前不先建立套件設定。
+- 尚未建立應用程式、資料庫 migration、UI 原型或測試；Batch 2 的 Wayfinder 決策地圖完成前不先建立專案骨架。
 
 **Batch 2（in progress）：**
 
@@ -43,7 +43,7 @@
 
 ## Next Actions（Batch 2：依 Wayfinder 逐票裁決）
 
-Batch 2 要把已定稿的產品規格轉成可分批執行的工程計畫；不得從 382 行需求直接跳到 coding，也不要在一個 session 解決超過一張非 research ticket。
+Batch 2 要把已定稿的產品規格轉成可分批執行的工程計畫；不得從 398 行需求直接跳到 coding，也不要在一個 session 解決超過一張非 research ticket。
 
 1. 遠端與 `main` branch protection 已建立。後續變更一律使用 feature branch＋worktree＋PR；需要 push 時，由 elek 以 `SSH_AUTH_SOCK=~/.ssh/agent.sock ssh-add ~/.ssh/id_personal` 暫時載入 key，不使用 `--apple-use-keychain`。
 2. 從 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1) 讀低解析地圖；未指定 ticket 時，依順序選第一張未阻擋、未指派的 frontier ticket。
@@ -105,6 +105,8 @@ Batch 2 要把已定稿的產品規格轉成可分批執行的工程計畫；不
 - `/Users/elek/puizeru-gamebase/docs/adr/0004-use-supabase-postgres-and-storage.md` — Supabase PostgreSQL／Storage 決策。
 - `/Users/elek/puizeru-gamebase/docs/adr/0005-use-nextjs-deep-modular-monolith.md` — Next.js deep modular monolith 技術棧與驗證策略。
 - `/Users/elek/puizeru-gamebase/docs/adr/0006-use-bgg-and-igdb-as-metadata-providers.md` — BoardGameGeek／IGDB 與來源資料分層。
+- `/Users/elek/puizeru-gamebase/docs/plans/data-model-and-invariants.md` — 外部遊戲身分、資料所有權與可驗證不變式。
+- `/Users/elek/puizeru-gamebase/docs/plans/source-metadata-adapters.md` — BGG／IGDB adapter 介面、正規化、cache、token、限流與錯誤語意。
 - `/Users/elek/puizeru-gamebase/HANDOFF.md` — 本接力文件。
 
 **Reference（do not casually modify）：**
