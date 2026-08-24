@@ -1,6 +1,6 @@
 # Puizeru Gamebase — HANDOFF
 
-**Last session:** 2026-08-22（Batch 2 started：Git repository 與 Wayfinder 決策地圖建立）
+**Last session:** 2026-08-24（Wayfinder 資料來源 adapter 決策完成，補記 ADR 0006）
 **For next session:** This file stands alone. You should not need the original conversation or a parent plan to proceed.
 
 ---
@@ -9,20 +9,20 @@
 
 **Batch 1（complete）：**
 
-- `/Users/elek/puizeru-gamebase/CONTEXT.md`（382 行）是目前產品與領域規格的唯一主文件：詞彙、建立流程、搜尋／篩選、媒體、筆記、貢獻者、清單、刪除、部署、安全、備份及行動版要求均已定稿。
+- `/Users/elek/puizeru-gamebase/CONTEXT.md`（398 行）是目前產品與領域規格的唯一主文件：詞彙、建立流程、搜尋／篩選、媒體、筆記、貢獻者、清單、刪除、部署、安全、備份及行動版要求均已定稿。
 - `/Users/elek/puizeru-gamebase/TODOS.md`（95 行）記錄所有明確延後項目及驗收條件；不得把其中項目默默塞回 MVP。
 - `/Users/elek/puizeru-gamebase/docs/research/game-metadata-api-survey.md`（78 行）記錄 BoardGameGeek 與 IGDB 的 API、憑證、限制與費用調查。
 - `/Users/elek/puizeru-gamebase/docs/research/neon-vs-supabase.md`（257 行）記錄 Neon／Supabase 比較；因真實產品經驗與求職目標，決定採 Supabase PostgreSQL＋Storage。
-- `/Users/elek/puizeru-gamebase/docs/adr/` 有 4 份 ADR。ADR 0001 已被 0003／0004 取代；現行正式方向是 Vercel＋Cloudflare Access＋Supabase，QNAP 只在 MVP 後做異地備份。
+- `/Users/elek/puizeru-gamebase/docs/adr/` 有 6 份 ADR。ADR 0001 已被 0003／0004 取代；現行正式方向是 Vercel＋Cloudflare Access＋Supabase，QNAP 只在 MVP 後做異地備份；ADR 0006 補記 BoardGameGeek／IGDB 與來源資料分層。
 - 已完成一次跨文件矛盾檢查並修正：一般中繼資料與每日 BGG 指標更新的例外、遊戲條目刪除與其他低風險刪除的主詞、線上應用程式與「離線瀏覽」誤寫、只有庫外引用之封存清單的還原入口。
-- 尚未建立應用程式、資料庫 migration、UI 原型或測試；技術棧未裁決前不先建立套件設定。
+- 尚未建立應用程式、資料庫 migration、UI 原型或測試；Batch 2 的 Wayfinder 決策地圖完成前不先建立專案骨架。
 
 **Batch 2（in progress）：**
 
 - 本目錄已初始化為 Git repository；per-repo 身分是 `elek <elek.li@gmail.com>`，remote 是 `git@github.com-personal:elekli/game-base.git`，`.claude/security-tier` 為 `standard`，push guard 已安裝。
 - `main` 已首次推到 `origin`，remote 是 `git@github.com-personal:elekli/game-base.git`。elek 明確不把 `id_personal` 存進 macOS Keychain；需要 push 時，在自己的終端暫時執行 `SSH_AUTH_SOCK=~/.ssh/agent.sock ssh-add ~/.ssh/id_personal`，再由 agent 以同一個 `SSH_AUTH_SOCK` 推送。
 - GitHub Issues 是本專案的 tracker。Wayfinder 主地圖是 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1)，其下有 11 張 sub-issues，並使用 GitHub native dependencies 表達 blocking edges。
-- [裁決 Web 技術棧與專案骨架](https://github.com/elekli/game-base/issues/2) 已完成；決策記於 `docs/adr/0005-use-nextjs-deep-modular-monolith.md`。現在的 frontier 有 3 張：[驗證真實檔案是否符合 Supabase Free 限制](https://github.com/elekli/game-base/issues/3)、[將既有領域模型轉成資料模型與不變式](https://github.com/elekli/game-base/issues/4)、[驗證行動版核心流程](https://github.com/elekli/game-base/issues/9)。
+- 技術棧、Supabase 容量、資料模型、安全邊界與來源 adapter 決策均已完成；技術棧與來源方向分別記於 `docs/adr/0005-use-nextjs-deep-modular-monolith.md`、`docs/adr/0006-use-bgg-and-igdb-as-metadata-providers.md`，其餘詳細裁決留在對應 issue 的 resolution comment。現在的 frontier 有 4 張：[將既有媒體規則落成縮圖與上傳狀態機](https://github.com/elekli/game-base/issues/7)、[將既有筆記、清單與刪除規則落成狀態機](https://github.com/elekli/game-base/issues/8)、[驗證行動版核心流程](https://github.com/elekli/game-base/issues/9)、[將既定 BGG 每日更新規則落成並行安全流程](https://github.com/elekli/game-base/issues/10)。
 - 已回讀原始 session 並建立 `docs/plans/decision-traceability.md`；每張 ticket 都標出不可重開的固定輸入。GitHub 現成方案、BGG／IGDB、Neon／Supabase 與編輯器研究均不得重做；Vditor 另由 [並行驗證 Vditor ir 行動版編輯體驗](https://github.com/elekli/game-base/issues/12) 非阻塞追蹤。
 
 ---
@@ -43,7 +43,7 @@
 
 ## Next Actions（Batch 2：依 Wayfinder 逐票裁決）
 
-Batch 2 要把已定稿的產品規格轉成可分批執行的工程計畫；不得從 382 行需求直接跳到 coding，也不要在一個 session 解決超過一張非 research ticket。
+Batch 2 要把已定稿的產品規格轉成可分批執行的工程計畫；不得從 398 行需求直接跳到 coding，也不要在一個 session 解決超過一張非 research ticket。
 
 1. 遠端與 `main` branch protection 已建立。後續變更一律使用 feature branch＋worktree＋PR；需要 push 時，由 elek 以 `SSH_AUTH_SOCK=~/.ssh/agent.sock ssh-add ~/.ssh/id_personal` 暫時載入 key，不使用 `--apple-use-keychain`。
 2. 從 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1) 讀低解析地圖；未指定 ticket 時，依順序選第一張未阻擋、未指派的 frontier ticket。
@@ -103,11 +103,15 @@ Batch 2 要把已定稿的產品規格轉成可分批執行的工程計畫；不
 - `/Users/elek/puizeru-gamebase/docs/adr/0002-retain-external-cover-images-for-private-use.md` — 私人情境保存來源封面。
 - `/Users/elek/puizeru-gamebase/docs/adr/0003-deploy-on-vercel-with-managed-storage.md` — Vercel、Cloudflare Access 與 QNAP 邊界。
 - `/Users/elek/puizeru-gamebase/docs/adr/0004-use-supabase-postgres-and-storage.md` — Supabase PostgreSQL／Storage 決策。
+- `/Users/elek/puizeru-gamebase/docs/adr/0005-use-nextjs-deep-modular-monolith.md` — Next.js deep modular monolith 技術棧與驗證策略。
+- `/Users/elek/puizeru-gamebase/docs/adr/0006-use-bgg-and-igdb-as-metadata-providers.md` — BoardGameGeek／IGDB 與來源資料分層。
+- `/Users/elek/puizeru-gamebase/docs/plans/data-model-and-invariants.md` — 外部遊戲身分、資料所有權與可驗證不變式。
+- `/Users/elek/puizeru-gamebase/docs/plans/source-metadata-adapters.md` — BGG／IGDB adapter 介面、正規化、cache、token、限流與錯誤語意。
 - `/Users/elek/puizeru-gamebase/HANDOFF.md` — 本接力文件。
 
 **Reference（do not casually modify）：**
 
-- `CONTEXT.md` 與 ADR 0002／0003／0004 是已確認決策；若實作證據要求改變，先說明矛盾並以新的／修訂 ADR 記錄，而不是靜默偏離。
+- `CONTEXT.md` 與 ADR 0002～0006 是已確認決策；若實作證據要求改變，先說明矛盾並以新的／修訂 ADR 記錄，而不是靜默偏離。
 - `TODOS.md` 內的延後項目包含 Vditor 原型、QNAP 備份、來源更換、庫外貢獻者探索、人數編輯、貢獻者合併與 BGG 指標歷史。
 
 ---
