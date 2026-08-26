@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Puizeru 行動版核心流程原型</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#prototype">跳到原型</a>
+
+    <header class="prototype-switcher" aria-label="原型變體切換器">
+      <div class="switcher-controls">
+        <button type="button" class="switcher-arrow" data-action="previous-variant" aria-label="上一個變體">←</button>
+        <div>
+          <p class="eyebrow">THROWAWAY PROTOTYPE · ROUND ROOT</p>
+          <h1><span id="variant-id">A</span> · <span id="variant-name">封面書架</span></h1>
+        </div>
+        <button type="button" class="switcher-arrow" data-action="next-variant" aria-label="下一個變體">→</button>
+      </div>
+      <div class="switcher-copy">
+        <p><strong>問題：</strong>在 390 px 手機上，哪種架構最能守住導覽脈絡，又讓照片與筆記處於拇指可及範圍？</p>
+        <p id="variant-explores">This explores:</p>
+      </div>
+    </header>
+
+    <main class="prototype-stage">
+      <section class="phone-shell" aria-label="390 像素行動版畫布">
+        <div class="phone-status" aria-hidden="true">
+          <span>9:41</span><span>● ● ▰</span>
+        </div>
+        <div id="prototype" class="phone-screen" tabindex="-1"></div>
+      </section>
+
+      <aside class="scenario-panel" aria-label="驗收情境">
+        <p class="eyebrow">JUMP TO A STATE</p>
+        <h2>驗收情境</h2>
+        <p>示意資料不會持久化。請在每個變體至少走一次下列狀態。</p>
+        <div class="scenario-grid">
+          <button type="button" data-jump="home">收藏庫首頁</button>
+          <button type="button" data-jump="find">搜尋／篩選</button>
+          <button type="button" data-jump="add-confirm">新增確認</button>
+          <button type="button" data-jump="detail">遊戲詳細頁</button>
+          <button type="button" data-jump="upload">批次照片</button>
+          <button type="button" data-jump="note">筆記未儲存</button>
+        </div>
+        <div class="review-card">
+          <h3>本票必須回饋</h3>
+          <ol>
+            <li>導覽：返回時是否知道會去哪？</li>
+            <li>批次照片：成功／失敗與只重試失敗是否清楚？</li>
+            <li>選填說明：是否能在上傳後再整理？</li>
+            <li>工具列：單手輸入 Markdown 時是否可達？</li>
+            <li>未儲存：離開提示是否足夠明確？</li>
+          </ol>
+        </div>
+        <p class="keyboard-hint">游標不在輸入欄時，可用鍵盤 ←／→ 切換變體。</p>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
