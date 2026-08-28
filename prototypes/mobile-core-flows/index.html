@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Puizeru 行動核心流程原型</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="phone-shell" aria-live="polite">
+      <div class="prototype-bar" aria-label="原型切換器">
+        <button class="variant-step" type="button" data-variant-step="-1" aria-label="上一個變體">←</button>
+        <div>
+          <p class="eyebrow">Issue 9 · 暫存互動原型</p>
+          <strong id="variant-name"></strong>
+          <p id="variant-question"></p>
+          <button id="parent-variant" class="parent-variant" type="button" data-action="parent-round" hidden></button>
+        </div>
+        <button class="variant-step" type="button" data-variant-step="1" aria-label="下一個變體">→</button>
+      </div>
+      <div id="app"></div>
+    </main>
+    <template id="icon-template"></template>
+    <script src="app.js"></script>
+  </body>
+</html>

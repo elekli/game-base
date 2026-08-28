@@ -13,7 +13,7 @@
 | 已定範圍 | 權威位置 | 後續 issue 的責任 |
 |---|---|---|
 | 單一遊戲條目、來源唯一性、名稱、平台、標籤、來源分類、貢獻者、人數 | `CONTEXT.md`「詞彙」 | [將既有領域模型轉成資料模型與不變式](https://github.com/elekli/game-base/issues/4) 只轉譯成 schema 與 constraints |
-| 本地搜尋／篩選、新增分流、來源確認、建立後落點 | `CONTEXT.md`「遊戲條目」「遊戲名稱」「篩選」「使用介面」 | [驗證行動版核心流程](https://github.com/elekli/game-base/issues/9) 只以原型驗證資訊架構與操作 |
+| 本地搜尋／篩選、雙來源新增搜尋、結果內漸進確認、建立後落點 | `CONTEXT.md`「遊戲條目」「遊戲名稱」「篩選」「使用介面」 | [驗證行動版核心流程](https://github.com/elekli/game-base/issues/9) 以原型裁決資訊架構與操作，結論採 A／A1／A1a |
 | BGG／IGDB 選擇、申請資格、費用、速率與條款 | `docs/research/game-metadata-api-survey.md` | [定稿 BGG 與 IGDB adapter 介面及錯誤語意](https://github.com/elekli/game-base/issues/6) 不重做供應商研究 |
 | 中繼資料欄位白名單、來源／自訂資料分離、手動最小條目、重新整理 | `CONTEXT.md`「中繼資料來源」「自動中繼資料範圍」 | [定稿 BGG 與 IGDB adapter 介面及錯誤語意](https://github.com/elekli/game-base/issues/6) 只決定 adapter、交易與失敗語意 |
 | BGG 重度、策略排名、每日第一次登入、快取與錯誤顯示 | `CONTEXT.md`「BoardGameGeek 動態指標」 | [將既定 BGG 每日更新規則落成並行安全流程](https://github.com/elekli/game-base/issues/10) 只處理鎖、限流與重試 |
@@ -34,4 +34,3 @@
 - [並行驗證 Vditor ir 行動版編輯體驗](https://github.com/elekli/game-base/issues/12)：只需要實機體驗判定通過／不通過，而且不阻擋 MVP。
 
 其餘子議題應由 agent 依既有規格提出技術決策與證據；除非發現新矛盾或高代價取捨，不應要求使用者介入。
-
