@@ -1,6 +1,6 @@
 # Puizeru Gamebase — HANDOFF
 
-**Last session:** 2026-08-22（Batch 2 started：Git repository 與 Wayfinder 決策地圖建立）
+**Last session:** 2026-08-29（Batch 2 in progress：行動版核心流程原型完成裁決）
 **For next session:** This file stands alone. You should not need the original conversation or a parent plan to proceed.
 
 ---
@@ -22,8 +22,9 @@
 - 本目錄已初始化為 Git repository；per-repo 身分是 `elek <elek.li@gmail.com>`，remote 是 `git@github.com-personal:elekli/game-base.git`，`.claude/security-tier` 為 `standard`，push guard 已安裝。
 - `main` 已首次推到 `origin`，remote 是 `git@github.com-personal:elekli/game-base.git`。elek 明確不把 `id_personal` 存進 macOS Keychain；需要 push 時，在自己的終端暫時執行 `SSH_AUTH_SOCK=~/.ssh/agent.sock ssh-add ~/.ssh/id_personal`，再由 agent 以同一個 `SSH_AUTH_SOCK` 推送。
 - GitHub Issues 是本專案的 tracker。Wayfinder 主地圖是 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1)，其下有 11 張 sub-issues，並使用 GitHub native dependencies 表達 blocking edges。
-- [裁決 Web 技術棧與專案骨架](https://github.com/elekli/game-base/issues/2) 已完成；決策記於 `docs/adr/0005-use-nextjs-deep-modular-monolith.md`。現在的 frontier 有 3 張：[驗證真實檔案是否符合 Supabase Free 限制](https://github.com/elekli/game-base/issues/3)、[將既有領域模型轉成資料模型與不變式](https://github.com/elekli/game-base/issues/4)、[驗證行動版核心流程](https://github.com/elekli/game-base/issues/9)。
+- [裁決 Web 技術棧與專案骨架](https://github.com/elekli/game-base/issues/2) 至 [驗證行動版核心流程](https://github.com/elekli/game-base/issues/9) 已逐票完成；技術棧決策記於 `docs/adr/0005-use-nextjs-deep-modular-monolith.md`，其餘工程裁決記於 `docs/plans/`。
 - 已回讀原始 session 並建立 `docs/plans/decision-traceability.md`；每張 ticket 都標出不可重開的固定輸入。GitHub 現成方案、BGG／IGDB、Neon／Supabase 與編輯器研究均不得重做；Vditor 另由 [並行驗證 Vditor ir 行動版編輯體驗](https://github.com/elekli/game-base/issues/12) 非阻塞追蹤。
+- 行動版原型採 A「封面書架」；新增流程採 A1／A1a：先同時搜尋 BoardGameGeek 與 IGDB、依來源分組，再於結果列內漸進展開辨識資訊並直接「加入收藏庫」。不另設來源類型前置步驟或確認頁。
 
 ---
 
@@ -38,6 +39,7 @@
 - [ ] **需外部帳號條件：** 實作 API 串接前確認 BoardGameGeek 與 Twitch／IGDB 憑證已申請；不得把憑證送到瀏覽器。
 - [x] GitHub Wayfinder 驗證：主地圖已有 11 張 sub-issues；labels、空 assignee 與 native dependencies 已回讀。
 - [x] Git remote 與 `main` branch protection 已驗證：首次 push 後已透過受保護的 PR 流程合併文件變更；`main` 必須經 PR、管理者也受規則約束、要求線性歷史與對話解決，並禁止 force push／刪除。尚無 CI，因此暫未設定 required status checks。
+- [x] 行動版原型已在 390 × 844 的觸控 viewport 實際操作 A、A1、A1a 與 A1b；JavaScript 語法檢查通過，瀏覽器 console 無錯誤。elek 最終選擇 A1a。
 
 ---
 
@@ -66,7 +68,7 @@ Batch 2 要把已定稿的產品規格轉成可分批執行的工程計畫；不
 
 - **產品與使用者。** 單一擁有者、繁體中文響應式 Web；桌面與手機完成完整流程，不做原生 App、PWA、離線佇列、多使用者或分享。
 - **MVP 資料核心。** 一個可辨識遊戲標題是一筆遊戲條目；不建立逐次遊玩紀錄。同遊戲跨 Steam／PS5 等平台仍是一筆，平台可複選。
-- **建立與來源。** 新增時先選桌遊／電子遊戲，分別只查 BoardGameGeek／IGDB；搜尋結果經確認才建立。來源身分 `provider + source_id` 在一般與資源回收資料中全域唯一，由資料庫約束守住。
+- **建立與來源。** 新增時先同時搜尋 BoardGameGeek／IGDB，不預選類型；結果依來源分組，點擊後在原列漸進展開辨識資訊，明確按「加入收藏庫」才建立。來源身分 `provider + source_id` 在一般與資源回收資料中全域唯一，由資料庫約束守住。
 - **來源失敗與手動條目。** 外部找不到時可只填名稱建立；未連結條目可第一次連結來源。已連結來源的更換延後，不能自動合併兩筆遊戲資料。
 - **本地搜尋與分類。** 收藏庫搜尋只查本地顯示名稱、原文名及別名。遊戲類型、實際平台、來源分類、自由標籤與貢獻者是分開的篩選維度；同維度 OR、不同維度 AND。
 - **中繼資料。** 一般來源資料只在建立與手動重新整理時更新，且不得覆寫擁有者內容。來源介紹唯讀、安全清理且預設收合。
@@ -104,6 +106,8 @@ Batch 2 要把已定稿的產品規格轉成可分批執行的工程計畫；不
 - `/Users/elek/puizeru-gamebase/docs/adr/0003-deploy-on-vercel-with-managed-storage.md` — Vercel、Cloudflare Access 與 QNAP 邊界。
 - `/Users/elek/puizeru-gamebase/docs/adr/0004-use-supabase-postgres-and-storage.md` — Supabase PostgreSQL／Storage 決策。
 - `/Users/elek/puizeru-gamebase/HANDOFF.md` — 本接力文件。
+- `/Users/elek/puizeru-gamebase/docs/plans/issue-9-mobile-prototype-plan.md` — 行動版核心流程原型問題、迭代與裁決結果。
+- [PR #21](https://github.com/elekli/game-base/pull/21) — A／B／C、A1／A2 與 A1a／A1b 的探索原型資產；決策後關閉但不合併，以免把拋棄式程式碼帶入 `main`。
 
 **Reference（do not casually modify）：**
 
