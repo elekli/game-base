@@ -2,6 +2,12 @@
 
 本文件定稿「每個台北日第一次登入」所觸發的 BoardGameGeek（BGG）重度與 Strategy Game Rank 背景更新。它只處理每日流程的排程、持久化狀態、並行與呈現；不改變既有來源 adapter 的 HTTP、cache、憑證或全域限流決策，也不建立指標歷史。
 
+設計依據：Vercel Functions 會自動擴縮且可有同 instance 的並行 invocation；Supavisor transaction pooler 是 serverless runtime 的連線模式；PostgreSQL 的 transaction-level lock 會在交易結束時釋放。因此，跨 invocation 的正確性以短資料庫交易、持久化租約與 fencing 世代實現，而不是 process 記憶體或 session-level lock。
+
+- [Vercel Functions](https://vercel.com/docs/functions)
+- [Supabase：連接 PostgreSQL](https://supabase.com/docs/guides/database/connecting-to-postgres)
+- [PostgreSQL：Explicit Locking](https://www.postgresql.org/docs/current/explicit-locking.html)
+
 ## 裁決摘要
 
 - 每個台北日只有一個持久化的 `bgg_metric_refresh_runs` 執行紀錄；唯一鍵是該日期。第一次已驗證登入以 `Asia/Taipei` 計算日期，原子建立該紀錄及當時符合資格的目標快照。衝突即讀取既有紀錄，不能再建立第二批。
