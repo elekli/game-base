@@ -1,9 +1,34 @@
 # Puizeru Gamebase
 
-供個人使用的繁體中文遊戲收藏資料庫，涵蓋桌遊、主機遊戲與電腦遊戲。
+供個人使用的繁體中文遊戲收藏資料庫。產品與領域規格以 [`CONTEXT.md`](CONTEXT.md) 為準；本 repository 採 Next.js deep modular monolith、Supabase PostgreSQL／Storage 與 Cloudflare Access。
 
-目前處於實作規劃階段。產品與領域規格以 [`CONTEXT.md`](CONTEXT.md) 為準；延後項目與驗收條件記錄於 [`TODOS.md`](TODOS.md)。
+## 本機基線
 
-實作前的待裁決事項由 GitHub Wayfinder 地圖 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1) 管理。
+需要 Node.js 24、pnpm 10.30.3、Docker／Colima。先複製 `.env.example` 為 `.env.local`，填入本機環境綁定後執行：
 
-後續 session 應先讀 [`docs/plans/decision-traceability.md`](docs/plans/decision-traceability.md)，避免重問已定案需求或重做既有研究。
+```sh
+pnpm install --frozen-lockfile
+pnpm supabase:start
+pnpm supabase:reset
+pnpm test:pgtap
+pnpm dev
+```
+
+所有 private Route Handler 都必須先經 `requireOwner()`。本機也不提供 auth bypass；整合測試使用本地 RSA fixture，不使用真實憑證。
+
+## 驗證
+
+```sh
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm test:integration
+pnpm test:e2e
+pnpm integrity:check
+pnpm audit
+pnpm build
+```
+
+Supabase migration 的唯一真本在 `supabase/migrations/`；Drizzle 只可從已套用的資料庫反向擷取型別，不可 `generate`、`migrate` 或 `push` schema。
+
+部署與安全操作見 [`docs/deployment/environments.md`](docs/deployment/environments.md)、[`docs/security/CHECKLIST.md`](docs/security/CHECKLIST.md) 與 [`docs/security/SUPABASE.md`](docs/security/SUPABASE.md)。
