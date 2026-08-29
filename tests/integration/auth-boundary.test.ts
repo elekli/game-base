@@ -8,11 +8,13 @@ import {
 } from "jose";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { handlePrivateRequest } from "@/shared/auth/private-request";
+import { requireOwner } from "@/shared/auth/require-owner";
 import { createAccessTokenVerifier } from "@/shared/auth/verify-access-token";
 
 const issuer = "https://puizeru.cloudflareaccess.com";
 const audience = "puizeru-production-audience";
 const ownerEmail = "owner@example.test";
+const ownerSub = "owner-subject";
 const validKid = "owner-key";
 
 let privateKey: CryptoKey;
@@ -37,7 +39,10 @@ type TokenOverrides = {
   email?: string;
   expiresAt?: string;
   issuer?: string;
+  includeIssuedAt?: boolean;
+  issuedAt?: number;
   kid?: string;
+  omitKid?: boolean;
   key?: CryptoKey;
   notBefore?: string;
   subject?: string;
@@ -45,22 +50,38 @@ type TokenOverrides = {
 };
 
 async function signToken(overrides: TokenOverrides = {}) {
-  return new SignJWT({
+  let token = new SignJWT({
     email: overrides.email ?? ownerEmail,
     type: overrides.type ?? "app",
   })
-    .setProtectedHeader({ alg: "RS256", kid: overrides.kid ?? validKid })
+    .setProtectedHeader(
+      overrides.omitKid
+        ? { alg: "RS256" }
+        : { alg: "RS256", kid: overrides.kid ?? validKid },
+    )
     .setIssuer(overrides.issuer ?? issuer)
     .setAudience(overrides.audience ?? audience)
-    .setSubject(overrides.subject ?? "owner-subject")
-    .setIssuedAt()
-    .setNotBefore(overrides.notBefore ?? "-1s")
-    .setExpirationTime(overrides.expiresAt ?? "5m")
-    .sign(overrides.key ?? privateKey);
+    .setSubject(overrides.subject ?? ownerSub)
+    .setNotBefore(overrides.notBefore ?? "-1s");
+
+  if (overrides.includeIssuedAt !== false) {
+    token = token.setIssuedAt(overrides.issuedAt);
+  }
+  if (overrides.expiresAt !== "omit") {
+    token = token.setExpirationTime(overrides.expiresAt ?? "5m");
+  }
+
+  return token.sign(overrides.key ?? privateKey);
 }
 
 function makeVerifier(jwks: JWTVerifyGetKey = localJwks) {
-  return createAccessTokenVerifier({ issuer, audience, ownerEmail, jwks });
+  return createAccessTokenVerifier({
+    issuer,
+    audience,
+    ownerEmail,
+    ownerSub,
+    jwks,
+  });
 }
 
 async function callBoundary(token?: string, jwks?: JWTVerifyGetKey) {
@@ -94,17 +115,35 @@ describe("private owner boundary", () => {
     expect(result.storage).toHaveBeenCalledOnce();
   });
 
+  it("exposes requireOwner as the reusable authentication boundary", async () => {
+    const headers = new Headers({
+      "Cf-Access-Jwt-Assertion": await signToken(),
+    });
+
+    await expect(requireOwner(headers, makeVerifier())).resolves.toEqual({
+      sub: ownerSub,
+    });
+  });
+
   const rejectedTokens: Array<[string, () => Promise<string | undefined>]> = [
     ["missing header", async () => undefined],
     ["wrong signature", async () => signToken({ key: otherPrivateKey })],
     ["unknown kid", async () => signToken({ kid: "missing-key" })],
+    ["missing kid", async () => signToken({ omitKid: true })],
     ["wrong issuer", async () => signToken({ issuer: "https://wrong.example.test" })],
     ["wrong audience", async () => signToken({ audience: "wrong-audience" })],
     ["wrong type", async () => signToken({ type: "other" })],
-    ["expired", async () => signToken({ expiresAt: "-1s" })],
+    ["expired", async () => signToken({ expiresAt: "-10s" })],
+    ["missing expiration", async () => signToken({ expiresAt: "omit" })],
+    ["missing issued at", async () => signToken({ includeIssuedAt: false })],
+    [
+      "issued in the future",
+      async () => signToken({ issuedAt: Math.floor(Date.now() / 1000) + 300 }),
+    ],
     ["not active", async () => signToken({ notBefore: "5m" })],
     ["service token", async () => signToken({ type: "service_token" })],
     ["wrong email", async () => signToken({ email: "intruder@example.test" })],
+    ["wrong subject", async () => signToken({ subject: "intruder-subject" })],
     ["empty subject", async () => signToken({ subject: "" })],
   ];
 
@@ -135,5 +174,33 @@ describe("private owner boundary", () => {
     expect(result.database).not.toHaveBeenCalled();
     expect(result.storage).not.toHaveBeenCalled();
     expect(body).not.toContain("upstream details");
+  });
+
+  it("names and reports protected operation failures without exposing details", async () => {
+    const onUnhandledFailure = vi.fn();
+    const request = new Request(
+      "https://gamebase.example.test/api/private/ping",
+      {
+        headers: {
+          "Cf-Access-Jwt-Assertion": await signToken(),
+        },
+      },
+    );
+
+    const response = await handlePrivateRequest(request, {
+      verifyAccessToken: makeVerifier(),
+      operation: async () => {
+        throw new Error("database connection details");
+      },
+      onUnhandledFailure,
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(onUnhandledFailure).toHaveBeenCalledWith({
+      errorCode: "private_operation_failed",
+      requestId: expect.stringMatching(/[0-9a-f-]{36}/),
+    });
+    expect(body).not.toContain("database connection details");
   });
 });

@@ -3,7 +3,7 @@
 ## 每個 private 入口
 
 - [ ] 在任何 DB／Storage 呼叫前執行 `requireOwner()`。
-- [ ] 只接受 `Cf-Access-Jwt-Assertion` 的 RS256 token，驗 `kid`、簽章、`iss`、`aud`、`type`、時間、owner email 與非空 `sub`。
+- [ ] 只接受 `Cf-Access-Jwt-Assertion` 的 RS256 token，驗 `kid`、簽章、`iss`、`aud`、`type`、`iat`／`exp`、owner email 與固定 `sub`。
 - [ ] 未知 `kid`、JWK outage、service token 與 claim 不符一律 fail closed；不得加入 local／preview bypass。
 - [ ] 成功與失敗回應皆為 `Cache-Control: private, no-store`。
 - [ ] 使用者只看見通用繁中訊息與 UUID request ID；JWT、email、header、policy、secret 與技術例外不得進回應。

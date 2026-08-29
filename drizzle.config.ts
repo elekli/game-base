@@ -9,4 +9,5 @@ export default defineConfig({
   dialect: "postgresql",
   dbCredentials: { url: directDatabaseUrl },
   out: "./src/adapters/database-schema",
+  schemaFilter: ["app_private"],
 });

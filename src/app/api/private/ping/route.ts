@@ -1,20 +1,46 @@
-import { createRemoteJWKSet } from "jose";
 import { handlePrivateRequest } from "@/shared/auth/private-request";
-import { createAccessTokenVerifier } from "@/shared/auth/verify-access-token";
+import { getProductionAccessTokenVerifier } from "@/shared/auth/production-access-token-verifier";
 import { getRuntimeConfig } from "@/shared/config/get-runtime-config";
+import { RuntimeConfigError } from "@/shared/config/runtime-config";
 import { getRequestId } from "@/shared/observability/request-id";
 import { serializeLogEvent } from "@/shared/observability/structured-log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function serializePrivatePingFailure(
+  requestId: string,
+  errorCode: string,
+  environment: string | undefined,
+) {
+  if (environment === "preview" || environment === "production") {
+    return serializeLogEvent({
+      event: "private_request_failed",
+      level: "error",
+      requestId,
+      operation: "private_ping",
+      errorCode,
+      resourceType: null,
+      resourceId: null,
+      attempt: null,
+      durationMs: null,
+      environment,
+    });
+  }
+
+  return JSON.stringify({
+    event: "private_request_failed",
+    level: "error",
+    requestId,
+    operation: "private_ping",
+    errorCode,
+  });
+}
+
 export async function GET(request: Request) {
   try {
     const config = getRuntimeConfig();
-    const verifyAccessToken = createAccessTokenVerifier({
-      ...config.cloudflare,
-      jwks: createRemoteJWKSet(new URL(config.cloudflare.jwksUrl)),
-    });
+    const verifyAccessToken = getProductionAccessTokenVerifier(config.cloudflare);
 
     return handlePrivateRequest(request, {
       verifyAccessToken,
@@ -34,9 +60,21 @@ export async function GET(request: Request) {
           environment: config.environment,
         }));
       },
+      onUnhandledFailure: ({ errorCode, requestId }) => {
+        console.error(
+          serializePrivatePingFailure(requestId, errorCode, config.environment),
+        );
+      },
     });
-  } catch {
+  } catch (error) {
     const requestId = getRequestId(request.headers);
+    const errorCode =
+      error instanceof RuntimeConfigError
+        ? error.code
+        : "private_route_failed";
+    console.error(
+      serializePrivatePingFailure(requestId, errorCode, process.env.VERCEL_ENV),
+    );
     return Response.json(
       { message: "暫時無法完成操作。", requestId },
       { status: 500, headers: { "cache-control": "private, no-store" } },

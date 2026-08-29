@@ -8,7 +8,7 @@
 | preview | Vercel Deployment Protection＋應用程式 JWT 驗證 | 固定測試專案／假資料 | 測試 Supavisor transaction pooler 6543 |
 | production | Cloudflare Access＋應用程式 JWT 驗證 | 正式專案 | 正式 Supavisor transaction pooler 6543 |
 
-每個環境各自設定 `.env.example` 列出的 variables。`EXPECTED_*` 與兩個 SHA-256 fingerprint 是部署綁定，不是動態猜測；`pnpm environment:check` 會在任一欄位混用時以命名錯誤停止。`DIRECT_DATABASE_URL` 只供 migration／introspection，不得放入 Vercel runtime。
+每個環境各自設定 `.env.example` 列出的 variables。`EXPECTED_*` 與兩個 SHA-256 fingerprint 是部署綁定，不是動態猜測；`OWNER_EMAIL` 與 `OWNER_SUB` 必須取自該擁有者的 Cloudflare Access JWT。`pnpm environment:check` 會在任一欄位混用時以命名錯誤停止。`DIRECT_DATABASE_URL` 只供 migration／introspection，不得放入 Vercel runtime。
 
 Vercel 的 Build Command 維持 `pnpm build`；部署後 Node.js instrumentation 與每個 private route 都會再次驗證環境。CI 另直接測 `parseRuntimeConfig()` 的合法組合與跨環境混用。
 

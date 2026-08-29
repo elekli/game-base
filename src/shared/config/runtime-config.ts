@@ -24,6 +24,7 @@ const environmentSchema = z.object({
   CLOUDFLARE_ACCESS_AUDIENCE: z.string().min(1),
   CLOUDFLARE_ACCESS_JWKS_URL: z.url(),
   OWNER_EMAIL: z.email(),
+  OWNER_SUB: z.string().trim().min(1),
 });
 
 export class RuntimeConfigError extends NamedError {
@@ -83,6 +84,7 @@ export function parseRuntimeConfig(
       issuer: env.CLOUDFLARE_ACCESS_ISSUER,
       jwksUrl: env.CLOUDFLARE_ACCESS_JWKS_URL,
       ownerEmail: env.OWNER_EMAIL,
+      ownerSub: env.OWNER_SUB,
     },
     supabase: {
       projectRef: env.SUPABASE_PROJECT_REF,

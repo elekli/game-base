@@ -1,10 +1,15 @@
 import { AccessDeniedError } from "./access-denied-error";
+import { PrivateOperationFailedError } from "./private-operation-failed-error";
+import { requireOwner } from "./require-owner";
 import type { AccessTokenVerifier, OwnerIdentity } from "./verify-access-token";
 import { getRequestId } from "@/shared/observability/request-id";
 
 type PrivateRequestDependencies<Result extends object> = Readonly<{
   operation: (owner: OwnerIdentity) => Promise<Result>;
   onAccessDenied?: (context: Readonly<{ requestId: string }>) => void | Promise<void>;
+  onUnhandledFailure?: (
+    context: Readonly<{ errorCode: string; requestId: string }>,
+  ) => void | Promise<void>;
   verifyAccessToken: AccessTokenVerifier;
 }>;
 
@@ -24,15 +29,8 @@ export async function handlePrivateRequest<Result extends object>(
   dependencies: PrivateRequestDependencies<Result>,
 ): Promise<Response> {
   const requestId = getRequestId(request.headers);
-  const token = request.headers.get("Cf-Access-Jwt-Assertion");
-
-  if (token === null || token.length === 0) {
-    await dependencies.onAccessDenied?.({ requestId });
-    return safeErrorResponse(401, "無法驗證存取權限。", requestId);
-  }
-
   try {
-    const owner = await dependencies.verifyAccessToken(token);
+    const owner = await requireOwner(request.headers, dependencies.verifyAccessToken);
     const result = await dependencies.operation(owner);
     return Response.json(
       { ...result, requestId },
@@ -43,6 +41,11 @@ export async function handlePrivateRequest<Result extends object>(
       await dependencies.onAccessDenied?.({ requestId });
       return safeErrorResponse(401, error.message, requestId);
     }
-    return safeErrorResponse(500, "暫時無法完成操作。", requestId);
+    const operationError = new PrivateOperationFailedError();
+    await dependencies.onUnhandledFailure?.({
+      errorCode: operationError.code,
+      requestId,
+    });
+    return safeErrorResponse(500, operationError.message, requestId);
   }
 }

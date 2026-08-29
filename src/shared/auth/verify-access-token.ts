@@ -10,6 +10,7 @@ type AccessTokenVerifierConfig = Readonly<{
   issuer: string;
   jwks: JWTVerifyGetKey;
   ownerEmail: string;
+  ownerSub: string;
 }>;
 
 export function createAccessTokenVerifier(
@@ -17,17 +18,22 @@ export function createAccessTokenVerifier(
 ): AccessTokenVerifier {
   return async (token) => {
     try {
-      const { payload } = await jwtVerify(token, config.jwks, {
+      const { payload, protectedHeader } = await jwtVerify(token, config.jwks, {
         algorithms: ["RS256"],
         audience: config.audience,
+        clockTolerance: 5,
         issuer: config.issuer,
       });
 
       if (
+        typeof protectedHeader.kid !== "string" ||
+        protectedHeader.kid.trim().length === 0 ||
         payload.type !== "app" ||
         payload.email !== config.ownerEmail ||
-        typeof payload.sub !== "string" ||
-        payload.sub.trim().length === 0
+        payload.sub !== config.ownerSub ||
+        typeof payload.iat !== "number" ||
+        payload.iat > Math.floor(Date.now() / 1000) + 5 ||
+        typeof payload.exp !== "number"
       ) {
         throw new AccessDeniedError();
       }

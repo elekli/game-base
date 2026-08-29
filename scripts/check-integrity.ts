@@ -7,6 +7,7 @@ const run = promisify(execFile);
 const requiredPaths = [
   "src/app/layout.tsx",
   "src/shared/auth/private-request.ts",
+  "src/shared/auth/require-owner.ts",
   "src/shared/config/runtime-config.ts",
   "src/shared/observability/structured-log.ts",
   "supabase/config.toml",
@@ -41,6 +42,8 @@ const requiredScripts = [
   "build",
   "supabase:reset",
   "test:pgtap",
+  "db:schema:pull",
+  "db:schema:check",
 ];
 for (const script of requiredScripts) {
   if (packageJson.scripts?.[script] === undefined) violations.push(`missing-script:${script}`);
@@ -81,5 +84,5 @@ if (violations.length > 0) {
   }));
   process.exitCode = 1;
 } else {
-  console.log(JSON.stringify({ event: "integrity_check_passed", checks: 24 }));
+  console.log(JSON.stringify({ event: "integrity_check_passed", checks: 33 }));
 }

@@ -19,6 +19,8 @@ Supabase secret key 會繞過 RLS，只能存在 server environment。它不取�
 pnpm supabase:start
 pnpm supabase:reset
 pnpm test:pgtap
+DIRECT_DATABASE_URL=postgres://... pnpm db:schema:pull
+pnpm db:schema:check
 ```
 
 `0001_runtime_security.sql` 建立角色、`app_private` default privileges 與 private `game-media` bucket（52,428,800 bytes）。pgTAP 在 transaction 內建立 probe table，驗證未來由 migrator 建表時 runtime 取得最小 grants，而 Data API roles 不取得權限；transaction 最後 rollback，不把 probe 留在 schema。
@@ -29,4 +31,4 @@ pnpm test:pgtap
 2. 每張 table 明確 `ENABLE ROW LEVEL SECURITY`；先寫拒絕測試，再加所需 policy。
 3. pgTAP 驗 owner、grants、constraint、RLS 無 policy 的拒絕及合法 runtime path。
 4. `pnpm supabase:reset && pnpm test:pgtap` 從空白環境重播。
-5. Drizzle 只在 migration 套用後以 direct URL 反向擷取型別，確認產物 diff 後提交。
+5. Drizzle 只在 migration 套用後以 direct URL 反向擷取型別；`pnpm db:schema:check` 必須確認 tracked 變更與新檔皆不存在。
