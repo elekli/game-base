@@ -3,7 +3,10 @@ import { getProductionAccessTokenVerifier } from "@/shared/auth/production-acces
 import { getRuntimeConfig } from "@/shared/config/get-runtime-config";
 import { RuntimeConfigError } from "@/shared/config/runtime-config";
 import { getRequestId } from "@/shared/observability/request-id";
-import { serializeLogEvent } from "@/shared/observability/structured-log";
+import {
+  serializeBootstrapLogEvent,
+  serializeLogEvent,
+} from "@/shared/observability/structured-log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,12 +31,16 @@ function serializePrivatePingFailure(
     });
   }
 
-  return JSON.stringify({
+  return serializeBootstrapLogEvent({
     event: "private_request_failed",
     level: "error",
     requestId,
     operation: "private_ping",
     errorCode,
+    resourceType: null,
+    resourceId: null,
+    attempt: null,
+    durationMs: null,
   });
 }
 

@@ -7,7 +7,7 @@
 - [ ] 未知 `kid`、JWK outage、service token 與 claim 不符一律 fail closed；不得加入 local／preview bypass。
 - [ ] 成功與失敗回應皆為 `Cache-Control: private, no-store`。
 - [ ] 使用者只看見通用繁中訊息與 UUID request ID；JWT、email、header、policy、secret 與技術例外不得進回應。
-- [ ] log 只用 `serializeLogEvent()` 的 allowlist；不得序列化任意 `Error`、request 或第三方 response。
+- [ ] log 只用 `serializeLogEvent()`／`serializeBootstrapLogEvent()` 的 allowlist；不得序列化任意 `Error`、request 或第三方 response。
 - [ ] Server Action／Route Handler 的輸入另以 Zod 驗證；TypeScript 型別不算 runtime validation。
 
 ## 資料與部署

@@ -99,6 +99,8 @@ async function callBoundary(token?: string, jwks?: JWTVerifyGetKey) {
   const response = await handlePrivateRequest(request, {
     verifyAccessToken: makeVerifier(jwks),
     operation,
+    onAccessDenied: async () => undefined,
+    onUnhandledFailure: async () => undefined,
   });
 
   return { response, database, storage, operation };
@@ -193,6 +195,7 @@ describe("private owner boundary", () => {
         throw new Error("database connection details");
       },
       onUnhandledFailure,
+      onAccessDenied: async () => undefined,
     });
     const body = await response.text();
 
@@ -202,5 +205,50 @@ describe("private owner boundary", () => {
       requestId: expect.stringMatching(/[0-9a-f-]{36}/),
     });
     expect(body).not.toContain("database connection details");
+  });
+
+  it("preserves a 401 and safely reports an access-denied observer failure", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const request = new Request("https://gamebase.example.test/api/private/ping");
+
+    const response = await handlePrivateRequest(request, {
+      verifyAccessToken: makeVerifier(),
+      operation: async () => ({ status: "unreachable" }),
+      onAccessDenied: async () => {
+        throw new Error("observer secret");
+      },
+      onUnhandledFailure: async () => undefined,
+    });
+
+    expect(response.status).toBe(401);
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleError.mock.calls[0]?.[0]).toContain("failure_observer_failed");
+    expect(consoleError.mock.calls[0]?.[0]).not.toContain("observer secret");
+    consoleError.mockRestore();
+  });
+
+  it("preserves a 500 and safely reports an operation observer failure", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const request = new Request(
+      "https://gamebase.example.test/api/private/ping",
+      { headers: { "Cf-Access-Jwt-Assertion": await signToken() } },
+    );
+
+    const response = await handlePrivateRequest(request, {
+      verifyAccessToken: makeVerifier(),
+      operation: async () => {
+        throw new Error("operation secret");
+      },
+      onAccessDenied: async () => undefined,
+      onUnhandledFailure: async () => {
+        throw new Error("observer secret");
+      },
+    });
+
+    expect(response.status).toBe(500);
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleError.mock.calls[0]?.[0]).toContain("failure_observer_failed");
+    expect(consoleError.mock.calls[0]?.[0]).not.toContain("observer secret");
+    consoleError.mockRestore();
   });
 });

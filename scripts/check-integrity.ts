@@ -8,6 +8,7 @@ const requiredPaths = [
   "src/app/layout.tsx",
   "src/shared/auth/private-request.ts",
   "src/shared/auth/require-owner.ts",
+  "src/shared/config/deployment-bindings.ts",
   "src/shared/config/runtime-config.ts",
   "src/shared/observability/structured-log.ts",
   "supabase/config.toml",
@@ -84,5 +85,5 @@ if (violations.length > 0) {
   }));
   process.exitCode = 1;
 } else {
-  console.log(JSON.stringify({ event: "integrity_check_passed", checks: 33 }));
+  console.log(JSON.stringify({ event: "integrity_check_passed", checks: 34 }));
 }

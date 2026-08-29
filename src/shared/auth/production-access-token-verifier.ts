@@ -1,5 +1,5 @@
 import "server-only";
-import { createRemoteJWKSet } from "jose";
+import { createRemoteJWKSet, type JWTVerifyGetKey } from "jose";
 import {
   createAccessTokenVerifier,
   type AccessTokenVerifier,
@@ -13,20 +13,33 @@ type CloudflareAccessConfig = Readonly<{
   ownerSub: string;
 }>;
 
-let cachedVerifier:
-  | Readonly<{ cacheKey: string; verifier: AccessTokenVerifier }>
-  | undefined;
+type RemoteJwkSetFactory = (url: URL) => JWTVerifyGetKey;
 
-export function getProductionAccessTokenVerifier(
-  config: CloudflareAccessConfig,
-): AccessTokenVerifier {
-  const cacheKey = JSON.stringify(config);
-  if (cachedVerifier?.cacheKey === cacheKey) return cachedVerifier.verifier;
+export function createProductionAccessTokenVerifierProvider(
+  createJwks: RemoteJwkSetFactory = createRemoteJWKSet,
+) {
+  let cachedVerifier:
+    | Readonly<{ cacheKey: string; verifier: AccessTokenVerifier }>
+    | undefined;
 
-  const verifier = createAccessTokenVerifier({
-    ...config,
-    jwks: createRemoteJWKSet(new URL(config.jwksUrl)),
-  });
-  cachedVerifier = { cacheKey, verifier };
-  return verifier;
+  return (config: CloudflareAccessConfig): AccessTokenVerifier => {
+    const cacheKey = JSON.stringify([
+      config.audience,
+      config.issuer,
+      config.jwksUrl,
+      config.ownerEmail,
+      config.ownerSub,
+    ]);
+    if (cachedVerifier?.cacheKey === cacheKey) return cachedVerifier.verifier;
+
+    const verifier = createAccessTokenVerifier({
+      ...config,
+      jwks: createJwks(new URL(config.jwksUrl)),
+    });
+    cachedVerifier = { cacheKey, verifier };
+    return verifier;
+  };
 }
+
+export const getProductionAccessTokenVerifier =
+  createProductionAccessTokenVerifierProvider();

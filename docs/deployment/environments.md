@@ -10,6 +10,8 @@
 
 每個環境各自設定 `.env.example` 列出的 variables。`EXPECTED_*` 與兩個 SHA-256 fingerprint 是部署綁定，不是動態猜測；`OWNER_EMAIL` 與 `OWNER_SUB` 必須取自該擁有者的 Cloudflare Access JWT。`pnpm environment:check` 會在任一欄位混用時以命名錯誤停止。`DIRECT_DATABASE_URL` 只供 migration／introspection，不得放入 Vercel runtime。
 
+Hosted 環境另由 repository 內的 `src/shared/config/deployment-bindings.ts` 固定 project ref、Supavisor host／username 與 key fingerprint，避免整套 production variables 被複製到 preview 後仍能自洽。檔案目前是可重建的 fixture；建立真實 Supabase 專案後，必須以非 secret 識別與實際 key fingerprint 更新它，再設定 Vercel variables。兩邊不一致時應停止部署，不得改成動態接受。
+
 Vercel 的 Build Command 維持 `pnpm build`；部署後 Node.js instrumentation 與每個 private route 都會再次驗證環境。CI 另直接測 `parseRuntimeConfig()` 的合法組合與跨環境混用。
 
 ## Preview 驗收

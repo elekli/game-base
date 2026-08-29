@@ -15,9 +15,18 @@ const logEventSchema = z.object({
   environment: z.enum(["preview", "production"]),
 });
 
+const bootstrapLogEventSchema = logEventSchema.omit({ environment: true });
+
 export type StructuredLogInput = z.input<typeof logEventSchema> &
   Readonly<Record<string, unknown>>;
 
 export function serializeLogEvent(input: StructuredLogInput): string {
   return JSON.stringify(logEventSchema.parse(input));
+}
+
+export type BootstrapLogInput = z.input<typeof bootstrapLogEventSchema> &
+  Readonly<Record<string, unknown>>;
+
+export function serializeBootstrapLogEvent(input: BootstrapLogInput): string {
+  return JSON.stringify(bootstrapLogEventSchema.parse(input));
 }

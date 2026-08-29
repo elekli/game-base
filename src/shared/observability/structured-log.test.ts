@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { serializeLogEvent } from "./structured-log";
+import {
+  serializeBootstrapLogEvent,
+  serializeLogEvent,
+} from "./structured-log";
 
 describe("serializeLogEvent", () => {
   it("serializes only the structured-log allowlist", () => {
@@ -34,5 +37,33 @@ describe("serializeLogEvent", () => {
     });
     expect(serialized).not.toContain("must-not-appear");
     expect(serialized).not.toContain("private.pdf");
+  });
+
+  it("allowlists bootstrap failures without inventing a deployment environment", () => {
+    const serialized = serializeBootstrapLogEvent({
+      event: "private_request_failed",
+      level: "error",
+      requestId: "36b8f84d-df4e-4d49-b662-bcde71a8764f",
+      operation: "private_ping",
+      errorCode: "runtime_config_invalid",
+      resourceType: null,
+      resourceId: null,
+      attempt: null,
+      durationMs: null,
+      secret: "must-not-appear",
+    });
+
+    expect(JSON.parse(serialized)).toEqual({
+      event: "private_request_failed",
+      level: "error",
+      requestId: "36b8f84d-df4e-4d49-b662-bcde71a8764f",
+      operation: "private_ping",
+      errorCode: "runtime_config_invalid",
+      resourceType: null,
+      resourceId: null,
+      attempt: null,
+      durationMs: null,
+    });
+    expect(serialized).not.toContain("must-not-appear");
   });
 });

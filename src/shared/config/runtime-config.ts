@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { NamedError } from "@/shared/errors/named-error";
+import { deploymentBindings } from "./deployment-bindings";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -60,6 +61,15 @@ export function parseRuntimeConfig(
     assertEqual(["127.0.0.1", "localhost"].includes(supabaseUrl.hostname), true);
     assertEqual(env.SUPAVISOR_PORT, "54329");
   } else {
+    const binding = deploymentBindings[env.VERCEL_ENV];
+    assertEqual(env.SUPABASE_PROJECT_REF, binding.projectRef);
+    assertEqual(env.EXPECTED_SUPABASE_PROJECT_REF, binding.projectRef);
+    assertEqual(env.SUPAVISOR_HOST, binding.supavisorHost);
+    assertEqual(env.EXPECTED_SUPAVISOR_HOST, binding.supavisorHost);
+    assertEqual(env.SUPAVISOR_USERNAME, binding.supavisorUsername);
+    assertEqual(env.EXPECTED_SUPAVISOR_USERNAME, binding.supavisorUsername);
+    assertEqual(env.EXPECTED_SUPABASE_PUBLISHABLE_KEY_SHA256, binding.publishableKeySha256);
+    assertEqual(env.EXPECTED_SUPABASE_SECRET_KEY_SHA256, binding.secretKeySha256);
     assertEqual(supabaseUrl.hostname, `${env.SUPABASE_PROJECT_REF}.supabase.co`);
     assertEqual(env.SUPAVISOR_PORT, "6543");
   }
