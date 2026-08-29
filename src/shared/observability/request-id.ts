@@ -6,4 +6,3 @@ export function getRequestId(headers: Headers): string {
   const candidate = headers.get("x-request-id");
   return candidate !== null && UUID_PATTERN.test(candidate) ? candidate : randomUUID();
 }
-

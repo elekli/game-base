@@ -6,4 +6,3 @@ export class AccessDeniedError extends NamedError {
     this.name = "AccessDeniedError";
   }
 }
-

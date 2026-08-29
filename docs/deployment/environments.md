@@ -28,4 +28,3 @@ Vercel 的 Build Command 維持 `pnpm build`；部署後 Node.js instrumentation
 4. 將任一 preview project ref、Supavisor host／username、URL 或 key 混入 production，`environment:check`／啟動驗證必須失敗。
 
 真實 preview／production 的 platform protection、Cloudflare claim 與 Supavisor credential 必須在對應帳號中實測；本機 fixture 不能替代這三項外部證據。
-

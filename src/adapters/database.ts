@@ -13,4 +13,3 @@ export function createDatabase(databaseUrl: string) {
     close: () => client.end(),
   };
 }
-

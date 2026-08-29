@@ -20,4 +20,3 @@
 - [ ] preview 只連固定測試 Supabase 專案；production 只連正式專案。兩者的 Vercel variables 分開設定。
 - [ ] preview 啟用 Vercel Deployment Protection；production 自訂網域啟用 Cloudflare Access。
 - [ ] 直接 `.vercel.app`／origin 呼叫 private route 在任何資料操作前回 401。
-

@@ -30,4 +30,3 @@ pnpm test:pgtap
 3. pgTAP 驗 owner、grants、constraint、RLS 無 policy 的拒絕及合法 runtime path。
 4. `pnpm supabase:reset && pnpm test:pgtap` 從空白環境重播。
 5. Drizzle 只在 migration 套用後以 direct URL 反向擷取型別，確認產物 diff 後提交。
-

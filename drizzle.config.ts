@@ -10,4 +10,3 @@ export default defineConfig({
   dbCredentials: { url: directDatabaseUrl },
   out: "./src/adapters/database-schema",
 });
-
