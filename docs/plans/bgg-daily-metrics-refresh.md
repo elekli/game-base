@@ -33,7 +33,7 @@
 ```text
 bgg_metric_refresh_runs
   id, taipei_date UNIQUE, state,
-  total_count, succeeded_count, failed_count,
+  total_count, succeeded_count, failed_count, skipped_count,
   lease_token, lease_generation, lease_expires_at,
   started_at, last_successful_item_at, completed_at
 
@@ -52,13 +52,13 @@ bgg_metric_write_fences
 
 ## 觸發、stale 判定與租約
 
-通過 Cloudflare Access JWT 驗證的首頁或任何應用程式入口，在讀取收藏庫快取後，呼叫 `ensureDailyBggMetricRefresh()`。入口回應永遠不等待 BGG；它只取得一個狀態 DTO，並以 `waitUntil` 啟動短背景切片。Vercel 可同時執行多個 invocation，或在背景切片中止後縮到零，因此所有正確性狀態都在 PostgreSQL。
+通過 Cloudflare Access JWT 驗證的首頁或任何應用程式入口，在讀取收藏庫快取後，呼叫 `ensureDailyBggMetricRefresh()`。入口回應永遠不等待 BGG；它只取得一個狀態 DTO，並以 Next.js `after()`（由 Vercel 的 `waitUntil` 維持 invocation）啟動短背景切片。Vercel 可同時執行多個 invocation，或在背景切片中止後縮到零，因此所有正確性狀態都在 PostgreSQL。
 
 1. 在短交易中用 `now() AT TIME ZONE 'Asia/Taipei'` 算出 `taipei_date`。
 2. 以 `INSERT ... ON CONFLICT DO NOTHING` 建立每日執行紀錄；只有插入成功者在同一交易選出資格目標並建立項目，接著寫入不變的 `total_count`。
 3. 已有同日紀錄時只讀回狀態，不重新列舉目標。這就是「同一天最多啟動一次」的資料庫仲裁。
 4. 背景切片以單一 `UPDATE ... WHERE lease_expires_at < now()`（首次為空）取得 90 秒租約並遞增 `lease_generation`。沒有取得租約的 invocation 立即結束。
-5. 租約持有人在每個工作切片開始、認領下一批前，以及每完成一個 BGG 呼叫後延長租約。若距離 Vercel function 的設定時限不足 20 秒，停止認領新項目並正常放棄租約；未完成項目保持可接手。
+5. 租約持有人在每個工作切片開始、認領下一批前，以及每完成一個 BGG 呼叫後延長 run 與目前 item 的租約。若 scheduler 的下一個時段或 `Retry-After` 已超出目前 item 租約，worker 將該 item 原子改回 `pending` 並寫入 `next_attempt_at`，而不是帶著租約長等。若距離 Vercel function 的設定時限不足 20 秒，停止認領新項目並正常放棄租約；未完成項目保持可接手。
 
 「stale」只用於租約與項目的 `lease_expires_at < now()`：過期的執行者已失去寫入權，不代表 BGG 數值過期或應清空。每日更新失敗時既有 `last_successful_at` 保持原值。
 
@@ -82,10 +82,10 @@ bgg_metric_write_fences
 
 對每一個項目：
 
-1. 在開始 fetch 前向 `bgg_metric_write_fences` 取得新的背景寫入世代；若有未過期的手動寫入保留，項目回到 `pending` 並在該手動工作結束後再排程，不能和手動重新整理爭搶。
+1. 在開始 fetch 前確認外部身分仍連到一般收藏庫、未進資源回收區的 BGG 遊戲；不符合時標為 `skipped`、遞增 `skipped_count`，不發 BGG 請求。接著向 `bgg_metric_write_fences` 取得新的背景寫入世代；若有未過期的手動寫入保留，項目回到 `pending` 並在該手動工作結束後再排程，不能和手動重新整理爭搶。
 2. 向既有的 BGG scheduler 請求一個背景優先權時段。scheduler 已固定為跨 instance 的每秒最多一個、同時最多一個 BGG 請求；互動操作可排到等待中的背景工作之前。每日流程不得另設 in-memory limiter 或繞過該 scheduler。
 3. 透過 adapter 取得並驗證只有重度與 Strategy Game Rank 的快照。adapter 只對既定可恢復錯誤重試，最多兩次；不在每日流程外層再包一層自動重試。
-4. 成功時在短交易中同時檢查 run token／世代、項目 token／世代，以及寫入世代仍等於該身分的 `latest_generation`。全都成立才以單一 UPSERT 更新 `bgg_current_metrics` 的兩個值與最後成功更新時間，並把項目標為 `succeeded`、原子遞增 run 成功數與更新 `last_successful_item_at`。
+4. 成功時在短交易中同時檢查 run token／世代、項目 token／世代、外部身分仍連到一般收藏庫遊戲，以及寫入世代仍等於該身分的 `latest_generation`。遊戲已進資源回收區時只標為 `skipped`；其餘條件全都成立才以單一 UPSERT 更新 `bgg_current_metrics` 的兩個值與最後成功更新時間，並把項目標為 `succeeded`、原子遞增 run 成功數與更新 `last_successful_item_at`。
 5. 任一檢查失敗代表 worker 已過期或回應已被較新的手動操作取代：不得寫入數值；該項目回到 `pending`（若仍在本日 run）或由手動結果完成，不可把它記為成功。
 6. adapter 的可恢復重試仍失敗、或回傳其他命名錯誤時，交易只把項目標為 `failed` 並保存非敏感 `last_error_code`、遞增 run 失敗數；舊 `bgg_current_metrics` 完全不動。下一個項目繼續處理。
 
@@ -119,12 +119,12 @@ BGG token 被撤銷、設定缺漏或上游持續拒絕時，各項目會失敗�
 
 選單的背景更新狀態由每日執行紀錄讀出，不從 Vercel instance 推測：
 
-- 執行中：顯示「已更新 `succeeded_count`／`total_count`」、目前失敗數與最近一筆成功時間。
+- 執行中：顯示「已處理 `succeeded_count + skipped_count`／`total_count`」、目前失敗數與最近一筆成功時間。
 - 全部完成：顯示最後成功時間與 `total_count`；若有失敗，明確顯示失敗筆數及「只重試失敗項目」。
 - 尚未取得任何成功值的遊戲，卡片／詳細頁仍依既有規則顯示未知或未排名；絕不用載入中的空值覆寫快取。
 - BGG 不可用時只在背景狀態呈現摘要性錯誤，不逐筆通知、不阻擋收藏庫、搜尋、筆記或媒體操作。
 
-「只重試失敗項目」只接受已完成且 `failed_count > 0` 的本日 run。它在交易中將失敗項目重設為 `pending`、清除舊項目租約與錯誤碼、保留成功項目及固定的目標快照，然後由相同 run 取得新的租約執行。若使用者重複點擊，唯一的 run 與項目列加上 `FOR UPDATE SKIP LOCKED` 使其成為同一個接手，而非兩批重試。
+「只重試失敗項目」只接受已完成且 `failed_count > 0` 的本日 run。它在同一交易中將失敗項目重設為 `pending`、清除舊項目租約與錯誤碼、把 run 復原為 `running`，並依實際重設筆數扣回 `failed_count`；成功項目、略過項目及固定的目標快照都不變。然後由相同 run 取得新的租約執行。若使用者重複點擊，唯一的 run 與項目列加上 `FOR UPDATE SKIP LOCKED` 使其成為同一個接手，而非兩批重試。
 
 ## 必守不變式與驗證目標
 
@@ -137,7 +137,8 @@ BGG token 被撤銷、設定缺漏或上游持續拒絕時，各項目會失敗�
 5. 正常回傳的空排名寫成 `null`，不寫 0；無效數值不改動舊快照。
 6. 可恢復與不可恢復錯誤都保留舊重度、排名及最後成功時間；每日流程不做 adapter 之外的隱性重試。
 7. 手動重新整理與每日更新交錯時，較舊世代永遠無法覆寫較新世代；手動失敗不抹除每日的 pending 項目。
-8. 重試只重新處理失敗項目，不能重設成功項目、擴大目標集合或建立第二個同日 run。
+8. 資源回收區項目即使在目標快照建立後才移入，也不會再發 BGG 請求或寫入指標，並明確計為略過。
+9. 重試只重新處理失敗項目，不能重設成功或略過項目、擴大目標集合或建立第二個同日 run；`failed_count` 必須等於目前失敗項目數。
 
 ## 實作邊界
 
