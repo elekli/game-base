@@ -1,6 +1,6 @@
 # Puizeru Gamebase — HANDOFF
 
-**Last session:** 2026-08-22（Batch 2 started：Git repository 與 Wayfinder 決策地圖建立）
+**Last session:** 2026-08-29（Batch 2 complete：Wayfinder 決策已收斂為分批實作計畫）
 **For next session:** This file stands alone. You should not need the original conversation or a parent plan to proceed.
 
 ---
@@ -17,12 +17,14 @@
 - 已完成一次跨文件矛盾檢查並修正：一般中繼資料與每日 BGG 指標更新的例外、遊戲條目刪除與其他低風險刪除的主詞、線上應用程式與「離線瀏覽」誤寫、只有庫外引用之封存清單的還原入口。
 - 尚未建立應用程式、資料庫 migration、UI 原型或測試；技術棧未裁決前不先建立套件設定。
 
-**Batch 2（in progress）：**
+**Batch 2（complete，計畫 PR 待審查與合併）：**
 
 - 本目錄已初始化為 Git repository；per-repo 身分是 `elek <elek.li@gmail.com>`，remote 是 `git@github.com-personal:elekli/game-base.git`，`.claude/security-tier` 為 `standard`，push guard 已安裝。
 - `main` 已首次推到 `origin`，remote 是 `git@github.com-personal:elekli/game-base.git`。elek 明確不把 `id_personal` 存進 macOS Keychain；需要 push 時，在自己的終端暫時執行 `SSH_AUTH_SOCK=~/.ssh/agent.sock ssh-add ~/.ssh/id_personal`，再由 agent 以同一個 `SSH_AUTH_SOCK` 推送。
 - GitHub Issues 是本專案的 tracker。Wayfinder 主地圖是 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1)，其下有 11 張 sub-issues，並使用 GitHub native dependencies 表達 blocking edges。
-- [裁決 Web 技術棧與專案骨架](https://github.com/elekli/game-base/issues/2) 已完成；決策記於 `docs/adr/0005-use-nextjs-deep-modular-monolith.md`。現在的 frontier 有 3 張：[驗證真實檔案是否符合 Supabase Free 限制](https://github.com/elekli/game-base/issues/3)、[將既有領域模型轉成資料模型與不變式](https://github.com/elekli/game-base/issues/4)、[驗證行動版核心流程](https://github.com/elekli/game-base/issues/9)。
+- [定稿 MVP 分批實作與驗證計畫](https://github.com/elekli/game-base/issues/11) 已關閉；規劃主文件位於 [計畫 PR](https://github.com/elekli/game-base/pull/25)。它切成 0～5 六批，首個可用縱切包含 BGG／IGDB 雙來源搜尋、列內確認與直接入庫；並附帶 gap-verification 的不變式、交錯與權限路徑檢查。
+- [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1) 已追加計畫摘要，Not yet specified 為空；唯一仍開啟的 `ready-for-agent` 票是地圖外的 [並行驗證 Vditor ir 行動版編輯體驗](https://github.com/elekli/game-base/issues/12)。
+- [將既有媒體規則落成縮圖與上傳狀態機](https://github.com/elekli/game-base/issues/7) 與 [將既定 BGG 每日更新規則落成並行安全流程](https://github.com/elekli/game-base/issues/10) 的文件 PR 仍開啟；[驗證行動版核心流程](https://github.com/elekli/game-base/issues/9) 的裁決資產位於未合併 PR。批次 3 不可在這些規格尚未匯入 `main` 前開始。
 - 已回讀原始 session 並建立 `docs/plans/decision-traceability.md`；每張 ticket 都標出不可重開的固定輸入。GitHub 現成方案、BGG／IGDB、Neon／Supabase 與編輯器研究均不得重做；Vditor 另由 [並行驗證 Vditor ir 行動版編輯體驗](https://github.com/elekli/game-base/issues/12) 非阻塞追蹤。
 
 ---
@@ -41,16 +43,13 @@
 
 ---
 
-## Next Actions（Batch 2：依 Wayfinder 逐票裁決）
+## Next Actions（Batch 3 入口）
 
-Batch 2 要把已定稿的產品規格轉成可分批執行的工程計畫；不得從 382 行需求直接跳到 coding，也不要在一個 session 解決超過一張非 research ticket。
-
-1. 遠端與 `main` branch protection 已建立。後續變更一律使用 feature branch＋worktree＋PR；需要 push 時，由 elek 以 `SSH_AUTH_SOCK=~/.ssh/agent.sock ssh-add ~/.ssh/id_personal` 暫時載入 key，不使用 `--apple-use-keychain`。
-2. 從 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1) 讀低解析地圖；未指定 ticket 時，依順序選第一張未阻擋、未指派的 frontier ticket。
-3. 工作前先 claim：把 ticket 指派給當前開發者；依票面型別使用 `domain-modeling`、`prototype` 或 grilling 流程。
-4. 解決後把答案寫成 resolution comment、關閉 ticket，並只在主地圖的 `Decisions so far` 加一行名稱連結與摘要；不要把詳細裁決複製到地圖。
-5. 每次裁決都重新檢查哪些 fog 已能成票、哪些 blocking edges 已解除；新增票時先建立、再補相依關係與 sub-issue。
-6. 最後由 [定稿 MVP 分批實作與驗證計畫](https://github.com/elekli/game-base/issues/11) 收斂工程計畫，並以 `gap-verification` 檢查唯一約束、並行重試、軟刪除、權限邊界與衍生縮圖，再進入 Batch 3 coding。
+1. 審查並合併[計畫 PR](https://github.com/elekli/game-base/pull/25)。合併後，以新的 `main` 建立 Batch 3 的 worktree；不要從舊文件分支開始 coding。
+2. 將本 PR 的 Handoff 更新視為 Batch 2 的終態；Wayfinder 主地圖與[定稿 MVP 分批實作與驗證計畫](https://github.com/elekli/game-base/issues/11)已不需要再操作。
+3. 合併[將既有媒體規則落成縮圖與上傳狀態機](https://github.com/elekli/game-base/issues/7)與[將既定 BGG 每日更新規則落成並行安全流程](https://github.com/elekli/game-base/issues/10)的文件 PR，並將[驗證行動版核心流程](https://github.com/elekli/game-base/issues/9)的 A／A1／A1a 裁決回寫至 `main` 的 `CONTEXT.md` 與追溯表。這是批次 0 的實作前閘，不是可跳過的文件整理。
+4. 申請並安全保存 BGG 非商業 token 與 Twitch／IGDB confidential app credentials；先在受保護的本機或 preview 跑 production adapter contract，再開始 Batch 1。
+5. 在新 worktree 執行批次 0；其驗收是可重播 migration、安全的 Cloudflare Access JWT／環境邊界與本機／preview 可重建骨架，不是先寫任一產品功能。
 
 **判斷分支：**
 
@@ -112,12 +111,10 @@ Batch 2 要把已定稿的產品規格轉成可分批執行的工程計畫；不
 
 ---
 
-## When Batch 2 is complete
+## Batch 2 completion record
 
-Update this HANDOFF with：
-
-- 實作計畫的檔案路徑、批次切分與每批驗收條件。
-- 資料模型、狀態機與 ASCII 流程圖已覆蓋哪些不變式。
-- 技術棧與任何新增／修訂 ADR。
-- 哪些 API 憑證與本機／預覽環境已實測，哪些仍需外部條件。
-- 是否已可進入 Batch 3 實作，或仍有需要 elek 裁決的產品／成本問題。
+- 實作計畫在 `docs/plans/mvp-implementation-plan.md`：批次 0 為基線與安全外殼；批次 1 為雙來源搜尋入庫與書架；批次 2 為整理／refresh／篩選；批次 3 為媒體；批次 4 為筆記／清單／資源回收；批次 5 為每日 BGG、可觀測性與正式上線驗收。
+- `docs/plans/data-model-and-invariants.md`、來源 adapter、媒體、筆記／清單、BGG 及本計畫內的 ASCII 圖與表格共同覆蓋來源唯一性、資料所有權、媒體 finalize、生命週期、每日 run 租約與 Cloudflare／Supabase 權限邊界。
+- 技術棧沒有新增或修訂 ADR；繼續採 ADR 0003／0004／0005。
+- BGG／IGDB credentials、production adapter payload 與正式／preview 環境仍未實測，屬 Batch 1 的外部條件。QNAP 備份仍是 MVP 後 P0，不是 blocker。
+- 不需要 elek 再裁決產品或成本問題；但必須先完成計畫 PR、匯入三份未進 `main` 的決策資產並取得 BGG／IGDB 憑證，才可進入批次 3。
