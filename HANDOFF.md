@@ -17,13 +17,13 @@
 - 已完成一次跨文件矛盾檢查並修正：一般中繼資料與每日 BGG 指標更新的例外、遊戲條目刪除與其他低風險刪除的主詞、線上應用程式與「離線瀏覽」誤寫、只有庫外引用之封存清單的還原入口。
 - 尚未建立應用程式、資料庫 migration、UI 原型或測試；技術棧未裁決前不先建立套件設定。
 
-**Batch 2（complete，計畫 PR 待審查與合併）：**
+**Batch 2（complete）：**
 
 - 本目錄已初始化為 Git repository；per-repo 身分是 `elek <elek.li@gmail.com>`，remote 是 `git@github.com-personal:elekli/game-base.git`，`.claude/security-tier` 為 `standard`，push guard 已安裝。
 - `main` 已首次推到 `origin`，remote 是 `git@github.com-personal:elekli/game-base.git`。elek 明確不把 `id_personal` 存進 macOS Keychain；需要 push 時，在自己的終端暫時執行 `SSH_AUTH_SOCK=~/.ssh/agent.sock ssh-add ~/.ssh/id_personal`，再由 agent 以同一個 `SSH_AUTH_SOCK` 推送。
 - GitHub Issues 是本專案的 tracker。Wayfinder 主地圖是 [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1)，其下有 11 張 sub-issues，並使用 GitHub native dependencies 表達 blocking edges。
-- [定稿 MVP 分批實作與驗證計畫](https://github.com/elekli/game-base/issues/11) 已關閉；規劃主文件位於 [計畫 PR](https://github.com/elekli/game-base/pull/25)。它切成 0～5 六批，首個可用縱切包含 BGG／IGDB 雙來源搜尋、列內確認與直接入庫；並附帶 gap-verification 的不變式、交錯與權限路徑檢查。
-- [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1) 已追加計畫摘要，Not yet specified 為空；唯一仍開啟的 `ready-for-agent` 票是地圖外的 [並行驗證 Vditor ir 行動版編輯體驗](https://github.com/elekli/game-base/issues/12)。
+- [定稿 MVP 分批實作與驗證計畫](https://github.com/elekli/game-base/issues/11) 已關閉；規劃主文件已合併至 `main` 的 `docs/plans/mvp-implementation-plan.md`。它切成 0～5 六批，首個可用縱切包含 BGG／IGDB 雙來源搜尋、列內確認與直接入庫；並附帶 gap-verification 的不變式、交錯與權限路徑檢查。
+- [規劃可執行的 MVP 實作路線](https://github.com/elekli/game-base/issues/1) 已關閉：11 張子票全數完成，Not yet specified 為空。唯一仍開啟的 `ready-for-agent` 票是地圖外的 [並行驗證 Vditor ir 行動版編輯體驗](https://github.com/elekli/game-base/issues/12)。
 - [將既有媒體規則落成縮圖與上傳狀態機](https://github.com/elekli/game-base/issues/7) 與 [將既定 BGG 每日更新規則落成並行安全流程](https://github.com/elekli/game-base/issues/10) 的文件 PR 仍開啟；[驗證行動版核心流程](https://github.com/elekli/game-base/issues/9) 的裁決資產位於未合併 PR。批次 3 不可在這些規格尚未匯入 `main` 前開始。
 - 已回讀原始 session 並建立 `docs/plans/decision-traceability.md`；每張 ticket 都標出不可重開的固定輸入。GitHub 現成方案、BGG／IGDB、Neon／Supabase 與編輯器研究均不得重做；Vditor 另由 [並行驗證 Vditor ir 行動版編輯體驗](https://github.com/elekli/game-base/issues/12) 非阻塞追蹤。
 
@@ -45,8 +45,8 @@
 
 ## Next Actions（Batch 3 入口）
 
-1. 審查並合併[計畫 PR](https://github.com/elekli/game-base/pull/25)。合併後，以新的 `main` 建立 Batch 3 的 worktree；不要從舊文件分支開始 coding。
-2. 將本 PR 的 Handoff 更新視為 Batch 2 的終態；Wayfinder 主地圖與[定稿 MVP 分批實作與驗證計畫](https://github.com/elekli/game-base/issues/11)已不需要再操作。
+1. 從最新 `main` 建立 Batch 3 的 worktree；不要從任何舊文件分支開始 coding。
+2. Wayfinder 主地圖與[定稿 MVP 分批實作與驗證計畫](https://github.com/elekli/game-base/issues/11)均已完成，不需要再操作。
 3. 合併[將既有媒體規則落成縮圖與上傳狀態機](https://github.com/elekli/game-base/issues/7)與[將既定 BGG 每日更新規則落成並行安全流程](https://github.com/elekli/game-base/issues/10)的文件 PR，並將[驗證行動版核心流程](https://github.com/elekli/game-base/issues/9)的 A／A1／A1a 裁決回寫至 `main` 的 `CONTEXT.md` 與追溯表。這是批次 0 的實作前閘，不是可跳過的文件整理。
 4. 申請並安全保存 BGG 非商業 token 與 Twitch／IGDB confidential app credentials；先在受保護的本機或 preview 跑 production adapter contract，再開始 Batch 1。
 5. 在新 worktree 執行批次 0；其驗收是可重播 migration、安全的 Cloudflare Access JWT／環境邊界與本機／preview 可重建骨架，不是先寫任一產品功能。
@@ -117,4 +117,4 @@
 - `docs/plans/data-model-and-invariants.md`、來源 adapter、媒體、筆記／清單、BGG 及本計畫內的 ASCII 圖與表格共同覆蓋來源唯一性、資料所有權、媒體 finalize、生命週期、每日 run 租約與 Cloudflare／Supabase 權限邊界。
 - 技術棧沒有新增或修訂 ADR；繼續採 ADR 0003／0004／0005。
 - BGG／IGDB credentials、production adapter payload 與正式／preview 環境仍未實測，屬 Batch 1 的外部條件。QNAP 備份仍是 MVP 後 P0，不是 blocker。
-- 不需要 elek 再裁決產品或成本問題；但必須先完成計畫 PR、匯入三份未進 `main` 的決策資產並取得 BGG／IGDB 憑證，才可進入批次 3。
+- 不需要 elek 再裁決產品或成本問題；但必須先匯入三份未進 `main` 的決策資產並取得 BGG／IGDB 憑證，才可進入批次 3。
