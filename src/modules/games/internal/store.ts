@@ -32,11 +32,11 @@ export class InMemoryGameStore implements GameStore {
   }
   async createFromSource(ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<{ game: GameRecord; created: boolean }> {
     const key = `${ref.provider}:${ref.sourceId}`;
-    const existingLock = this.locks.get(key);
-    if (existingLock) await existingLock;
+    const previous = this.locks.get(key) ?? Promise.resolve();
     let release!: () => void;
-    const lock = new Promise<void>((resolve) => { release = resolve; });
+    const lock = previous.then(() => new Promise<void>((resolve) => { release = resolve; }));
     this.locks.set(key, lock);
+    await previous;
     try {
       const existingId = this.identities.get(key);
       if (existingId) {

@@ -19,6 +19,11 @@ const PRIVATE_RESPONSE_HEADERS = {
   "cache-control": "private, no-store",
 } as const;
 
+export class PrivateRequestInputError extends Error {
+  readonly status = 400;
+  constructor(message = "請求參數無效。") { super(message); this.name = "PrivateRequestInputError"; }
+}
+
 function safeErrorResponse(status: number, message: string, requestId: string) {
   return Response.json(
     { message, requestId },
@@ -61,6 +66,7 @@ export async function handlePrivateRequest<Result extends object>(
       { headers: PRIVATE_RESPONSE_HEADERS },
     );
   } catch (error) {
+    if (error instanceof PrivateRequestInputError) return safeErrorResponse(error.status, error.message, requestId);
     if (error instanceof AccessDeniedError) {
       await observeFailureWithoutChangingResponse(requestId, () =>
         dependencies.onAccessDenied({ requestId }),

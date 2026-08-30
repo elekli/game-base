@@ -4,7 +4,7 @@ set local role app_migrator;
 create table if not exists app_private.external_game_identities (
   id uuid primary key default gen_random_uuid(),
   provider text not null check (provider in ('bgg', 'igdb')),
-  source_id text not null check (source_id ~ '^[0-9]+$'),
+  source_id text not null check (source_id ~ '^(0|[1-9][0-9]*)$'),
   medium text not null check (medium in ('board_game', 'video_game')),
   snapshot jsonb not null,
   created_at timestamptz not null default now(),

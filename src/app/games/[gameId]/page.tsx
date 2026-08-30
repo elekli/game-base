@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { gamesService } from "@/app/games/service";
+import { requirePrivatePage } from "@/app/games/private-page";
 
 export const dynamic = "force-dynamic";
 
 export default async function GameDetailPage({ params }: { params: Promise<{ gameId: string }> }) {
+  await requirePrivatePage();
   const { gameId } = await params;
   const game = await gamesService.getGame(gameId);
   if (!game) notFound();

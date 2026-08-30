@@ -23,6 +23,7 @@ export function parseIgdbGamesJson(payload: unknown): readonly NormalizedSearchC
 
 export function parseIgdbSnapshot(raw: unknown, sourceId: string): SourceSnapshot {
   const candidates = parseIgdbGamesJson([raw]);
+  if (candidates.length === 0) throw new SourceResponseInvalidError();
   const game = raw as IgdbGame;
   const candidate = candidates[0];
   return validateSnapshot({ ref: { provider: "igdb", medium: "video_game", sourceId }, canonicalUrl: `https://www.igdb.com/games/${sourceId}`, title: candidate.title, localizedTitle: null, aliases: [], description: game.summary ?? null, releaseYear: candidate.releaseYear, coverUrl: candidate.coverPreviewUrl, categories: [...(game.genres ?? []), ...(game.themes ?? [])].filter((item) => typeof item.id === "number" && typeof item.name === "string").map((item) => ({ kind: "genre", sourceCategoryId: String(item.id), name: item.name as string })), contributors: [], minPlayers: null, maxPlayers: null, supportsSolo: "unknown", playtimeMinutes: null, weight: null, strategyRank: null, supportedPlatforms: (game.platforms ?? []).map((item) => item.name).filter((name): name is string => Boolean(name)) });
@@ -35,30 +36,31 @@ export class IgdbCatalogAdapter implements SourceCatalogPort {
   private get fetchImpl(): FetchLike { return this.options.fetchImpl ?? fetch; }
   async search(input: SourceSearchQuery): Promise<readonly NormalizedSearchCandidate[]> {
     if (!input.query.trim()) throw new SourceResponseInvalidError();
-    const response = await this.call("games", `fields id,name,first_release_date,cover.url; search \"${input.query.trim().replaceAll('"', "\\\"")}\"; limit ${Math.min(input.limit ?? 20, 50)};`);
+    const escaped = input.query.trim().replaceAll("\\", "\\\\").replaceAll('"', "\\\"").replace(/[\u0000-\u001f]/g, " ").slice(0, 120);
+    const response = await this.call("games", `fields id,name,first_release_date,cover.url; search \"${escaped}\"; limit ${Math.min(input.limit ?? 20, 50)};`);
     return parseIgdbGamesJson(await response.json());
   }
-  async fetchSnapshot(ref: ExternalGameRef): Promise<SourceSnapshot> {
+  async fetchSnapshot(ref: ExternalGameRef, freshness: "cache_ok" | "fresh" = "cache_ok"): Promise<SourceSnapshot> {
     const normalized = assertReference(ref);
-    const response = await this.call("games", `fields id,name,first_release_date,cover.url,summary,platforms.name,genres.id,genres.name,themes.id,themes.name; where id = ${normalized.sourceId}; limit 1;`);
+    const response = await this.call("games", `fields id,name,first_release_date,cover.url,summary,platforms.name,genres.id,genres.name,themes.id,themes.name; where id = ${normalized.sourceId}; limit 1;`, freshness);
     const payload = await response.json();
     if (!Array.isArray(payload) || payload.length === 0) throw new SourceNotFoundError();
     return parseIgdbSnapshot(payload[0], normalized.sourceId);
   }
-  private async call(path: string, query: string): Promise<Response> {
+  private async call(path: string, query: string, freshness: "cache_ok" | "fresh" = "cache_ok"): Promise<Response> {
     const token = await this.getToken();
     let response: Response;
-    try { response = await this.fetchImpl(`${this.options.apiUrl ?? "https://api.igdb.com/v4"}/${path}`, { method: "POST", headers: { "Client-ID": this.options.clientId ?? "", Authorization: `Bearer ${token}`, "content-type": "text/plain" }, body: query }); }
+    try { response = await this.fetchImpl(`${this.options.apiUrl ?? "https://api.igdb.com/v4"}/${path}`, { cache: freshness === "fresh" ? "no-store" : "default", method: "POST", headers: { "Client-ID": this.options.clientId ?? "", Authorization: `Bearer ${token}`, "content-type": "text/plain" }, body: query }); }
     catch { throw new SourceUnavailableError(); }
     if (response.status === 401) { this.token = null; const retry = await this.getToken(true); return this.callWithToken(path, query, retry); }
-    if (response.status === 429) throw new SourceRateLimitedError(Number(response.headers.get("retry-after")) || null);
+    if (response.status === 429) { const retryAfter = Number(response.headers.get("retry-after")); throw new SourceRateLimitedError(Number.isFinite(retryAfter) ? retryAfter : null); }
     if (!response.ok) throw new SourceUnavailableError();
     return response;
   }
   private async callWithToken(path: string, query: string, token: string): Promise<Response> {
     const response = await this.fetchImpl(`${this.options.apiUrl ?? "https://api.igdb.com/v4"}/${path}`, { method: "POST", headers: { "Client-ID": this.options.clientId ?? "", Authorization: `Bearer ${token}`, "content-type": "text/plain" }, body: query });
     if (response.status === 401) throw new SourceAuthenticationFailedError();
-    if (response.status === 429) throw new SourceRateLimitedError(Number(response.headers.get("retry-after")) || null);
+    if (response.status === 429) { const retryAfter = Number(response.headers.get("retry-after")); throw new SourceRateLimitedError(Number.isFinite(retryAfter) ? retryAfter : null); }
     if (!response.ok) throw new SourceUnavailableError();
     return response;
   }

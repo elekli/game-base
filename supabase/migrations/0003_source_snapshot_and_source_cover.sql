@@ -64,13 +64,25 @@ create table if not exists app_private.media_derivatives (
   unique (asset_id, kind)
 );
 
+create index if not exists external_game_categories_category_id_idx on app_private.external_game_categories (category_id);
+create index if not exists source_contributions_identity_id_idx on app_private.source_contributions (identity_id);
+create index if not exists media_ingests_game_id_idx on app_private.media_ingests (game_id);
+create index if not exists media_derivatives_asset_id_idx on app_private.media_derivatives (asset_id);
+
 alter table app_private.source_categories enable row level security;
+drop policy if exists runtime_source_categories on app_private.source_categories;
 alter table app_private.external_game_categories enable row level security;
+drop policy if exists runtime_external_game_categories on app_private.external_game_categories;
 alter table app_private.source_contributions enable row level security;
+drop policy if exists runtime_source_contributions on app_private.source_contributions;
 alter table app_private.external_player_profiles enable row level security;
+drop policy if exists runtime_external_player_profiles on app_private.external_player_profiles;
 alter table app_private.media_ingests enable row level security;
+drop policy if exists runtime_media_ingests on app_private.media_ingests;
 alter table app_private.media_assets enable row level security;
+drop policy if exists runtime_media_assets on app_private.media_assets;
 alter table app_private.media_derivatives enable row level security;
+drop policy if exists runtime_media_derivatives on app_private.media_derivatives;
 
 create policy runtime_source_categories on app_private.source_categories for all to app_runtime using (true) with check (true);
 create policy runtime_external_game_categories on app_private.external_game_categories for all to app_runtime using (true) with check (true);

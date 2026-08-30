@@ -31,7 +31,7 @@ export function parseBggSearchXml(xml: string): readonly NormalizedSearchCandida
 }
 
 export function parseBggThingXml(xml: string, sourceId: string): SourceSnapshot {
-  const title = tag(xml, "name");
+  const title = xml.match(/<name\b[^>]*\btype=["']primary["'][^>]*\bvalue=["']([^"']+)["'][^>]*\/?>(?:<\/name>)?/i)?.[1]?.trim() ?? tag(xml, "name");
   if (!title) throw new SourceResponseInvalidError();
   const ref = { provider: "bgg" as const, medium: "board_game" as const, sourceId };
   return validateSnapshot({
@@ -42,7 +42,7 @@ export function parseBggThingXml(xml: string, sourceId: string): SourceSnapshot 
     aliases: [],
     description: tag(xml, "description"),
     releaseYear: year(attr(xml, "yearpublished", "value")),
-    coverUrl: attr(xml, "image", "value"),
+    coverUrl: tag(xml, "image"),
     categories: [], contributors: [], minPlayers: Number(attr(xml, "minplayers", "value")) || null,
     maxPlayers: Number(attr(xml, "maxplayers", "value")) || null, supportsSolo: "unknown",
     playtimeMinutes: Number(attr(xml, "playingtime", "value")) || null, weight: null, strategyRank: null, supportedPlatforms: [],
@@ -57,19 +57,19 @@ export class BggCatalogAdapter implements SourceCatalogPort {
     const response = await this.request(`/search.xml?type=boardgame&query=${encodeURIComponent(input.query.trim())}`);
     return parseBggSearchXml(await response.text());
   }
-  async fetchSnapshot(ref: ExternalGameRef): Promise<SourceSnapshot> {
+  async fetchSnapshot(ref: ExternalGameRef, freshness: "cache_ok" | "fresh" = "cache_ok"): Promise<SourceSnapshot> {
     const normalized = assertReference(ref);
-    const response = await this.request(`/thing.xml?id=${normalized.sourceId}&stats=1`);
+    const response = await this.request(`/thing.xml?id=${normalized.sourceId}&stats=1`, freshness);
     return parseBggThingXml(await response.text(), normalized.sourceId);
   }
-  private async request(path: string): Promise<Response> {
+  private async request(path: string, freshness: "cache_ok" | "fresh" = "cache_ok"): Promise<Response> {
     if (!this.options.token) throw new SourceAuthenticationFailedError();
     let response: Response;
-    try { response = await this.fetchImpl(`${this.options.baseUrl ?? "https://boardgamegeek.com/xmlapi2"}${path}`, { headers: { Authorization: `Bearer ${this.options.token}` } }); }
+    try { response = await this.fetchImpl(`${this.options.baseUrl ?? "https://boardgamegeek.com/xmlapi2"}${path}`, { cache: freshness === "fresh" ? "no-store" : "default", headers: { Authorization: `Bearer ${this.options.token}` } }); }
     catch { throw new SourceUnavailableError(); }
     if (response.status === 401 || response.status === 403) throw new SourceAuthenticationFailedError();
     if (response.status === 404) throw new SourceNotFoundError();
-    if (response.status === 429) throw new SourceRateLimitedError(Number(response.headers.get("retry-after")) || null);
+    if (response.status === 429) { const retryAfter = Number(response.headers.get("retry-after")); throw new SourceRateLimitedError(Number.isFinite(retryAfter) ? retryAfter : null); }
     if (!response.ok) throw new SourceUnavailableError();
     return response;
   }
