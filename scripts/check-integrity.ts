@@ -11,6 +11,9 @@ const requiredPaths = [
   "src/shared/config/deployment-bindings.ts",
   "src/shared/config/runtime-config.ts",
   "src/shared/observability/structured-log.ts",
+  "scripts/preview-replay.ts",
+  ".github/workflows/preview-supabase-replay.yml",
+  "docs/deployment/preview-supabase-replay.md",
   "supabase/config.toml",
   "supabase/migrations/0001_runtime_security.sql",
   "supabase/tests/0001_runtime_security.pgtap.sql",
@@ -41,6 +44,7 @@ const requiredScripts = [
   "test:e2e",
   "integrity:check",
   "build",
+  "preview:replay",
   "supabase:reset",
   "test:pgtap",
   "db:schema:pull",
@@ -56,19 +60,33 @@ if (/drizzle-kit\s+(generate|migrate|push)/.test(allScripts)) {
 }
 
 const supabaseConfig = await readFile("supabase/config.toml", "utf8");
-for (const expected of [
+const supabaseConfigExpectations = [
   'schemas = ["graphql_public"]',
   "auto_expose_new_tables = false",
   "[auth]\nenabled = false",
   "[realtime]\nenabled = false",
   "[edge_runtime]\nenabled = false",
-]) {
+];
+for (const expected of supabaseConfigExpectations) {
   if (!supabaseConfig.includes(expected)) violations.push(`supabase-config:${expected}`);
 }
 
 const migration = await readFile("supabase/migrations/0001_runtime_security.sql", "utf8");
-for (const expected of ["app_runtime", "nobypassrls", "app_private", "game-media", "52428800"]) {
+const migrationExpectations = ["app_runtime", "nobypassrls", "app_private", "game-media", "52428800"];
+for (const expected of migrationExpectations) {
   if (!migration.includes(expected)) violations.push(`migration:${expected}`);
+}
+
+const previewReplay = await readFile("scripts/preview-replay.ts", "utf8");
+const previewReplayExpectations = [
+  "RESET_PREVIEW_ONLY",
+  '"--no-seed"',
+  '"migration", "list"',
+  '"test", "db"',
+  "db.${projectRef}.supabase.co",
+];
+for (const expected of previewReplayExpectations) {
+  if (!previewReplay.includes(expected)) violations.push(`preview-replay:${expected}`);
 }
 
 const { stdout: trackedFiles } = await run("git", ["ls-files"]);
@@ -85,5 +103,12 @@ if (violations.length > 0) {
   }));
   process.exitCode = 1;
 } else {
-  console.log(JSON.stringify({ event: "integrity_check_passed", checks: 34 }));
+  const checks =
+    requiredPaths.length +
+    requiredScripts.length +
+    supabaseConfigExpectations.length +
+    migrationExpectations.length +
+    previewReplayExpectations.length +
+    1;
+  console.log(JSON.stringify({ event: "integrity_check_passed", checks }));
 }
