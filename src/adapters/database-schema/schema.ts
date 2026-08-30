@@ -86,6 +86,8 @@ export const sourceContributionsInAppPrivate = appPrivate.table("source_contribu
 	entityKind: text("entity_kind").notNull(),
 	role: text().notNull(),
 }, (table) => [
+	uniqueIndex("source_contributions_identity_contributor_role_uidx").on(table.identityId, table.sourceContributorId, table.role),
+	index("source_contributions_identity_id_idx").on(table.identityId),
 	foreignKey({
 			columns: [table.identityId],
 			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
@@ -112,11 +114,12 @@ export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	gameId: uuid("game_id").notNull(),
 	sourceUrl: text("source_url").notNull(),
-	objectKey: text("object_key").notNull(),
+	objectKey: text("object_key").notNull().unique(),
 	originalState: text("original_state").notNull(),
 	thumbnailState: text("thumbnail_state").notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
+	index("media_ingests_game_id_idx").on(table.gameId),
 	foreignKey({
 			columns: [table.gameId],
 			foreignColumns: [gamesInAppPrivate.id],
@@ -127,9 +130,9 @@ export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {
 
 export const mediaAssetsInAppPrivate = appPrivate.table("media_assets", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
-	ingestId: uuid("ingest_id").notNull(),
+	ingestId: uuid("ingest_id").notNull().unique(),
 	kind: text().notNull(),
-	objectKey: text("object_key").notNull(),
+	objectKey: text("object_key").notNull().unique(),
 	mimeType: text("mime_type").notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	byteSize: bigint("byte_size", { mode: "number" }).notNull(),
@@ -147,10 +150,12 @@ export const mediaDerivativesInAppPrivate = appPrivate.table("media_derivatives"
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	assetId: uuid("asset_id").notNull(),
 	kind: text().notNull(),
-	objectKey: text("object_key").notNull(),
+	objectKey: text("object_key").notNull().unique(),
 	state: text().notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
+	uniqueIndex("media_derivatives_asset_kind_uidx").on(table.assetId, table.kind),
+	index("media_derivatives_asset_id_idx").on(table.assetId),
 	foreignKey({
 			columns: [table.assetId],
 			foreignColumns: [mediaAssetsInAppPrivate.id],

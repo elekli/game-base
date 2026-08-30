@@ -19,6 +19,12 @@ function attr(xml: string, tagName: string, attribute: string): string | null {
   return xml.match(new RegExp(`<${tagName}[^>]*\\b${attribute}=["']([^"']+)["']`, "i"))?.[1] ?? null;
 }
 function year(value: string | null): number | null { const n = value ? Number(value) : NaN; return Number.isInteger(n) && n >= 1800 && n <= 2200 ? n : null; }
+function nameValue(attributes: string): string | null { return attributes.match(/\bvalue=["']([^"']+)["']/i)?.[1]?.trim() ?? null; }
+function primaryName(xml: string): string | null {
+  const names = [...xml.matchAll(/<name\b([^>]*)>/gi)];
+  const primary = names.find((match) => /\btype=["']primary["']/i.test(match[1]));
+  return (primary ? nameValue(primary[1]) : null) ?? (names[0] ? nameValue(names[0][1]) : null);
+}
 
 export function parseBggSearchXml(xml: string): readonly NormalizedSearchCandidate[] {
   if (!/<items\b/i.test(xml)) throw new SourceResponseInvalidError();
@@ -31,7 +37,7 @@ export function parseBggSearchXml(xml: string): readonly NormalizedSearchCandida
 }
 
 export function parseBggThingXml(xml: string, sourceId: string): SourceSnapshot {
-  const title = xml.match(/<name\b[^>]*\btype=["']primary["'][^>]*\bvalue=["']([^"']+)["'][^>]*\/?>(?:<\/name>)?/i)?.[1]?.trim() ?? tag(xml, "name");
+  const title = primaryName(xml) ?? tag(xml, "name");
   if (!title) throw new SourceResponseInvalidError();
   const ref = { provider: "bgg" as const, medium: "board_game" as const, sourceId };
   return validateSnapshot({

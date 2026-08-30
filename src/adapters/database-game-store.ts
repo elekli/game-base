@@ -3,7 +3,7 @@ import { sql, type SQL } from "drizzle-orm";
 import type { GameStore } from "@/modules/games";
 import type { ExternalGameRef, GameRecord, Medium, SourceSnapshot } from "@/modules/games";
 import { SourceIdentityConflictError } from "@/modules/games";
-import { beginSourceCoverIngest } from "@/modules/media/internal/source-cover-ingest";
+import { beginSourceCoverIngest, isAllowedSourceCoverUrl } from "@/modules/media/internal/source-cover-ingest";
 
 type Executor = Readonly<{
   execute(query: SQL): Promise<unknown>;
@@ -27,14 +27,16 @@ export class PostgresGameStore implements GameStore {
   constructor(private readonly db: Executor) {}
 
   async list(query = ""): Promise<readonly GameRecord[]> {
-    const needle = `%${query.trim()}%`;
+    const escaped = query.trim().replace(/[\\%_]/g, "\\$&");
+    const needle = `%${escaped}%`;
     const rows = await this.db.execute(sql`
       select g.id, g.medium, g.display_name, g.external_game_identity_id, g.trashed_at, g.created_at,
              i.snapshot
       from app_private.games g
       left join app_private.external_game_identities i on i.id = g.external_game_identity_id
-      where g.trashed_at is null and g.display_name ilike ${needle}
+      where g.trashed_at is null and g.display_name ilike ${needle} escape '\\'
       order by g.display_name asc
+      limit 200
     `) as Row[];
     return rows.map(record);
   }
@@ -84,7 +86,7 @@ export class PostgresGameStore implements GameStore {
         returning id, medium, display_name, external_game_identity_id, trashed_at, created_at
       `) as Row[];
       const game = { ...record(gameRows[0]), snapshot };
-      if (snapshot.coverUrl) {
+      if (snapshot.coverUrl && isAllowedSourceCoverUrl(snapshot.coverUrl)) {
         const ingest = beginSourceCoverIngest(game.id, snapshot.coverUrl);
         await tx.execute(sql`
           insert into app_private.media_ingests (id, game_id, source_url, object_key, original_state, thumbnail_state)
