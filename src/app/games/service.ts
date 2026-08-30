@@ -1,5 +1,6 @@
 import "server-only";
-import { BggCatalogAdapter, IgdbCatalogAdapter, TestCatalogAdapter, sampleFixture } from "@/adapters/sources";
+import { BggCatalogAdapter, IgdbCatalogAdapter } from "@/adapters/sources";
+import { TestCatalogAdapter, sampleFixture } from "@/adapters/sources/test-catalog-adapter";
 import { createGamesService } from "@/modules/games";
 import { createDatabase } from "@/adapters/database";
 import { PostgresGameStore } from "@/adapters/database-game-store";

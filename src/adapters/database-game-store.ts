@@ -2,7 +2,7 @@ import "server-only";
 import { sql, type SQL } from "drizzle-orm";
 import type { GameStore } from "@/modules/games";
 import type { ExternalGameRef, GameRecord, Medium, SourceSnapshot } from "@/modules/games";
-import { SourceIdentityConflictError } from "@/modules/games";
+import { SourceIdentityConflictError, SourcePersistenceFailedError } from "@/modules/games";
 import { beginSourceCoverIngest, isAllowedSourceCoverUrl } from "@/modules/media/internal/source-cover-ingest";
 
 type Executor = Readonly<{
@@ -65,13 +65,16 @@ export class PostgresGameStore implements GameStore {
 
   async createFromSource(ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<{ game: GameRecord; created: boolean }> {
     const existing = await this.db.execute(sql`
-      select g.id, g.trashed_at
+      select i.id as identity_id, g.id, g.trashed_at
       from app_private.external_game_identities i
-      join app_private.games g on g.external_game_identity_id = i.id
+      left join app_private.games g on g.external_game_identity_id = i.id
       where i.provider = ${ref.provider} and i.source_id = ${ref.sourceId}
       limit 1
     `) as Row[];
-    if (existing[0]) throw new SourceIdentityConflictError(String(existing[0].id), Boolean(existing[0].trashed_at));
+    if (existing[0]) {
+      if (!existing[0].id) throw new SourcePersistenceFailedError();
+      throw new SourceIdentityConflictError(String(existing[0].id), Boolean(existing[0].trashed_at));
+    }
 
     const run = async (tx: Executor) => {
       const identityRows = await tx.execute(sql`
@@ -101,11 +104,14 @@ export class PostgresGameStore implements GameStore {
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "23505") {
         const conflict = await this.db.execute(sql`
-          select g.id, g.trashed_at from app_private.external_game_identities i
-          join app_private.games g on g.external_game_identity_id = i.id
+          select i.id as identity_id, g.id, g.trashed_at from app_private.external_game_identities i
+          left join app_private.games g on g.external_game_identity_id = i.id
           where i.provider = ${ref.provider} and i.source_id = ${ref.sourceId} limit 1
         `) as Row[];
-        if (conflict[0]) throw new SourceIdentityConflictError(String(conflict[0].id), Boolean(conflict[0].trashed_at));
+        if (conflict[0]) {
+          if (!conflict[0].id) throw new SourcePersistenceFailedError();
+          throw new SourceIdentityConflictError(String(conflict[0].id), Boolean(conflict[0].trashed_at));
+        }
       }
       throw error;
     }
