@@ -1,0 +1,59 @@
+{
+  "name": "puizeru-gamebase",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run --exclude 'tests/integration/**'",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "playwright test",
+    "integrity:check": "tsx scripts/check-integrity.ts",
+    "environment:check": "tsx scripts/check-environment.ts",
+    "db:schema:pull": "drizzle-kit pull && tsx scripts/normalize-drizzle-schema.ts",
+    "db:schema:check": "tsx scripts/check-drizzle-schema-drift.ts",
+    "supabase:start": "supabase start",
+    "supabase:reset": "supabase db reset",
+    "test:pgtap": "supabase test db"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.4",
+    "drizzle-orm": "^0.45.2",
+    "jose": "^6.2.10",
+    "next": "^16.3.3",
+    "postgres": "^3.4.9",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "server-only": "^0.0.1",
+    "zod": "^4.5.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitest/coverage-v8": "^4.1.11",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.3",
+    "supabase": "^2.116.0",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.12",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild@<=0.24.2": "0.25.12"
+    }
+  }
+}

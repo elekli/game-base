@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Load preview fixture
+        run: pnpm exec tsx scripts/export-preview-environment.ts >> "$GITHUB_ENV"
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:integration
+      - run: pnpm environment:check
+      - run: pnpm integrity:check
+      - run: pnpm audit --audit-level high
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - run: pnpm supabase:start
+      - run: pnpm supabase:reset
+      - run: pnpm test:pgtap
+      - name: Verify derived Drizzle schema
+        env:
+          DIRECT_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          pnpm db:schema:pull
+          pnpm db:schema:check
+      - if: always()
+        run: pnpm exec supabase stop --no-backup

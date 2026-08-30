@@ -1,0 +1,1 @@
+-- Batch 0 intentionally has no product data. Later migrations own deterministic fixtures.
