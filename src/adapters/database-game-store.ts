@@ -191,6 +191,7 @@ export class PostgresGameStore implements GameStore {
       await tx.execute(sql`delete from app_private.external_supported_platforms where identity_id = ${identityId}`);
       await this.writeSourceRows(tx, identityId, snapshot);
       await this.writeSourceNames(tx, gameId, snapshot);
+      await tx.execute(sql`update app_private.games set display_name = coalesce((select name from app_private.game_names where game_id = ${gameId} and name_kind = 'custom'), ${snapshot.title}) where id = ${gameId}`);
       if (snapshot.coverUrl && isAllowedSourceCoverUrl(snapshot.coverUrl)) {
         const ingest = beginSourceCoverIngest(gameId, snapshot.coverUrl);
         await tx.execute(sql`insert into app_private.media_ingests (id, game_id, source_url, object_key, original_state, thumbnail_state) values (${ingest.id}, ${gameId}, ${ingest.sourceUrl}, ${ingest.objectKey}, ${ingest.originalState}, ${ingest.thumbnailState}) on conflict (object_key) do nothing`);
@@ -238,7 +239,7 @@ export class PostgresGameStore implements GameStore {
   }
 
   async addManualContribution(input: ManualContributionInput) {
-    const duplicateRows = await this.db.execute(sql`select 1 from app_private.contributors where source_provider is null and lower(name) = lower(${input.name.trim()}) limit 1`) as Row[];
+    const duplicateRows = await this.db.execute(sql`select 1 from app_private.contributors where lower(name) = lower(${input.name.trim()}) limit 1`) as Row[];
     const run = async (tx: Executor) => {
       const contributorRows = await tx.execute(sql`insert into app_private.contributors (name, entity_kind) values (${input.name.trim()}, ${input.entityKind}) returning id`) as Row[];
       await tx.execute(sql`insert into app_private.manual_contributions (game_id, contributor_id, role) values (${input.gameId}, ${String(contributorRows[0].id)}, ${input.role})`);

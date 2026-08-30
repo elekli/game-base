@@ -40,7 +40,7 @@ export function GameEditClient({ game }: Props) {
       setMessage("儲存中……");
       const result = await post<{ possibleDuplicate?: boolean }>("/api/private/games/contributions", { gameId: game.id, name: form.get("name"), entityKind: form.get("entityKind"), role: form.get("role") });
       if (result.possibleDuplicate) {
-        setMessage("已新增；名稱可能與既有貢獻者重複，未自動合併。頁面即將更新。 ");
+        setMessage("已新增；名稱可能與既有貢獻者重複，未自動合併。頁面即將更新。");
         window.setTimeout(() => window.location.reload(), 1200);
       } else {
         window.location.reload();
