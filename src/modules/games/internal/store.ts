@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { SourceIdentityConflictError } from "./errors";
+import { SourceIdentityConflictError, SourcePersistenceFailedError } from "./errors";
 import type { ExternalGameRef, GameRecord, SourceSnapshot } from "./types";
 
 export type GameStore = {
@@ -59,4 +59,13 @@ export class InMemoryGameStore implements GameStore {
     if (!game) return;
     this.games.set(id, { ...game, trashedAt: new Date().toISOString() });
   }
+}
+
+export class UnavailableGameStore implements GameStore {
+  private fail(): never { throw new SourcePersistenceFailedError(); }
+  async list(): Promise<readonly GameRecord[]> { return this.fail(); }
+  async get(): Promise<GameRecord | null> { return this.fail(); }
+  async createManual(): Promise<GameRecord> { return this.fail(); }
+  async createFromSource(): Promise<{ game: GameRecord; created: boolean }> { return this.fail(); }
+  async trash(): Promise<void> { this.fail(); }
 }
