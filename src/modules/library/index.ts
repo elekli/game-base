@@ -14,7 +14,14 @@ export type LibraryService = Readonly<{
 export function createLibraryService(store: GameStore): LibraryService {
   return {
     async listGames(filters = {}) {
-      const compatibleFilters = { ...filters, sourceCategories: clearIncompatibleSourceCategories(filters.media ?? [], filters.sourceCategories) };
+      const isBoardOnly = filters.media?.length === 1 && filters.media[0] === "board_game";
+      const compatibleFilters = {
+        ...filters,
+        sourceCategories: clearIncompatibleSourceCategories(filters.media ?? [], filters.sourceCategories),
+        weightMin: isBoardOnly ? filters.weightMin : undefined,
+        weightMax: isBoardOnly ? filters.weightMax : undefined,
+        sort: isBoardOnly || filters.sort === "name" || filters.sort === "recent" ? filters.sort : "name",
+      };
       return filterAndSortGames(await store.list(compatibleFilters.query), compatibleFilters);
     },
     editGame(gameId, input) { return store.edit(gameId, input); },

@@ -1,5 +1,5 @@
 begin;
-select plan(10);
+select plan(12);
 select has_table('app_private', 'platforms', '平台表存在');
 select has_table('app_private', 'game_platforms', '遊戲平台關聯表存在');
 select has_table('app_private', 'tags', '標籤表存在');
@@ -8,6 +8,8 @@ select has_table('app_private', 'contributors', '貢獻者表存在');
 select has_table('app_private', 'manual_contributions', '手動貢獻表存在');
 select has_table('app_private', 'external_supported_platforms', '來源支援平台表存在');
 select has_column('app_private', 'games', 'player_count_note', '遊戲有人數說明欄位');
+select col_not_null('app_private', 'source_contributions', 'contributor_id', '來源貢獻者關係不可為空');
+select ok(exists(select 1 from pg_constraint where conname = 'manual_contributions_role_check'), '手動貢獻使用固定角色分類');
 
 grant app_runtime to postgres;
 grant usage on schema extensions to app_runtime;

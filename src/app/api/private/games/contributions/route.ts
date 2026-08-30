@@ -3,7 +3,7 @@ import { libraryService } from "@/app/games/service";
 import { handlePrivateRequest, PrivateRequestInputError } from "@/shared/auth/private-request";
 import { getPrivateDependencies } from "../_private";
 
-const createSchema = z.object({ gameId: z.uuid(), name: z.string().trim().min(1).max(200), entityKind: z.enum(["person", "company"]), role: z.enum(["design", "developer", "art", "publisher"]) });
+const createSchema = z.object({ gameId: z.uuid(), name: z.string().trim().min(1).max(200), entityKind: z.enum(["person", "company"]), role: z.enum(["design", "art", "publisher"]) });
 const removeSchema = z.object({ gameId: z.uuid(), contributionId: z.uuid() });
 
 export async function POST(request: Request) {

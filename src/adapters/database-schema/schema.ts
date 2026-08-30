@@ -46,6 +46,11 @@ export const gamesInAppPrivate = appPrivate.table("games", {
 			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
 			name: "games_external_game_identity_id_fkey"
 		}),
+	foreignKey({
+			columns: [table.medium, table.externalGameIdentityId],
+			foreignColumns: [externalGameIdentitiesInAppPrivate.id, externalGameIdentitiesInAppPrivate.medium],
+			name: "games_external_identity_medium_fk"
+		}),
 	pgPolicy("runtime_games", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
@@ -144,6 +149,26 @@ export const mediaDerivativesInAppPrivate = appPrivate.table("media_derivatives"
 	pgPolicy("runtime_media_derivatives", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
+export const manualContributionsInAppPrivate = appPrivate.table("manual_contributions", {
+	id: uuid().defaultRandom().notNull(),
+	gameId: uuid("game_id").notNull(),
+	contributorId: uuid("contributor_id").notNull(),
+	role: text().notNull(),
+}, (table) => [
+	index("manual_contributions_contributor_id_idx").using("btree", table.contributorId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.gameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "manual_contributions_game_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.contributorId],
+			foreignColumns: [contributorsInAppPrivate.id],
+			name: "manual_contributions_contributor_id_fkey"
+		}).onDelete("restrict"),
+	pgPolicy("runtime_manual_contributions", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
 export const sourceContributionsInAppPrivate = appPrivate.table("source_contributions", {
 	id: uuid().defaultRandom().notNull(),
 	identityId: uuid("identity_id").notNull(),
@@ -151,7 +176,7 @@ export const sourceContributionsInAppPrivate = appPrivate.table("source_contribu
 	name: text().notNull(),
 	entityKind: text("entity_kind").notNull(),
 	role: text().notNull(),
-	contributorId: uuid("contributor_id"),
+	contributorId: uuid("contributor_id").notNull(),
 }, (table) => [
 	index("source_contributions_identity_id_idx").using("btree", table.identityId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
@@ -229,26 +254,6 @@ export const contributorsInAppPrivate = appPrivate.table("contributors", {
 }, (table) => [
 	uniqueIndex("contributors_source_identity_unique").using("btree", table.sourceProvider.asc().nullsLast().op("text_ops"), table.sourceContributorId.asc().nullsLast().op("text_ops")).where(sql`(source_provider IS NOT NULL)`),
 	pgPolicy("runtime_contributors", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
-]);
-
-export const manualContributionsInAppPrivate = appPrivate.table("manual_contributions", {
-	id: uuid().defaultRandom().notNull(),
-	gameId: uuid("game_id").notNull(),
-	contributorId: uuid("contributor_id").notNull(),
-	role: text().notNull(),
-}, (table) => [
-	index("manual_contributions_contributor_id_idx").using("btree", table.contributorId.asc().nullsLast().op("uuid_ops")),
-	foreignKey({
-			columns: [table.gameId],
-			foreignColumns: [gamesInAppPrivate.id],
-			name: "manual_contributions_game_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
-			columns: [table.contributorId],
-			foreignColumns: [contributorsInAppPrivate.id],
-			name: "manual_contributions_contributor_id_fkey"
-		}).onDelete("restrict"),
-	pgPolicy("runtime_manual_contributions", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
 export const externalSupportedPlatformsInAppPrivate = appPrivate.table("external_supported_platforms", {

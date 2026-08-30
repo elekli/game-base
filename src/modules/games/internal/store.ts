@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { SourceIdentityConflictError, SourcePersistenceFailedError } from "./errors";
+import { SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError } from "./errors";
 import type { ExternalGameRef, GameContribution, GameRecord, Medium, SourceSnapshot } from "./types";
 
 export type GameEditInput = Readonly<{
@@ -13,7 +13,7 @@ export type ManualContributionInput = Readonly<{
   gameId: string;
   name: string;
   entityKind: "person" | "company";
-  role: GameContribution["role"];
+  role: Extract<GameContribution["role"], "design" | "art" | "publisher">;
 }>;
 
 export type ManualContributionResult = Readonly<{ game: GameRecord; possibleDuplicate: boolean }>;
@@ -52,7 +52,7 @@ function uniqueNames(values: readonly string[]): readonly string[] {
 
 function sourceContributions(snapshot: SourceSnapshot): readonly GameContribution[] {
   return snapshot.contributors.map((contributor) => ({
-    id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}:${contributor.role}`,
+    id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}`,
     name: contributor.name,
     entityKind: contributor.entityKind,
     role: contributor.role,
@@ -97,7 +97,7 @@ export class InMemoryGameStore implements GameStore {
   async createManual(displayName: string, medium: Medium): Promise<GameRecord> {
     const title = displayName.trim();
     if (!title) throw new Error("手動遊戲名稱不可為空。");
-    const game: GameRecord = { id: randomUUID(), medium, displayName: title, customDisplayName: title, sourceNames: [], aliases: [], actualPlatforms: [], tags: [], contributors: [], playerCountNote: null, trashedAt: null, externalIdentityId: null, snapshot: null, createdAt: new Date().toISOString() };
+    const game: GameRecord = { id: randomUUID(), medium, displayName: title, customDisplayName: title, sourceNames: [], aliases: [], actualPlatforms: [], tags: [], contributors: [], playerCountNote: null, coverIngestState: null, trashedAt: null, externalIdentityId: null, snapshot: null, createdAt: new Date().toISOString() };
     this.games.set(game.id, game);
     return game;
   }
@@ -115,7 +115,7 @@ export class InMemoryGameStore implements GameStore {
         const existing = this.games.get(existingId);
         if (existing) throw new SourceIdentityConflictError(existing.id, existing.trashedAt !== null);
       }
-      const game: GameRecord = { id: randomUUID(), medium: ref.medium, displayName: snapshot.title, customDisplayName: null, sourceNames: sourceNames(snapshot), aliases: snapshot.aliases, actualPlatforms: [], tags: [], contributors: sourceContributions(snapshot), playerCountNote: null, trashedAt: null, externalIdentityId: randomUUID(), snapshot, createdAt: new Date().toISOString() };
+      const game: GameRecord = { id: randomUUID(), medium: ref.medium, displayName: snapshot.title, customDisplayName: null, sourceNames: sourceNames(snapshot), aliases: snapshot.aliases, actualPlatforms: [], tags: [], contributors: sourceContributions(snapshot), playerCountNote: null, coverIngestState: null, trashedAt: null, externalIdentityId: randomUUID(), snapshot, createdAt: new Date().toISOString() };
       this.games.set(game.id, game);
       this.identities.set(key, game.id);
       return { game, created: true };
@@ -129,7 +129,7 @@ export class InMemoryGameStore implements GameStore {
     const game = this.games.get(gameId);
     if (!game) throw new Error("找不到遊戲條目。");
     if (game.externalIdentityId) throw new Error("遊戲已連結來源。");
-    if (game.medium !== ref.medium) throw new Error("來源遊戲類型與條目不相容。");
+    if (game.medium !== ref.medium) throw new SourceMediumMismatchError();
     const existingId = this.identities.get(`${ref.provider}:${ref.sourceId}`);
     if (existingId) {
       const existing = this.games.get(existingId);

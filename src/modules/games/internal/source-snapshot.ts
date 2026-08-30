@@ -2,7 +2,10 @@ import { SourceResponseInvalidError } from "./errors";
 import type { ExternalGameRef, SourceSnapshot } from "./types";
 
 const HTTPS = /^https:\/\//i;
-const SOURCE_CATEGORY_KINDS = new Set(["category", "mechanic", "genre", "theme", "game_mode", "player_perspective"]);
+const SOURCE_CATEGORY_KINDS: Readonly<Record<ExternalGameRef["provider"], ReadonlySet<string>>> = {
+  bgg: new Set(["category", "mechanic"]),
+  igdb: new Set(["genre", "theme", "game_mode", "player_perspective"]),
+};
 
 export function normalizeSourceId(value: string): string {
   const trimmed = value.trim();
@@ -32,5 +35,5 @@ export function validateSnapshot(snapshot: SourceSnapshot): SourceSnapshot {
   if (snapshot.strategyRank !== null && (!Number.isInteger(snapshot.strategyRank) || snapshot.strategyRank < 1)) throw new SourceResponseInvalidError();
   if (snapshot.ref.provider === "bgg" && snapshot.ref.medium !== "board_game") throw new SourceResponseInvalidError();
   if (snapshot.ref.provider === "igdb" && snapshot.ref.medium !== "video_game") throw new SourceResponseInvalidError();
-  return { ...snapshot, categories: snapshot.categories.filter((category) => SOURCE_CATEGORY_KINDS.has(category.kind)) };
+  return { ...snapshot, categories: snapshot.categories.filter((category) => SOURCE_CATEGORY_KINDS[snapshot.ref.provider].has(category.kind)) };
 }

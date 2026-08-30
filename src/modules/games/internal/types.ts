@@ -77,6 +77,7 @@ export type GameRecord = Readonly<{
   tags: readonly string[];
   contributors: readonly GameContribution[];
   playerCountNote: string | null;
+  coverIngestState: "pending" | "ready" | "failed" | null;
   trashedAt: string | null;
   externalIdentityId: string | null;
   snapshot: SourceSnapshot | null;

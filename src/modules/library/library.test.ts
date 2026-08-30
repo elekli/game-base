@@ -17,6 +17,7 @@ function game(overrides: Partial<GameRecord> = {}): GameRecord {
     tags: [],
     contributors: [],
     playerCountNote: null,
+    coverIngestState: null,
     trashedAt: null,
     externalIdentityId: null,
     snapshot: null,
