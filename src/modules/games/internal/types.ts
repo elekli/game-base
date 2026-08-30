@@ -51,6 +51,16 @@ export type SourceSnapshot = Readonly<{
   supportedPlatforms: readonly string[];
 }>;
 
+export type GameContribution = Readonly<{
+  id: string;
+  name: string;
+  entityKind: "person" | "company";
+  role: "design" | "art" | "publisher" | "developer";
+  origin: "source" | "manual";
+  provider: Provider | null;
+  sourceContributorId: string | null;
+}>;
+
 export type SourceCatalogPort = Readonly<{
   search(input: SourceSearchQuery): Promise<readonly NormalizedSearchCandidate[]>;
   fetchSnapshot(ref: ExternalGameRef, freshness: "cache_ok" | "fresh"): Promise<SourceSnapshot>;
@@ -60,6 +70,13 @@ export type GameRecord = Readonly<{
   id: string;
   medium: Medium;
   displayName: string;
+  customDisplayName: string | null;
+  sourceNames: readonly string[];
+  aliases: readonly string[];
+  actualPlatforms: readonly string[];
+  tags: readonly string[];
+  contributors: readonly GameContribution[];
+  playerCountNote: string | null;
   trashedAt: string | null;
   externalIdentityId: string | null;
   snapshot: SourceSnapshot | null;

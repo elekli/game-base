@@ -1,7 +1,8 @@
 import "server-only";
 import { BggCatalogAdapter, IgdbCatalogAdapter } from "@/adapters/sources";
 import { TestCatalogAdapter, sampleFixture } from "@/adapters/sources/test-catalog-adapter";
-import { createGamesService, UnavailableGameStore } from "@/modules/games";
+import { createGamesService, InMemoryGameStore, UnavailableGameStore } from "@/modules/games";
+import { createLibraryService } from "@/modules/library";
 import { createDatabase } from "@/adapters/database";
 import { PostgresGameStore } from "@/adapters/database-game-store";
 
@@ -12,9 +13,11 @@ const fixtureIgdb = new TestCatalogAdapter("igdb", [igdbFixture]);
 
 const database = process.env.DATABASE_URL?.startsWith("postgres") ? createDatabase(process.env.DATABASE_URL) : null;
 const allowFixtures = process.env.VERCEL_ENV === "development" || process.env.ALLOW_SOURCE_FIXTURES === "true";
-const store = database ? new PostgresGameStore(database.db) : allowFixtures ? undefined : new UnavailableGameStore();
+const store = database ? new PostgresGameStore(database.db) : allowFixtures ? new InMemoryGameStore() : new UnavailableGameStore();
 
 export const gamesService = createGamesService({
   bgg: process.env.BGG_TOKEN ? new BggCatalogAdapter({ token: process.env.BGG_TOKEN }) : allowFixtures ? fixtureBgg : new BggCatalogAdapter(),
   igdb: process.env.IGDB_CLIENT_ID && process.env.IGDB_CLIENT_SECRET ? new IgdbCatalogAdapter({ clientId: process.env.IGDB_CLIENT_ID, clientSecret: process.env.IGDB_CLIENT_SECRET }) : allowFixtures ? fixtureIgdb : new IgdbCatalogAdapter(),
 }, store);
+
+export const libraryService = createLibraryService(store);

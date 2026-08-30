@@ -10,6 +10,7 @@ export type SourceErrorCode =
   | "source_response_invalid"
   | "source_content_changed"
   | "source_identity_conflict"
+  | "source_not_linked"
   | "source_persistence_failed";
 
 export class SourceOperationError extends NamedError {
@@ -49,6 +50,9 @@ export class SourceContentChangedError extends SourceOperationError {
 }
 export class SourceIdentityConflictError extends SourceOperationError {
   constructor(public readonly gameId: string, public readonly trashed: boolean) { super("source_identity_conflict", trashed ? "此來源已存在於資源回收區，請先還原。" : "此來源已存在於收藏庫。", null); this.name = "SourceIdentityConflictError"; }
+}
+export class SourceNotLinkedError extends SourceOperationError {
+  constructor() { super("source_not_linked", "此遊戲尚未連結外部來源。", null); this.name = "SourceNotLinkedError"; }
 }
 export class SourcePersistenceFailedError extends SourceOperationError {
   constructor() { super("source_persistence_failed", "來源資料無法儲存，請稍後再試。", null); this.name = "SourcePersistenceFailedError"; }

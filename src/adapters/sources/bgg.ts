@@ -27,6 +27,22 @@ function primaryName(xml: string): string | null {
   return (primary ? nameValue(primary[1]) : null) ?? (names[0] ? nameValue(names[0][1]) : null);
 }
 
+function links(xml: string, types: readonly string[]) {
+  const allowed = new Set(types);
+  return [...xml.matchAll(/<link\b([^>]*)\/?>(?:<\/link>)?/gi)].flatMap((match) => {
+    const type = match[1].match(/\btype=["']([^"']+)["']/i)?.[1];
+    const id = match[1].match(/\bid=["']([^"']+)["']/i)?.[1];
+    const name = match[1].match(/\bvalue=["']([^"']+)["']/i)?.[1]?.trim();
+    return type && id && name && allowed.has(type) ? [{ type, id, name }] : [];
+  });
+}
+
+function numberAttribute(xml: string, element: string, attribute: string): number | null {
+  const value = attr(xml, element, attribute);
+  const parsed = value ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export function parseBggSearchXml(xml: string): readonly NormalizedSearchCandidate[] {
   if (!/<items\b/i.test(xml)) throw new SourceResponseInvalidError();
   return [...xml.matchAll(/<item\b[^>]*id=["'](\d+)["'][^>]*>([\s\S]*?)<\/item>/gi)].map((match) => ({
@@ -43,18 +59,27 @@ export function parseBggThingXml(xml: string, sourceId: string): SourceSnapshot 
   const ref = { provider: "bgg" as const, medium: "board_game" as const, sourceId };
   const minPlayers = positive(attr(xml, "minplayers", "value"));
   const maxPlayers = positive(attr(xml, "maxplayers", "value"));
+  const categoryLinks = links(xml, ["boardgamecategory", "boardgamemechanic"]);
+  const contributorLinks = links(xml, ["boardgamedesigner", "boardgameartist", "boardgamepublisher"]);
+  const rank = xml.match(/<rank\b[^>]*type=["']strategygames["'][^>]*rank=["'](\d+)["']/i)?.[1];
+  const names = [...xml.matchAll(/<name\b([^>]*)\/?>(?:<\/name>)?/gi)].flatMap((match) => {
+    const type = match[1].match(/\btype=["']([^"']+)["']/i)?.[1];
+    return type === "alternate" ? [nameValue(match[1]) ?? ""] : [];
+  }).filter(Boolean);
   return validateSnapshot({
     ref,
     canonicalUrl: `https://boardgamegeek.com/boardgame/${sourceId}`,
     title,
     localizedTitle: null,
-    aliases: [],
+    aliases: names,
     description: tag(xml, "description"),
     releaseYear: year(attr(xml, "yearpublished", "value")),
     coverUrl: tag(xml, "image"),
-    categories: [], contributors: [], minPlayers: minPlayers ?? maxPlayers,
+    categories: categoryLinks.map((item) => ({ kind: item.type === "boardgamecategory" ? "category" : "mechanic", sourceCategoryId: item.id, name: item.name })),
+    contributors: contributorLinks.map((item) => ({ sourceContributorId: item.id, name: item.name, entityKind: item.type === "boardgamepublisher" ? "company" as const : "person" as const, role: item.type === "boardgamedesigner" ? "design" as const : item.type === "boardgameartist" ? "art" as const : "publisher" as const })),
+    minPlayers: minPlayers ?? maxPlayers,
     maxPlayers: maxPlayers ?? minPlayers, supportsSolo: "unknown",
-    playtimeMinutes: Number(attr(xml, "playingtime", "value")) || null, weight: null, strategyRank: null, supportedPlatforms: [],
+    playtimeMinutes: numberAttribute(xml, "playingtime", "value"), weight: numberAttribute(xml, "averageweight", "value"), strategyRank: rank ? Number(rank) : null, supportedPlatforms: [],
   });
 }
 

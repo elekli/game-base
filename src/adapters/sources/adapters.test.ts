@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseBggSearchXml, parseBggThingXml } from "./bgg";
-import { parseIgdbGamesJson } from "./igdb";
+import { parseIgdbGamesJson, parseIgdbSnapshot } from "./igdb";
 import { SourceResponseInvalidError } from "@/modules/games/internal/errors";
 
 describe("source adapter contracts", () => {
@@ -24,5 +24,18 @@ describe("source adapter contracts", () => {
   });
   it("拒絕 malformed IGDB payload", () => {
     expect(() => parseIgdbGamesJson([{ id: "7", name: "bad" }])).toThrow(SourceResponseInvalidError);
+  });
+  it("BGG 只匯入白名單分類、貢獻者與指標", () => {
+    const snapshot = parseBggThingXml('<item><name value="合作遊戲" type="primary"/><name value="Co-op" type="alternate"/><link type="boardgamecategory" id="1" value="冒險"/><link type="boardgamemechanic" id="2" value="合作"/><link type="unknown" id="3" value="不應匯入"/><link type="boardgamedesigner" id="4" value="設計者"/><link type="boardgamepublisher" id="5" value="出版社"/><averageweight value="3.45"/><rank type="strategygames" rank="88"/></item>', "9");
+    expect(snapshot.categories).toEqual([{ kind: "category", sourceCategoryId: "1", name: "冒險" }, { kind: "mechanic", sourceCategoryId: "2", name: "合作" }]);
+    expect(snapshot.contributors.map((item) => [item.name, item.role])).toEqual([["設計者", "design"], ["出版社", "publisher"]]);
+    expect(snapshot.weight).toBe(3.45);
+    expect(snapshot.strategyRank).toBe(88);
+    expect(snapshot.aliases).toEqual(["Co-op"]);
+  });
+  it("IGDB 匯入固定分類與開發／發行公司，不匯入關鍵字", () => {
+    const snapshot = parseIgdbSnapshot({ id: 7, name: "Barrage", genres: [{ id: 1, name: "策略" }], themes: [{ id: 2, name: "奇幻" }], game_modes: [{ id: 3, name: "單人" }], player_perspectives: [{ id: 4, name: "第三人稱" }], keywords: [{ id: 5, name: "keyword" }], involved_companies: [{ company: { id: 9, name: "開發公司" }, developer: true }, { company: { id: 10, name: "發行公司" }, publisher: true }] }, "7");
+    expect(snapshot.categories.map((item) => item.kind)).toEqual(["genre", "theme", "game_mode", "player_perspective"]);
+    expect(snapshot.contributors.map((item) => [item.name, item.role])).toEqual([["開發公司", "developer"], ["發行公司", "publisher"]]);
   });
 });

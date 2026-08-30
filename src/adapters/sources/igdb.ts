@@ -10,7 +10,8 @@ import { assertReference, validateSnapshot } from "@/modules/games/internal/sour
 import type { ExternalGameRef, NormalizedSearchCandidate, SourceCatalogPort, SourceSearchQuery, SourceSnapshot } from "@/modules/games/internal/types";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-type IgdbGame = Readonly<{ id: number; name: string; first_release_date?: number; cover?: { url?: string }; summary?: string; platforms?: readonly { name?: string }[]; genres?: readonly { id?: number; name?: string }[]; themes?: readonly { id?: number; name?: string }[] }>;
+type IgdbCompany = Readonly<{ id?: number; name?: string }>;
+type IgdbGame = Readonly<{ id: number; name: string; first_release_date?: number; cover?: { url?: string }; summary?: string; platforms?: readonly { name?: string }[]; genres?: readonly { id?: number; name?: string }[]; themes?: readonly { id?: number; name?: string }[]; game_modes?: readonly { id?: number; name?: string }[]; player_perspectives?: readonly { id?: number; name?: string }[]; involved_companies?: readonly { company?: IgdbCompany; developer?: boolean; publisher?: boolean }[] }>;
 
 export function parseIgdbGamesJson(payload: unknown): readonly NormalizedSearchCandidate[] {
   if (!Array.isArray(payload)) throw new SourceResponseInvalidError();
@@ -29,8 +30,11 @@ export function parseIgdbSnapshot(raw: unknown, sourceId: string): SourceSnapsho
   const categories = [
     ...(game.genres ?? []).filter((item) => typeof item.id === "number" && typeof item.name === "string").map((item) => ({ kind: "genre", sourceCategoryId: String(item.id), name: item.name as string })),
     ...(game.themes ?? []).filter((item) => typeof item.id === "number" && typeof item.name === "string").map((item) => ({ kind: "theme", sourceCategoryId: String(item.id), name: item.name as string })),
+    ...(game.game_modes ?? []).filter((item) => typeof item.id === "number" && typeof item.name === "string").map((item) => ({ kind: "game_mode", sourceCategoryId: String(item.id), name: item.name as string })),
+    ...(game.player_perspectives ?? []).filter((item) => typeof item.id === "number" && typeof item.name === "string").map((item) => ({ kind: "player_perspective", sourceCategoryId: String(item.id), name: item.name as string })),
   ];
-  return validateSnapshot({ ref: { provider: "igdb", medium: "video_game", sourceId }, canonicalUrl: `https://www.igdb.com/games/${sourceId}`, title: candidate.title, localizedTitle: null, aliases: [], description: game.summary ?? null, releaseYear: candidate.releaseYear, coverUrl: candidate.coverPreviewUrl, categories, contributors: [], minPlayers: null, maxPlayers: null, supportsSolo: "unknown", playtimeMinutes: null, weight: null, strategyRank: null, supportedPlatforms: (game.platforms ?? []).map((item) => item.name).filter((name): name is string => Boolean(name)) });
+  const contributors = (game.involved_companies ?? []).flatMap((item) => item.company?.id !== undefined && item.company.name && (item.developer || item.publisher) ? [{ sourceContributorId: String(item.company.id), name: item.company.name, entityKind: "company" as const, role: item.developer ? "developer" as const : "publisher" as const }] : []);
+  return validateSnapshot({ ref: { provider: "igdb", medium: "video_game", sourceId }, canonicalUrl: `https://www.igdb.com/games/${sourceId}`, title: candidate.title, localizedTitle: null, aliases: [], description: game.summary ?? null, releaseYear: candidate.releaseYear, coverUrl: candidate.coverPreviewUrl, categories, contributors, minPlayers: null, maxPlayers: null, supportsSolo: "unknown", playtimeMinutes: null, weight: null, strategyRank: null, supportedPlatforms: (game.platforms ?? []).map((item) => item.name).filter((name): name is string => Boolean(name)) });
 }
 
 export class IgdbCatalogAdapter implements SourceCatalogPort {
@@ -46,7 +50,7 @@ export class IgdbCatalogAdapter implements SourceCatalogPort {
   }
   async fetchSnapshot(ref: ExternalGameRef, freshness: "cache_ok" | "fresh" = "cache_ok"): Promise<SourceSnapshot> {
     const normalized = assertReference(ref);
-    const response = await this.call("games", `fields id,name,first_release_date,cover.url,summary,platforms.name,genres.id,genres.name,themes.id,themes.name; where id = ${normalized.sourceId}; limit 1;`, freshness);
+    const response = await this.call("games", `fields id,name,first_release_date,cover.url,summary,platforms.name,genres.id,genres.name,themes.id,themes.name,game_modes.id,game_modes.name,player_perspectives.id,player_perspectives.name,involved_companies.company.id,involved_companies.company.name,involved_companies.developer,involved_companies.publisher; where id = ${normalized.sourceId}; limit 1;`, freshness);
     const payload = await response.json();
     if (!Array.isArray(payload) || payload.length === 0) throw new SourceNotFoundError();
     return parseIgdbSnapshot(payload[0], normalized.sourceId);
