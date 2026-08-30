@@ -230,7 +230,7 @@ export class PostgresGameStore implements GameStore {
       }
       if (input.playerCountNote !== undefined) await tx.execute(sql`update app_private.games set player_count_note = ${input.playerCountNote?.trim() || null} where id = ${gameId}`);
       if (input.displayName !== undefined && input.displayName !== null && input.displayName.trim()) await tx.execute(sql`update app_private.games set display_name = ${input.displayName.trim()} where id = ${gameId}`);
-      else if (input.displayName === null) await tx.execute(sql`update app_private.games set display_name = coalesce((select name from app_private.game_names where game_id = ${gameId} and name_kind = 'source' order by id limit 1), display_name) where id = ${gameId}`);
+      else if (input.displayName === null || (input.displayName !== undefined && !input.displayName.trim())) await tx.execute(sql`update app_private.games set display_name = coalesce((select name from app_private.game_names where game_id = ${gameId} and name_kind = 'source' order by id limit 1), display_name) where id = ${gameId}`);
     };
     if (this.db.transaction) await this.db.transaction(run); else await run(this.db);
     const game = await this.get(gameId);
