@@ -16,10 +16,12 @@ export function GameEditClient({ game }: Props) {
   const [message, setMessage] = useState("");
   const [sourceId, setSourceId] = useState("");
   const [fingerprint, setFingerprint] = useState("");
+  const [confirmation, setConfirmation] = useState<{ title: string; releaseYear: number | null } | null>(null);
   const [linkReady, setLinkReady] = useState(false);
   const provider = game.medium === "board_game" ? "bgg" : "igdb";
   const manualContributions = game.contributors.filter((item) => item.origin === "manual");
   const sourceContributions = game.contributors.filter((item) => item.origin === "source");
+  const platformOptions = [...new Set(["Steam", "PS5", "Xbox Series", "Nintendo Switch", ...game.actualPlatforms])];
 
   async function edit(form: FormData) {
     try {
@@ -66,9 +68,10 @@ export function GameEditClient({ game }: Props) {
   async function confirmSource() {
     try {
       const response = await fetch("/api/private/games/confirm", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, sourceId }) });
-      const body = await response.json() as { fingerprint?: string; message?: string };
+      const body = await response.json() as { fingerprint?: string; message?: string; candidate?: { title?: string; releaseYear?: number | null } };
       if (!response.ok || !body.fingerprint) throw new Error(body.message ?? "無法取得來源資料。");
       setFingerprint(body.fingerprint);
+      setConfirmation(body.candidate?.title ? { title: body.candidate.title, releaseYear: body.candidate.releaseYear ?? null } : null);
       setLinkReady(true);
       setMessage("來源已取得，請再次確認後連結。");
     } catch (error) { setMessage(error instanceof Error ? error.message : "無法取得來源資料。"); }
@@ -85,7 +88,7 @@ export function GameEditClient({ game }: Props) {
       <summary className="cursor-pointer font-semibold">編輯擁有者資料</summary>
       <form action={edit} className="mt-4 space-y-3">
         <label className="block text-sm">自訂顯示名稱<input name="displayName" defaultValue={game.customDisplayName ?? ""} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="留白則使用來源名稱" /></label>
-        {game.medium === "video_game" && <fieldset><legend className="text-sm">實際平台</legend><div className="mt-2 flex flex-wrap gap-3">{["Steam", "PS5", "Xbox Series", "Nintendo Switch"].map((platform) => <label className="flex items-center gap-2 text-sm" key={platform}><input type="checkbox" name="actualPlatforms" value={platform} defaultChecked={game.actualPlatforms.some((value) => value.toLocaleLowerCase() === platform.toLocaleLowerCase())} />{platform}</label>)}</div><input name="customPlatform" className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="新增自訂平台（以逗號分隔）" /></fieldset>}
+        {game.medium === "video_game" && <fieldset><legend className="text-sm">實際平台</legend><div className="mt-2 flex flex-wrap gap-3">{platformOptions.map((platform) => <label className="flex items-center gap-2 text-sm" key={platform}><input type="checkbox" name="actualPlatforms" value={platform} defaultChecked={game.actualPlatforms.some((value) => value.toLocaleLowerCase() === platform.toLocaleLowerCase())} />{platform}</label>)}</div><input name="customPlatform" className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="新增自訂平台（以逗號分隔）" /></fieldset>}
         <label className="block text-sm">自由標籤（以逗號分隔）<input name="tags" defaultValue={game.tags.join(", ")} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3" /></label>
         <label className="block text-sm">人數說明（選填）<textarea name="playerCountNote" defaultValue={game.playerCountNote ?? ""} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3" rows={3} /></label>
         <button className="w-full rounded-xl bg-emerald-900 px-4 py-3 font-semibold text-white" type="submit">儲存資料</button>
@@ -95,9 +98,9 @@ export function GameEditClient({ game }: Props) {
       <summary className="cursor-pointer font-semibold">貢獻關係</summary>
       <div className="mt-4 space-y-4">
         <div><h3 className="text-sm font-medium">來源貢獻（唯讀）</h3>{sourceContributions.length === 0 ? <p className="mt-1 text-sm text-slate-500">沒有來源貢獻。</p> : <ul className="mt-1 space-y-1 text-sm">{sourceContributions.map((item) => <li key={item.id}>{item.name} · {item.role} · {item.provider?.toUpperCase()}</li>)}</ul>}</div>
-        <div><h3 className="text-sm font-medium">手動貢獻</h3>{manualContributions.length > 0 && <ul className="mt-1 space-y-1 text-sm">{manualContributions.map((item) => <li className="flex items-center justify-between gap-2" key={item.id}><span>{item.name} · {item.role}</span><button type="button" className="text-sm text-rose-700" onClick={() => void removeManual(item.id)}>移除</button></li>)}</ul>}<form action={addContribution} className="mt-3 space-y-2"><input name="name" className="w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="人物或組織名稱" required /><div className="flex gap-2"><select name="entityKind" className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-3"><option value="person">人物</option><option value="company">組織</option></select><select name="role" className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-3"><option value="design">設計／開發</option><option value="art">美術</option><option value="publisher">發行</option></select></div><button className="w-full rounded-xl border border-emerald-900 px-4 py-3 font-semibold text-emerald-900" type="submit">新增手動貢獻</button></form></div>
+        <div><h3 className="text-sm font-medium">手動貢獻</h3>{manualContributions.length > 0 && <ul className="mt-1 space-y-1 text-sm">{manualContributions.map((item) => <li className="flex items-center justify-between gap-2" key={item.id}><span>{item.name} · {item.role}</span><button type="button" className="text-sm text-rose-700" onClick={() => void removeManual(item.id)}>移除</button></li>)}</ul>}<form action={addContribution} className="mt-3 space-y-2"><input name="name" className="w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="人物或組織名稱" required /><div className="flex gap-2"><select name="entityKind" className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-3"><option value="person">人物</option><option value="company">組織</option></select><select name="role" className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-3"><option value="design">設計</option><option value="developer">開發</option><option value="art">美術</option><option value="publisher">發行</option></select></div><button className="w-full rounded-xl border border-emerald-900 px-4 py-3 font-semibold text-emerald-900" type="submit">新增手動貢獻</button></form></div>
       </div>
     </details>
-    {game.snapshot ? <button type="button" onClick={() => void refresh()} className="w-full rounded-xl border border-slate-300 px-4 py-3 font-semibold">重新整理來源資料</button> : <details><summary className="cursor-pointer font-semibold">首次連結外部來源</summary><div className="mt-4 space-y-3"><div className="flex gap-2"><span className="rounded-xl border border-slate-300 px-3 py-3 text-sm">{provider.toUpperCase()}</span><input value={sourceId} onChange={(event) => { setSourceId(event.target.value); setLinkReady(false); }} className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-3" placeholder="來源 ID" inputMode="numeric" /></div><button type="button" onClick={() => void confirmSource()} className="w-full rounded-xl border border-slate-300 px-4 py-3">取得並確認來源</button>{linkReady && <button type="button" onClick={() => void link()} className="w-full rounded-xl bg-emerald-900 px-4 py-3 font-semibold text-white">連結此來源</button>}</div></details>}
+    {game.snapshot ? <button type="button" onClick={() => void refresh()} className="w-full rounded-xl border border-slate-300 px-4 py-3 font-semibold">重新整理來源資料</button> : <details><summary className="cursor-pointer font-semibold">首次連結外部來源</summary><div className="mt-4 space-y-3"><div className="flex gap-2"><span className="rounded-xl border border-slate-300 px-3 py-3 text-sm">{provider.toUpperCase()}</span><input value={sourceId} onChange={(event) => { setSourceId(event.target.value); setLinkReady(false); setConfirmation(null); }} className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-3" placeholder="來源 ID" inputMode="numeric" /></div><button type="button" onClick={() => void confirmSource()} className="w-full rounded-xl border border-slate-300 px-4 py-3">取得並確認來源</button>{confirmation && <div className="rounded-xl bg-emerald-50 p-3 text-sm"><p className="font-semibold">{confirmation.title}</p>{confirmation.releaseYear && <p className="mt-1 text-slate-600">{confirmation.releaseYear}</p>}<p className="mt-1 text-slate-600">請確認這是要連結的遊戲。</p></div>}{linkReady && <button type="button" onClick={() => void link()} className="w-full rounded-xl bg-emerald-900 px-4 py-3 font-semibold text-white">連結此來源</button>}</div></details>}
   </section>;
 }
