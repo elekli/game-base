@@ -51,6 +51,7 @@ describe("serializeLogEvent", () => {
       attempt: null,
       durationMs: null,
       secret: "must-not-appear",
+      error: new Error("must-not-appear"),
     });
 
     expect(JSON.parse(serialized)).toEqual({

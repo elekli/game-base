@@ -68,15 +68,22 @@ export function parseRuntimeConfig(
     assertEqual(env.EXPECTED_SUPAVISOR_HOST, binding.supavisorHost);
     assertEqual(env.SUPAVISOR_USERNAME, binding.supavisorUsername);
     assertEqual(env.EXPECTED_SUPAVISOR_USERNAME, binding.supavisorUsername);
+    assertEqual(env.SUPAVISOR_PORT, String(binding.supavisorPort));
     assertEqual(env.EXPECTED_SUPABASE_PUBLISHABLE_KEY_SHA256, binding.publishableKeySha256);
     assertEqual(env.EXPECTED_SUPABASE_SECRET_KEY_SHA256, binding.secretKeySha256);
-    assertEqual(supabaseUrl.hostname, `${env.SUPABASE_PROJECT_REF}.supabase.co`);
-    assertEqual(env.SUPAVISOR_PORT, "6543");
+    assertEqual(supabaseUrl.protocol, "https:");
+    assertEqual(supabaseUrl.hostname, binding.supabaseHostname);
   }
   assertEqual(env.SUPAVISOR_HOST, env.EXPECTED_SUPAVISOR_HOST);
   assertEqual(env.SUPAVISOR_USERNAME, env.EXPECTED_SUPAVISOR_USERNAME);
   assertEqual(databaseUrl.hostname, env.SUPAVISOR_HOST);
   assertEqual(databaseUrl.port, env.SUPAVISOR_PORT);
+  if (env.VERCEL_ENV !== "development") {
+    assertEqual(
+      databaseUrl.pathname,
+      `/${deploymentBindings[env.VERCEL_ENV].databaseName}`,
+    );
+  }
   assertEqual(decodeURIComponent(databaseUrl.username), env.SUPAVISOR_USERNAME);
   assertEqual(databaseUrl.protocol === "postgres:" || databaseUrl.protocol === "postgresql:", true);
   assertEqual(
@@ -84,6 +91,8 @@ export function parseRuntimeConfig(
     env.EXPECTED_SUPABASE_PUBLISHABLE_KEY_SHA256,
   );
   assertEqual(sha256(env.SUPABASE_SECRET_KEY), env.EXPECTED_SUPABASE_SECRET_KEY_SHA256);
+  assertEqual(issuer.protocol, "https:");
+  assertEqual(jwksUrl.protocol, "https:");
   assertEqual(jwksUrl.origin, issuer.origin);
 
   return {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const logEventSchema = z.object({
+const commonLogEventSchema = z.object({
   event: z.string().min(1),
   level: z.enum(["info", "warn", "error"]),
   requestId: z.uuid(),
@@ -12,10 +12,13 @@ const logEventSchema = z.object({
   resourceId: z.uuid().nullable(),
   attempt: z.number().int().nonnegative().nullable(),
   durationMs: z.number().nonnegative().nullable(),
+}).strip();
+
+const logEventSchema = commonLogEventSchema.extend({
   environment: z.enum(["preview", "production"]),
 });
 
-const bootstrapLogEventSchema = logEventSchema.omit({ environment: true });
+const bootstrapLogEventSchema = commonLogEventSchema;
 
 export type StructuredLogInput = z.input<typeof logEventSchema> &
   Readonly<Record<string, unknown>>;

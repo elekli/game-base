@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .next/
+/next-env.d.ts
 node_modules/
 coverage/
 playwright-report/
@@ -12,4 +13,3 @@ test-results/
 supabase/.branches/
 supabase/.temp/
 *.tsbuildinfo
-

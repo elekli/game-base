@@ -12,7 +12,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run --exclude 'tests/integration/**'",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "playwright test",
