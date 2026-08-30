@@ -23,7 +23,7 @@ export function validateSnapshot(snapshot: SourceSnapshot): SourceSnapshot {
     throw new SourceResponseInvalidError();
   }
   if (snapshot.minPlayers !== null || snapshot.maxPlayers !== null) {
-    if (snapshot.minPlayers === null || snapshot.maxPlayers === null || snapshot.minPlayers < 1 || snapshot.minPlayers > snapshot.maxPlayers) {
+    if (snapshot.minPlayers === null || snapshot.maxPlayers === null || snapshot.minPlayers < 1 || snapshot.maxPlayers < 1 || snapshot.minPlayers > snapshot.maxPlayers) {
       throw new SourceResponseInvalidError();
     }
   }

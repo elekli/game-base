@@ -28,9 +28,9 @@ export type GamesService = Readonly<{
 export function createGamesService(catalogs: Readonly<Record<Provider, SourceCatalogPort>>, store: GameStore = new InMemoryGameStore()): GamesService {
   return {
     async searchExternalGames({ query }) {
-      if (!query.trim()) throw new SourceQueryInvalidError();
+      if (!query.trim() || query.trim().length > 120) throw new SourceQueryInvalidError();
       const results = await Promise.all(["bgg", "igdb"].map(async (provider) => {
-        try { return { provider: provider as Provider, items: await catalogs[provider as Provider].search({ provider: provider as Provider, query }), errorCode: null }; }
+        try { return { provider: provider as Provider, items: await catalogs[provider as Provider].search({ provider: provider as Provider, query, limit: 20 }), errorCode: null }; }
         catch (error) { return { provider: provider as Provider, items: [], errorCode: error instanceof Error && "code" in error ? String((error as { code: unknown }).code) : "source_unavailable" }; }
       }));
       return { groups: results };

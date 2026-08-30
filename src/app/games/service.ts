@@ -10,7 +10,8 @@ const fixtureBgg = new TestCatalogAdapter("bgg", [bggFixture]);
 const fixtureIgdb = new TestCatalogAdapter("igdb", [igdbFixture]);
 
 const database = process.env.DATABASE_URL?.startsWith("postgres") ? createDatabase(process.env.DATABASE_URL) : null;
-const allowFixtures = process.env.VERCEL_ENV === "development" || !process.env.VERCEL_ENV;
+const allowFixtures = process.env.VERCEL_ENV === "development" || process.env.ALLOW_SOURCE_FIXTURES === "true";
+if (process.env.VERCEL_ENV && !database) throw new Error("DATABASE_URL 必須設定為 PostgreSQL 連線。");
 
 export const gamesService = createGamesService({
   bgg: process.env.BGG_TOKEN ? new BggCatalogAdapter({ token: process.env.BGG_TOKEN }) : allowFixtures ? fixtureBgg : new BggCatalogAdapter(),

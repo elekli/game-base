@@ -19,6 +19,7 @@ function attr(xml: string, tagName: string, attribute: string): string | null {
   return xml.match(new RegExp(`<${tagName}[^>]*\\b${attribute}=["']([^"']+)["']`, "i"))?.[1] ?? null;
 }
 function year(value: string | null): number | null { const n = value ? Number(value) : NaN; return Number.isInteger(n) && n >= 1800 && n <= 2200 ? n : null; }
+function positive(value: string | null): number | null { const n = value ? Number(value) : NaN; return Number.isInteger(n) && n >= 1 ? n : null; }
 function nameValue(attributes: string): string | null { return attributes.match(/\bvalue=["']([^"']+)["']/i)?.[1]?.trim() ?? null; }
 function primaryName(xml: string): string | null {
   const names = [...xml.matchAll(/<name\b([^>]*)>/gi)];
@@ -40,6 +41,8 @@ export function parseBggThingXml(xml: string, sourceId: string): SourceSnapshot 
   const title = primaryName(xml) ?? tag(xml, "name");
   if (!title) throw new SourceResponseInvalidError();
   const ref = { provider: "bgg" as const, medium: "board_game" as const, sourceId };
+  const minPlayers = positive(attr(xml, "minplayers", "value"));
+  const maxPlayers = positive(attr(xml, "maxplayers", "value"));
   return validateSnapshot({
     ref,
     canonicalUrl: `https://boardgamegeek.com/boardgame/${sourceId}`,
@@ -49,8 +52,8 @@ export function parseBggThingXml(xml: string, sourceId: string): SourceSnapshot 
     description: tag(xml, "description"),
     releaseYear: year(attr(xml, "yearpublished", "value")),
     coverUrl: tag(xml, "image"),
-    categories: [], contributors: [], minPlayers: Number(attr(xml, "minplayers", "value")) || null,
-    maxPlayers: Number(attr(xml, "maxplayers", "value")) || null, supportsSolo: "unknown",
+    categories: [], contributors: [], minPlayers: minPlayers ?? maxPlayers,
+    maxPlayers: maxPlayers ?? minPlayers, supportsSolo: "unknown",
     playtimeMinutes: Number(attr(xml, "playingtime", "value")) || null, weight: null, strategyRank: null, supportedPlatforms: [],
   });
 }

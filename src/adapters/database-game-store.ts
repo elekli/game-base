@@ -17,7 +17,7 @@ function record(row: Row): GameRecord {
     medium: row.medium as Medium,
     displayName: String(row.display_name),
     externalIdentityId: row.external_game_identity_id ? String(row.external_game_identity_id) : null,
-    snapshot: row.snapshot as SourceSnapshot | null,
+    snapshot: (row.snapshot as SourceSnapshot | null | undefined) ?? null,
     trashedAt: row.trashed_at ? String(row.trashed_at) : null,
     createdAt: String(row.created_at),
   };
