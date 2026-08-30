@@ -79,6 +79,7 @@ export function parseRuntimeConfig(
   assertEqual(databaseUrl.hostname, env.SUPAVISOR_HOST);
   assertEqual(databaseUrl.port, env.SUPAVISOR_PORT);
   if (env.VERCEL_ENV !== "development") {
+    assertEqual(databaseUrl.searchParams.get("sslmode"), "require");
     assertEqual(
       databaseUrl.pathname,
       `/${deploymentBindings[env.VERCEL_ENV].databaseName}`,

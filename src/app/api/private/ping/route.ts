@@ -44,6 +44,29 @@ function serializePrivatePingFailure(
   });
 }
 
+function serializePrivatePingAccessDenied(
+  requestId: string,
+  environment: "development" | "preview" | "production",
+) {
+  const event = {
+    event: "access_jwt_rejected",
+    level: "warn",
+    requestId,
+    operation: "private_ping",
+    errorCode: "access_denied",
+    resourceType: null,
+    resourceId: null,
+    attempt: null,
+    durationMs: null,
+  } as const;
+
+  if (environment === "preview" || environment === "production") {
+    return serializeLogEvent({ ...event, environment });
+  }
+
+  return serializeBootstrapLogEvent(event);
+}
+
 export async function GET(request: Request) {
   try {
     const config = getRuntimeConfig();
@@ -53,19 +76,9 @@ export async function GET(request: Request) {
       verifyAccessToken,
       operation: async () => ({ status: "ready" }),
       onAccessDenied: ({ requestId }) => {
-        if (config.environment === "development") return;
-        console.warn(serializeLogEvent({
-          event: "access_jwt_rejected",
-          level: "warn",
-          requestId,
-          operation: "private_ping",
-          errorCode: "access_denied",
-          resourceType: null,
-          resourceId: null,
-          attempt: null,
-          durationMs: null,
-          environment: config.environment,
-        }));
+        console.warn(
+          serializePrivatePingAccessDenied(requestId, config.environment),
+        );
       },
       onUnhandledFailure: ({ errorCode, requestId }) => {
         console.error(

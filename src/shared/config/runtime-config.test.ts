@@ -36,6 +36,21 @@ describe("parseRuntimeConfig", () => {
     expect(config.supavisor.port).toBe(54329);
   });
 
+  it("rejects a hosted database URL with sslmode=disable without exposing values", () => {
+    const databaseUrl =
+      "postgres://app_runtime.preview-ref:fixture@aws-0-us-east-1.pooler.supabase.com:6543/postgres?sslmode=disable";
+    const input = { ...validPreviewEnvironment, DATABASE_URL: databaseUrl };
+
+    expect(() => parseRuntimeConfig(input)).toThrow(RuntimeConfigError);
+
+    try {
+      parseRuntimeConfig(input);
+    } catch (error) {
+      expect(JSON.stringify(error)).not.toContain(databaseUrl);
+      expect((error as Error).message).toBe("部署環境設定不一致。");
+    }
+  });
+
   const mixedBindings = [
     ["VERCEL_ENV", "production"],
     ["SUPABASE_PROJECT_REF", "production-ref"],
