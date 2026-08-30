@@ -37,9 +37,9 @@ describe("source adapter contracts", () => {
   it("IGDB 匯入固定分類與開發／發行公司，不匯入關鍵字", () => {
     const snapshot = parseIgdbSnapshot({ id: 7, name: "Barrage", genres: [{ id: 1, name: "策略" }], themes: [{ id: 2, name: "奇幻" }], game_modes: [{ id: 3, name: "單人" }], player_perspectives: [{ id: 4, name: "第三人稱" }], keywords: [{ id: 5, name: "keyword" }], involved_companies: [{ company: { id: 9, name: "開發公司" }, developer: true }, { company: { id: 10, name: "發行公司" }, publisher: true }] }, "7");
     expect(snapshot.categories.map((item) => item.kind)).toEqual(["genre", "theme", "game_mode", "player_perspective"]);
-    expect(snapshot.contributors.map((item) => [item.name, item.role])).toEqual([["開發公司", "developer"], ["發行公司", "publisher"]]);
+    expect(snapshot.contributors.map((item) => [item.name, item.role])).toEqual([["開發公司", "design"], ["發行公司", "publisher"]]);
     const dualRole = parseIgdbSnapshot({ id: 8, name: "雙重角色", involved_companies: [{ company: { id: 11, name: "同一公司" }, developer: true, publisher: true }] }, "8");
-    expect(dualRole.contributors.map((item) => item.role)).toEqual(["developer", "publisher"]);
+    expect(dualRole.contributors.map((item) => item.role)).toEqual(["design", "publisher"]);
     expect(validateSnapshot({ ...dualRole, categories: [...dualRole.categories, { kind: "category", sourceCategoryId: "99", name: "不應出現" }] }).categories.map((item) => item.kind)).not.toContain("category");
   });
 });

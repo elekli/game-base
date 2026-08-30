@@ -28,7 +28,7 @@ export type SourceContributor = Readonly<{
   sourceContributorId: string;
   name: string;
   entityKind: "person" | "company";
-  role: "design" | "art" | "publisher" | "developer";
+  role: "design" | "art" | "publisher";
 }>;
 
 export type SourceSnapshot = Readonly<{
@@ -53,9 +53,10 @@ export type SourceSnapshot = Readonly<{
 
 export type GameContribution = Readonly<{
   id: string;
+  contributorId: string;
   name: string;
   entityKind: "person" | "company";
-  role: "design" | "art" | "publisher" | "developer";
+  role: "design" | "art" | "publisher";
   origin: "source" | "manual";
   provider: Provider | null;
   sourceContributorId: string | null;

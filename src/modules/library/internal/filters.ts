@@ -34,7 +34,7 @@ function matchesCategories(game: GameRecord, selected: LibraryFilters["sourceCat
 
 function matchesContributors(game: GameRecord, selected: readonly string[] | undefined): boolean {
   if (!selected || selected.length === 0) return true;
-  const contributorKeys = new Set(game.contributors.map((contributor) => contributor.id));
+  const contributorKeys = new Set(game.contributors.map((contributor) => contributor.contributorId));
   return selected.some((id) => contributorKeys.has(id));
 }
 

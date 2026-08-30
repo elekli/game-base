@@ -9,10 +9,24 @@ alter table app_private.games
   foreign key (external_game_identity_id, medium)
   references app_private.external_game_identities (id, medium);
 
+delete from app_private.source_contributions old_sc
+where old_sc.role = 'developer'
+  and exists (
+    select 1 from app_private.source_contributions preferred_sc
+    where preferred_sc.identity_id = old_sc.identity_id
+      and preferred_sc.source_contributor_id = old_sc.source_contributor_id
+      and preferred_sc.role = 'design'
+  );
+
+update app_private.source_contributions
+set role = 'design'
+where role = 'developer';
+
 insert into app_private.contributors (name, entity_kind, source_provider, source_contributor_id)
-select distinct sc.name, sc.entity_kind, i.provider, sc.source_contributor_id
+select distinct on (i.provider, sc.source_contributor_id) sc.name, sc.entity_kind, i.provider, sc.source_contributor_id
 from app_private.source_contributions sc
 join app_private.external_game_identities i on i.id = sc.identity_id
+order by i.provider, sc.source_contributor_id, sc.id
 on conflict (source_provider, source_contributor_id) where source_provider is not null do update
 set name = excluded.name, entity_kind = excluded.entity_kind;
 
@@ -27,6 +41,26 @@ where sc.identity_id = i.id
 
 alter table app_private.source_contributions
   alter column contributor_id set not null;
+
+alter table app_private.source_contributions
+  drop constraint if exists source_contributions_role_check;
+
+alter table app_private.source_contributions
+  add constraint source_contributions_role_check
+  check (role in ('design', 'art', 'publisher'));
+
+delete from app_private.manual_contributions old_mc
+where old_mc.role = 'developer'
+  and exists (
+    select 1 from app_private.manual_contributions preferred_mc
+    where preferred_mc.game_id = old_mc.game_id
+      and preferred_mc.contributor_id = old_mc.contributor_id
+      and preferred_mc.role = 'design'
+  );
+
+update app_private.manual_contributions
+set role = 'design'
+where role = 'developer';
 
 alter table app_private.manual_contributions
   drop constraint if exists manual_contributions_role_check;

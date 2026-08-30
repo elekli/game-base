@@ -48,7 +48,7 @@ create table if not exists app_private.manual_contributions (
   id uuid primary key default gen_random_uuid(),
   game_id uuid not null references app_private.games(id) on delete cascade,
   contributor_id uuid not null references app_private.contributors(id) on delete restrict,
-  role text not null check (role in ('design', 'developer', 'art', 'publisher')),
+  role text not null check (role in ('design', 'art', 'publisher')),
   unique (game_id, contributor_id, role)
 );
 

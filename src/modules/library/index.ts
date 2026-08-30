@@ -1,6 +1,6 @@
 import { clearIncompatibleSourceCategories, filterAndSortGames, type LibraryFilters } from "./internal/filters";
 import type { GameRecord } from "@/modules/games";
-import type { GameEditInput, GameStore, ManualContributionInput, ManualContributionResult } from "@/modules/games";
+import type { GameEditInput, GameStore, ManualContributionInput, ManualContributionResult, SharedLibraryItem } from "@/modules/games";
 
 export type LibraryService = Readonly<{
   listGames(filters?: LibraryFilters): Promise<readonly GameRecord[]>;
@@ -9,6 +9,8 @@ export type LibraryService = Readonly<{
   removeManualContribution(gameId: string, contributionId: string): Promise<GameRecord>;
   deletePlatform(name: string): Promise<void>;
   deleteTag(name: string): Promise<void>;
+  listPlatforms(): Promise<readonly SharedLibraryItem[]>;
+  listTags(): Promise<readonly SharedLibraryItem[]>;
 }>;
 
 export function createLibraryService(store: GameStore): LibraryService {
@@ -29,8 +31,11 @@ export function createLibraryService(store: GameStore): LibraryService {
     removeManualContribution(gameId, contributionId) { return store.removeManualContribution(gameId, contributionId); },
     deletePlatform(name) { return store.deletePlatform(name); },
     deleteTag(name) { return store.deleteTag(name); },
+    listPlatforms() { return store.listPlatforms(); },
+    listTags() { return store.listTags(); },
   };
 }
 
 export * from "./internal/filters";
+export * from "./internal/errors";
 export * from "./internal/names";

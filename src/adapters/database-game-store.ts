@@ -1,9 +1,10 @@
 import "server-only";
 import { sql, type SQL } from "drizzle-orm";
-import type { GameStore, GameEditInput, ManualContributionInput } from "@/modules/games";
+import type { GameStore, GameEditInput, ManualContributionInput, SharedLibraryItem } from "@/modules/games";
 import type { ExternalGameRef, GameContribution, GameRecord, Medium, SourceSnapshot } from "@/modules/games";
 import { SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError } from "@/modules/games";
 import { beginSourceCoverIngest, isAllowedSourceCoverUrl } from "@/modules/media/internal/source-cover-ingest";
+import { LibraryConflictError } from "@/modules/library/internal/errors";
 
 type Executor = Readonly<{
   execute(query: SQL): Promise<unknown>;
@@ -24,12 +25,12 @@ function snapshotSourceNames(snapshot: SourceSnapshot | null): readonly string[]
 }
 
 function sourceContributions(snapshot: SourceSnapshot | null): readonly GameContribution[] {
-  return snapshot?.contributors.map((contributor) => ({ id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}`, name: contributor.name, entityKind: contributor.entityKind, role: contributor.role, origin: "source" as const, provider: snapshot.ref.provider, sourceContributorId: contributor.sourceContributorId })) ?? [];
+  return snapshot?.contributors.map((contributor) => ({ id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}:${contributor.role}`, contributorId: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}`, name: contributor.name, entityKind: contributor.entityKind, role: contributor.role, origin: "source" as const, provider: snapshot.ref.provider, sourceContributorId: contributor.sourceContributorId })) ?? [];
 }
 
 function record(row: Row): GameRecord {
   const snapshot = (row.snapshot as SourceSnapshot | null | undefined) ?? null;
-  const manualContributions = jsonArray<GameContribution>(row.manual_contributions).map((contribution) => ({ ...contribution, origin: "manual" as const, provider: null, sourceContributorId: null }));
+  const manualContributions = jsonArray<GameContribution>(row.manual_contributions).map((contribution) => ({ ...contribution, contributorId: contribution.contributorId ?? contribution.id, origin: "manual" as const, provider: null, sourceContributorId: null }));
   return {
     id: String(row.id),
     medium: row.medium as Medium,
@@ -81,8 +82,8 @@ export class PostgresGameStore implements GameStore {
     coalesce((select jsonb_agg(gn.name order by gn.id) from app_private.game_names gn where gn.game_id = g.id and gn.name_kind in ('source', 'alias')), '[]'::jsonb) as source_names,
     coalesce((select jsonb_agg(p.name order by p.name) from app_private.game_platforms gp join app_private.platforms p on p.id = gp.platform_id where gp.game_id = g.id), '[]'::jsonb) as actual_platforms,
     coalesce((select jsonb_agg(t.name order by t.name) from app_private.game_tags gt join app_private.tags t on t.id = gt.tag_id where gt.game_id = g.id), '[]'::jsonb) as tags,
-    coalesce((select jsonb_agg(jsonb_build_object('id', mc.id, 'name', c.name, 'entityKind', c.entity_kind, 'role', mc.role)) from app_private.manual_contributions mc join app_private.contributors c on c.id = mc.contributor_id where mc.game_id = g.id), '[]'::jsonb) as manual_contributions,
-    (select case when mi.original_state = 'failed' or mi.thumbnail_state = 'failed' then 'failed' when mi.original_state = 'ready' and mi.thumbnail_state = 'ready' then 'ready' else 'pending' end from app_private.media_ingests mi where mi.game_id = g.id order by mi.created_at desc limit 1) as cover_ingest_state`;
+    coalesce((select jsonb_agg(jsonb_build_object('id', mc.id, 'contributorId', c.id, 'name', c.name, 'entityKind', c.entity_kind, 'role', mc.role)) from app_private.manual_contributions mc join app_private.contributors c on c.id = mc.contributor_id where mc.game_id = g.id), '[]'::jsonb) as manual_contributions,
+    (select case when mi.original_state = 'failed' or mi.thumbnail_state = 'failed' then 'failed' when mi.original_state = 'ready' and mi.thumbnail_state = 'ready' then 'ready' else 'pending' end from app_private.media_ingests mi where mi.game_id = g.id and mi.source_url = i.snapshot ->> 'coverUrl' limit 1) as cover_ingest_state`;
 
   private selectFrom(where: SQL) {
     return sql`select ${this.selectFields} from app_private.games g left join app_private.external_game_identities i on i.id = g.external_game_identity_id left join app_private.game_names custom_name on custom_name.game_id = g.id and custom_name.name_kind = 'custom' ${where}`;
@@ -271,14 +272,24 @@ export class PostgresGameStore implements GameStore {
 
   async deletePlatform(name: string): Promise<void> {
     const rows = await this.db.execute(sql`select is_system from app_private.platforms where normalized_name = ${normalized(name)} limit 1`) as Row[];
-    if (rows[0]?.is_system) throw new Error("系統預設平台不可刪除。");
+    if (rows[0]?.is_system) throw new LibraryConflictError("library_system_platform", "系統預設平台不可刪除。");
     try { await this.db.execute(sql`delete from app_private.platforms where normalized_name = ${normalized(name)} and is_system = false`); }
-    catch (error) { if (error && typeof error === "object" && "code" in error && error.code === "23503") throw new Error("仍有遊戲使用此平台，請先移除關係。"); throw error; }
+    catch (error) { if (error && typeof error === "object" && "code" in error && error.code === "23503") throw new LibraryConflictError("library_item_in_use", "仍有遊戲使用此平台，請先移除關係。"); throw error; }
   }
 
   async deleteTag(name: string): Promise<void> {
     try { await this.db.execute(sql`delete from app_private.tags where normalized_name = ${normalized(name)}`); }
-    catch (error) { if (error && typeof error === "object" && "code" in error && error.code === "23503") throw new Error("仍有遊戲使用此標籤，請先移除關係。"); throw error; }
+    catch (error) { if (error && typeof error === "object" && "code" in error && error.code === "23503") throw new LibraryConflictError("library_item_in_use", "仍有遊戲使用此標籤，請先移除關係。"); throw error; }
+  }
+
+  async listPlatforms(): Promise<readonly SharedLibraryItem[]> {
+    const rows = await this.db.execute(sql`select p.name, p.is_system, count(g.id)::int as usage_count from app_private.platforms p left join app_private.game_platforms gp on gp.platform_id = p.id left join app_private.games g on g.id = gp.game_id and g.trashed_at is null group by p.id order by p.name asc`) as Row[];
+    return rows.map((row) => ({ name: String(row.name), usageCount: Number(row.usage_count), isSystem: Boolean(row.is_system) }));
+  }
+
+  async listTags(): Promise<readonly SharedLibraryItem[]> {
+    const rows = await this.db.execute(sql`select t.name, count(g.id)::int as usage_count from app_private.tags t left join app_private.game_tags gt on gt.tag_id = t.id left join app_private.games g on g.id = gt.game_id and g.trashed_at is null group by t.id order by t.name asc`) as Row[];
+    return rows.map((row) => ({ name: String(row.name), usageCount: Number(row.usage_count), isSystem: false }));
   }
 
   async trash(id: string): Promise<void> { await this.db.execute(sql`update app_private.games set trashed_at = now() where id = ${id}`); }

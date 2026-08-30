@@ -149,26 +149,6 @@ export const mediaDerivativesInAppPrivate = appPrivate.table("media_derivatives"
 	pgPolicy("runtime_media_derivatives", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
-export const manualContributionsInAppPrivate = appPrivate.table("manual_contributions", {
-	id: uuid().defaultRandom().notNull(),
-	gameId: uuid("game_id").notNull(),
-	contributorId: uuid("contributor_id").notNull(),
-	role: text().notNull(),
-}, (table) => [
-	index("manual_contributions_contributor_id_idx").using("btree", table.contributorId.asc().nullsLast().op("uuid_ops")),
-	foreignKey({
-			columns: [table.gameId],
-			foreignColumns: [gamesInAppPrivate.id],
-			name: "manual_contributions_game_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
-			columns: [table.contributorId],
-			foreignColumns: [contributorsInAppPrivate.id],
-			name: "manual_contributions_contributor_id_fkey"
-		}).onDelete("restrict"),
-	pgPolicy("runtime_manual_contributions", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
-]);
-
 export const sourceContributionsInAppPrivate = appPrivate.table("source_contributions", {
 	id: uuid().defaultRandom().notNull(),
 	identityId: uuid("identity_id").notNull(),
@@ -190,6 +170,26 @@ export const sourceContributionsInAppPrivate = appPrivate.table("source_contribu
 			name: "source_contributions_contributor_id_fkey"
 		}).onDelete("restrict"),
 	pgPolicy("runtime_source_contributions", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
+export const manualContributionsInAppPrivate = appPrivate.table("manual_contributions", {
+	id: uuid().defaultRandom().notNull(),
+	gameId: uuid("game_id").notNull(),
+	contributorId: uuid("contributor_id").notNull(),
+	role: text().notNull(),
+}, (table) => [
+	index("manual_contributions_contributor_id_idx").using("btree", table.contributorId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.gameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "manual_contributions_game_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.contributorId],
+			foreignColumns: [contributorsInAppPrivate.id],
+			name: "manual_contributions_contributor_id_fkey"
+		}).onDelete("restrict"),
+	pgPolicy("runtime_manual_contributions", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
 export const platformsInAppPrivate = appPrivate.table("platforms", {

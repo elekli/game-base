@@ -36,7 +36,7 @@ export function parseIgdbSnapshot(raw: unknown, sourceId: string): SourceSnapsho
   const contributors = (game.involved_companies ?? []).flatMap((item) => {
     if (item.company?.id === undefined || !item.company.name) return [];
     const base = { sourceContributorId: String(item.company.id), name: item.company.name, entityKind: "company" as const };
-    return [item.developer ? { ...base, role: "developer" as const } : null, item.publisher ? { ...base, role: "publisher" as const } : null].filter((item): item is NonNullable<typeof item> => item !== null);
+    return [item.developer ? { ...base, role: "design" as const } : null, item.publisher ? { ...base, role: "publisher" as const } : null].filter((item): item is NonNullable<typeof item> => item !== null);
   });
   return validateSnapshot({ ref: { provider: "igdb", medium: "video_game", sourceId }, canonicalUrl: `https://www.igdb.com/games/${sourceId}`, title: candidate.title, localizedTitle: null, aliases: [], description: game.summary ?? null, releaseYear: candidate.releaseYear, coverUrl: candidate.coverPreviewUrl, categories, contributors, minPlayers: null, maxPlayers: null, supportsSolo: "unknown", playtimeMinutes: null, weight: null, strategyRank: null, supportedPlatforms: (game.platforms ?? []).map((item) => item.name).filter((name): name is string => Boolean(name)) });
 }

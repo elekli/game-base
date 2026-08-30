@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError } from "./errors";
+import { LibraryConflictError } from "@/modules/library/internal/errors";
 import type { ExternalGameRef, GameContribution, GameRecord, Medium, SourceSnapshot } from "./types";
 
 export type GameEditInput = Readonly<{
@@ -17,6 +18,7 @@ export type ManualContributionInput = Readonly<{
 }>;
 
 export type ManualContributionResult = Readonly<{ game: GameRecord; possibleDuplicate: boolean }>;
+export type SharedLibraryItem = Readonly<{ name: string; usageCount: number; isSystem: boolean }>;
 
 export type GameStore = {
   list(query?: string): Promise<readonly GameRecord[]>;
@@ -30,6 +32,8 @@ export type GameStore = {
   removeManualContribution(gameId: string, contributionId: string): Promise<GameRecord>;
   deletePlatform(name: string): Promise<void>;
   deleteTag(name: string): Promise<void>;
+  listPlatforms(): Promise<readonly SharedLibraryItem[]>;
+  listTags(): Promise<readonly SharedLibraryItem[]>;
   trash(id: string): Promise<void>;
 };
 
@@ -52,7 +56,8 @@ function uniqueNames(values: readonly string[]): readonly string[] {
 
 function sourceContributions(snapshot: SourceSnapshot): readonly GameContribution[] {
   return snapshot.contributors.map((contributor) => ({
-    id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}`,
+    id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}:${contributor.role}`,
+    contributorId: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}`,
     name: contributor.name,
     entityKind: contributor.entityKind,
     role: contributor.role,
@@ -167,7 +172,8 @@ export class InMemoryGameStore implements GameStore {
     const name = input.name.trim();
     if (!name) throw new Error("貢獻者名稱不可為空。");
     const possibleDuplicate = [...this.games.values()].some((item) => item.contributors.some((contributor) => contributor.name.toLocaleLowerCase("en-US") === name.toLocaleLowerCase("en-US")));
-    const contribution: GameContribution = { id: randomUUID(), name, entityKind: input.entityKind, role: input.role, origin: "manual", provider: null, sourceContributorId: null };
+    const contributionId = randomUUID();
+    const contribution: GameContribution = { id: contributionId, contributorId: contributionId, name, entityKind: input.entityKind, role: input.role, origin: "manual", provider: null, sourceContributorId: null };
     const updated = { ...game, contributors: [...game.contributors, contribution] };
     this.games.set(game.id, updated);
     return { game: updated, possibleDuplicate };
@@ -183,13 +189,36 @@ export class InMemoryGameStore implements GameStore {
 
   async deletePlatform(name: string): Promise<void> {
     const key = normalize(name);
-    if (SYSTEM_PLATFORMS.has(key)) throw new Error("系統預設平台不可刪除。");
-    if ([...this.games.values()].some((game) => game.actualPlatforms.some((platform) => normalize(platform) === key))) throw new Error("仍有遊戲使用此平台，請先移除關係。");
+    if (SYSTEM_PLATFORMS.has(key)) throw new LibraryConflictError("library_system_platform", "系統預設平台不可刪除。");
+    if ([...this.games.values()].some((game) => game.actualPlatforms.some((platform) => normalize(platform) === key))) throw new LibraryConflictError("library_item_in_use", "仍有遊戲使用此平台，請先移除關係。");
   }
 
   async deleteTag(name: string): Promise<void> {
     const key = normalize(name);
-    if ([...this.games.values()].some((game) => game.tags.some((tag) => normalize(tag) === key))) throw new Error("仍有遊戲使用此標籤，請先移除關係。");
+    if ([...this.games.values()].some((game) => game.tags.some((tag) => normalize(tag) === key))) throw new LibraryConflictError("library_item_in_use", "仍有遊戲使用此標籤，請先移除關係。");
+  }
+
+  async listPlatforms(): Promise<readonly SharedLibraryItem[]> {
+    const usage = new Map<string, number>();
+    const displayNames = new Map<string, string>([["steam", "Steam"], ["ps5", "PS5"], ["xbox series", "Xbox Series"], ["nintendo switch", "Nintendo Switch"]]);
+    for (const game of this.games.values()) {
+      if (game.trashedAt !== null) continue;
+      for (const platform of game.actualPlatforms) {
+        const key = normalize(platform);
+        usage.set(key, (usage.get(key) ?? 0) + 1);
+        if (!displayNames.has(key)) displayNames.set(key, platform);
+      }
+    }
+    return [...new Set([...SYSTEM_PLATFORMS, ...usage.keys()])].map((key) => ({ name: displayNames.get(key) ?? key, usageCount: usage.get(key) ?? 0, isSystem: SYSTEM_PLATFORMS.has(key) })).sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
+  }
+
+  async listTags(): Promise<readonly SharedLibraryItem[]> {
+    const names = new Map<string, SharedLibraryItem>();
+    for (const game of this.games.values()) {
+      if (game.trashedAt !== null) continue;
+      for (const tag of game.tags) { const key = normalize(tag); names.set(key, { name: tag, usageCount: (names.get(key)?.usageCount ?? 0) + 1, isSystem: false }); }
+    }
+    return [...names.values()].sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
   }
 
   async trash(id: string) {
@@ -211,5 +240,7 @@ export class UnavailableGameStore implements GameStore {
   async removeManualContribution(): Promise<GameRecord> { return this.fail(); }
   async deletePlatform(): Promise<void> { this.fail(); }
   async deleteTag(): Promise<void> { this.fail(); }
+  async listPlatforms(): Promise<readonly SharedLibraryItem[]> { return this.fail(); }
+  async listTags(): Promise<readonly SharedLibraryItem[]> { return this.fail(); }
   async trash(): Promise<void> { this.fail(); }
 }

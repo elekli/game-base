@@ -5,7 +5,8 @@ import { requireOwner } from "./require-owner";
 import type { AccessTokenVerifier, OwnerIdentity } from "./verify-access-token";
 import { getRequestId } from "@/shared/observability/request-id";
 import { serializeBootstrapLogEvent } from "@/shared/observability/structured-log";
-import { SourceOperationError } from "@/modules/games/internal/errors";
+import { SourceIdentityConflictError, SourceOperationError } from "@/modules/games/internal/errors";
+import { LibraryConflictError } from "@/modules/library/internal/errors";
 
 type PrivateRequestDependencies<Result extends object> = Readonly<{
   operation: (owner: OwnerIdentity) => Promise<Result>;
@@ -25,9 +26,9 @@ export class PrivateRequestInputError extends Error {
   constructor(message = "請求參數無效。") { super(message); this.name = "PrivateRequestInputError"; }
 }
 
-function safeErrorResponse(status: number, message: string, requestId: string, extraHeaders: Record<string, string> = {}) {
+function safeErrorResponse(status: number, message: string, requestId: string, extraHeaders: Record<string, string> = {}, extraBody: Record<string, unknown> = {}) {
   return Response.json(
-    { message, requestId },
+    { message, requestId, ...extraBody },
     { status, headers: { ...PRIVATE_RESPONSE_HEADERS, ...extraHeaders } },
   );
 }
@@ -68,12 +69,16 @@ export async function handlePrivateRequest<Result extends object>(
     );
   } catch (error) {
     if (error instanceof PrivateRequestInputError) return safeErrorResponse(error.status, error.message, requestId);
+    if (error instanceof LibraryConflictError) return safeErrorResponse(409, error.message, requestId);
     if (error instanceof SourceOperationError) {
       const status = error.sourceCode === "source_query_invalid" || error.sourceCode === "source_response_invalid" ? 400
         : error.sourceCode === "source_not_found" ? 404
           : error.sourceCode === "source_content_changed" || error.sourceCode === "source_identity_conflict" || error.sourceCode === "source_medium_mismatch" || error.sourceCode === "source_not_linked" ? 409
             : error.sourceCode === "source_rate_limited" ? 429 : 502;
-      return safeErrorResponse(status, error.message, requestId, error.retryAfterSeconds === null ? {} : { "retry-after": String(error.retryAfterSeconds) });
+      const conflictBody = error instanceof SourceIdentityConflictError
+        ? { existingGameId: error.gameId, existingIsTrashed: error.trashed }
+        : {};
+      return safeErrorResponse(status, error.message, requestId, error.retryAfterSeconds === null ? {} : { "retry-after": String(error.retryAfterSeconds) }, conflictBody);
     }
     if (error instanceof AccessDeniedError) {
       await observeFailureWithoutChangingResponse(requestId, () =>
