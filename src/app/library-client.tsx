@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import type { GameRecord, Medium } from "@/modules/games";
 import type { SharedLibraryItem } from "@/modules/games";
-import type { LibraryFilters, LibrarySort } from "@/modules/library";
+import type { LibraryFilters } from "@/modules/library";
 
 type Props = Readonly<{ games: readonly GameRecord[]; facets: readonly GameRecord[]; filters: LibraryFilters; sharedPlatforms: readonly SharedLibraryItem[]; sharedTags: readonly SharedLibraryItem[] }>;
 
@@ -51,13 +51,4 @@ export function LibraryClient({ games, facets, filters, sharedPlatforms, sharedT
     {message && <p role="status" className="mb-4 text-sm text-rose-700">{message}</p>}<details className="mb-6 rounded-2xl border border-slate-200 bg-white p-4"><summary className="cursor-pointer font-semibold">管理共享平台與標籤</summary><div className="mt-4 grid gap-4 sm:grid-cols-2"><div><h2 className="text-sm font-medium">平台</h2><ul className="mt-2 space-y-2 text-sm">{sharedPlatforms.map((item) => <li className="flex items-center justify-between gap-2" key={item.name}><span>{item.name} <span className="text-slate-500">（{item.usageCount} 款使用）</span></span>{!item.isSystem && <button type="button" className="text-rose-700" onClick={() => void deleteShared(item, "/api/private/library/platforms").catch((error) => setMessage(error instanceof Error ? error.message : "刪除失敗。"))}>刪除</button>}</li>)}</ul></div><div><h2 className="text-sm font-medium">標籤</h2><ul className="mt-2 space-y-2 text-sm">{sharedTags.map((item) => <li className="flex items-center justify-between gap-2" key={item.name}><span>{item.name} <span className="text-slate-500">（{item.usageCount} 款使用）</span></span><button type="button" className="text-rose-700" onClick={() => void deleteShared(item, "/api/private/library/tags").catch((error) => setMessage(error instanceof Error ? error.message : "刪除失敗。"))}>刪除</button></li>)}</ul></div></div></details>
     {games.length === 0 ? <p className="rounded-2xl border border-dashed border-slate-300 bg-white/50 p-8 text-center text-slate-600">沒有符合條件的遊戲。</p> : <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3">{games.map((game) => <li key={game.id}><Link href={`/games/${game.id}`} className="block rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="aspect-[4/5] rounded-xl bg-emerald-50" /><h2 className="mt-3 font-semibold">{game.displayName}</h2><p className="mt-1 text-sm text-slate-500">{mediumLabels[game.medium]}{game.medium === "board_game" && game.snapshot?.weight !== null && game.snapshot?.weight !== undefined ? ` · 重度 ${game.snapshot.weight}` : ""}</p>{game.medium === "video_game" && game.actualPlatforms.length > 0 && <p className="mt-1 truncate text-xs text-slate-500">{game.actualPlatforms.join("、")}</p>}</Link></li>)}</ul>}
   </>;
-}
-
-export function parseLibrarySearchParams(params: Readonly<Record<string, string | string[] | undefined>>): LibraryFilters {
-  const many = (name: string) => { const value = params[name]; return value === undefined ? [] : Array.isArray(value) ? value : [value]; };
-  const media = many("medium").filter((value): value is Medium => value === "board_game" || value === "video_game");
-  const sourceCategories = many("category").flatMap((value) => { const [kind, sourceCategoryId] = value.split(":"); return kind && sourceCategoryId ? [{ kind, sourceCategoryId }] : []; });
-  const number = (name: string) => { const value = many(name)[0]; if (!value) return undefined; const parsed = Number(value); return Number.isFinite(parsed) ? parsed : undefined; };
-  const sort = many("sort")[0];
-  return { query: many("q")[0] ?? "", media, platforms: many("platform"), tags: many("tag"), contributors: many("contributor"), sourceCategories, weightMin: number("weightMin"), weightMax: number("weightMax"), sort: ["name", "recent", "weight_asc", "weight_desc", "strategy_rank"].includes(sort ?? "") ? sort as LibrarySort : "name" };
 }

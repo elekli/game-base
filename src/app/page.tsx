@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { libraryService } from "@/app/games/service";
 import { requirePrivatePage } from "@/app/games/private-page";
-import { LibraryClient, parseLibrarySearchParams } from "./library-client";
+import { parseLibrarySearchParams } from "./library-search-params";
+import { LibraryClient } from "./library-client";
 
 export const dynamic = "force-dynamic";
 

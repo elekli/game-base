@@ -107,8 +107,13 @@ export function parseRuntimeConfig(
     env.EXPECTED_SUPABASE_PUBLISHABLE_KEY_SHA256,
   );
   assertEqual(sha256(env.SUPABASE_SECRET_KEY), env.EXPECTED_SUPABASE_SECRET_KEY_SHA256);
-  assertEqual(issuer.protocol, "https:");
-  assertEqual(jwksUrl.protocol, "https:");
+  const allowsLocalDevelopmentAuth =
+    env.VERCEL_ENV === "development" &&
+    ["127.0.0.1", "localhost"].includes(issuer.hostname) &&
+    issuer.protocol === "http:" &&
+    jwksUrl.protocol === "http:";
+  assertEqual(issuer.protocol === "https:" || allowsLocalDevelopmentAuth, true);
+  assertEqual(jwksUrl.protocol === "https:" || allowsLocalDevelopmentAuth, true);
   assertEqual(jwksUrl.origin, issuer.origin);
 
   return {

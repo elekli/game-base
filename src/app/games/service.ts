@@ -11,9 +11,17 @@ const igdbFixture = sampleFixture("igdb", "2", "範例電子遊戲");
 const fixtureBgg = new TestCatalogAdapter("bgg", [bggFixture]);
 const fixtureIgdb = new TestCatalogAdapter("igdb", [igdbFixture]);
 
-const database = process.env.DATABASE_URL?.startsWith("postgres") ? createDatabase(process.env.DATABASE_URL) : null;
 const allowFixtures = process.env.VERCEL_ENV === "development" || process.env.ALLOW_SOURCE_FIXTURES === "true";
-const store = database ? new PostgresGameStore(database.db) : allowFixtures ? new InMemoryGameStore() : new UnavailableGameStore();
+const useFixtureStore = process.env.ALLOW_SOURCE_FIXTURES === "true" ||
+  (process.env.VERCEL_ENV === "development" && !process.env.DATABASE_URL?.startsWith("postgres"));
+const database = !useFixtureStore && process.env.DATABASE_URL?.startsWith("postgres") ? createDatabase(process.env.DATABASE_URL) : null;
+function getFixtureStore() {
+  const fixtureGlobal = globalThis as typeof globalThis & {
+    __puizeruGamebaseFixtureStore?: InMemoryGameStore;
+  };
+  return fixtureGlobal.__puizeruGamebaseFixtureStore ??= new InMemoryGameStore();
+}
+const store = database ? new PostgresGameStore(database.db) : useFixtureStore ? getFixtureStore() : new UnavailableGameStore();
 
 export const gamesService = createGamesService({
   bgg: process.env.BGG_TOKEN ? new BggCatalogAdapter({ token: process.env.BGG_TOKEN }) : allowFixtures ? fixtureBgg : new BggCatalogAdapter(),
