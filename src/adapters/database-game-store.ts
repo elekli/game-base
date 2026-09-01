@@ -1,6 +1,6 @@
 import "server-only";
 import { sql, type SQL } from "drizzle-orm";
-import type { GameStore, GameEditInput, LibraryGameQuery, ManualContributionInput, SharedLibraryItem } from "@/modules/games";
+import type { ContributorMatch, GameStore, GameEditInput, LegacyManualContributionInput, LibraryGameQuery, ManualContributionInput, ManualContributionResult, SharedLibraryItem } from "@/modules/games";
 import type { ExternalGameRef, GameContribution, GameRecord, Medium, SourceCategory, SourceSnapshot } from "@/modules/games";
 import { SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError } from "@/modules/games";
 import { beginSourceCoverIngest, isAllowedSourceCoverUrl } from "@/modules/media/internal/source-cover-ingest";
@@ -26,7 +26,9 @@ function snapshotSourceNames(snapshot: SourceSnapshot | null): readonly string[]
   return snapshot ? [snapshot.title, snapshot.localizedTitle ?? "", ...snapshot.aliases].map((name) => name.trim()).filter(Boolean) : [];
 }
 
-function sourceContributions(snapshot: SourceSnapshot | null): readonly GameContribution[] {
+function sourceContributions(snapshot: SourceSnapshot | null, row: Row): readonly GameContribution[] {
+  const stored = jsonArray<GameContribution>(row.source_contributions);
+  if (stored.length > 0) return stored.map((contribution) => ({ ...contribution, origin: "source" as const }));
   return snapshot?.contributors.map((contributor) => ({ id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}:${contributor.role}`, contributorId: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}`, name: contributor.name, entityKind: contributor.entityKind, role: contributor.role, origin: "source" as const, provider: snapshot.ref.provider, sourceContributorId: contributor.sourceContributorId })) ?? [];
 }
 
@@ -47,7 +49,7 @@ function record(row: Row): GameRecord {
     aliases: snapshot?.aliases ?? [],
     actualPlatforms: jsonArray<string>(row.actual_platforms),
     tags: jsonArray<string>(row.tags),
-    contributors: [...sourceContributions(snapshot), ...manualContributions],
+    contributors: [...sourceContributions(snapshot, row), ...manualContributions],
     playerCountNote: row.player_count_note ? String(row.player_count_note) : null,
     coverIngestState: row.cover_ingest_state === "pending" || row.cover_ingest_state === "ready" || row.cover_ingest_state === "failed" ? row.cover_ingest_state : null,
     externalIdentityId: row.external_game_identity_id ? String(row.external_game_identity_id) : null,
@@ -90,6 +92,7 @@ export class PostgresGameStore implements GameStore {
     coalesce((select jsonb_agg(p.name order by p.name) from app_private.game_platforms gp join app_private.platforms p on p.id = gp.platform_id where gp.game_id = g.id), '[]'::jsonb) as actual_platforms,
     coalesce((select jsonb_agg(t.name order by t.name) from app_private.game_tags gt join app_private.tags t on t.id = gt.tag_id where gt.game_id = g.id), '[]'::jsonb) as tags,
     bcm.identity_id as metrics_identity_id, bcm.weight as metrics_weight, bcm.strategy_rank as metrics_strategy_rank,
+    coalesce((select jsonb_agg(jsonb_build_object('id', sc.id, 'contributorId', c.id, 'name', c.name, 'entityKind', c.entity_kind, 'role', sc.role, 'provider', c.source_provider, 'sourceContributorId', c.source_contributor_id)) from app_private.source_contributions sc join app_private.contributors c on c.id = sc.contributor_id where sc.identity_id = i.id), '[]'::jsonb) as source_contributions,
     coalesce((select jsonb_agg(jsonb_build_object('id', mc.id, 'contributorId', c.id, 'name', c.name, 'entityKind', c.entity_kind, 'role', mc.role)) from app_private.manual_contributions mc join app_private.contributors c on c.id = mc.contributor_id where mc.game_id = g.id), '[]'::jsonb) as manual_contributions,
     (select case when mi.original_state = 'failed' or mi.thumbnail_state = 'failed' then 'failed' when mi.original_state = 'ready' and mi.thumbnail_state = 'ready' then 'ready' else 'pending' end from app_private.media_ingests mi where mi.game_id = g.id and mi.source_url = i.snapshot ->> 'coverUrl' limit 1) as cover_ingest_state`;
 
@@ -148,10 +151,12 @@ export class PostgresGameStore implements GameStore {
     return rows.map((row) => ({ kind: String(row.kind), sourceCategoryId: String(row.source_category_id), name: String(row.name) }));
   }
 
-  async get(id: string): Promise<GameRecord | null> {
-    const rows = await this.db.execute(this.selectFrom(sql`where g.id = ${id} limit 1`)) as Row[];
+  private async readGame(executor: QueryExecutor, id: string): Promise<GameRecord | null> {
+    const rows = await executor.execute(this.selectFrom(sql`where g.id = ${id} limit 1`)) as Row[];
     return rows[0] ? record(rows[0]) : null;
   }
+
+  async get(id: string): Promise<GameRecord | null> { return this.readGame(this.db, id); }
 
   async createManual(displayName: string, medium: Medium): Promise<GameRecord> {
     const title = displayName.trim();
@@ -206,9 +211,14 @@ export class PostgresGameStore implements GameStore {
       await this.writeSourceNames(tx, gameId, snapshot);
       await this.writeSourceRows(tx, identityId, snapshot);
       await this.writeSourceCoverIngest(tx, gameId, snapshot);
-      return { game: record({ ...gameRows[0], snapshot, custom_display_name: null, source_names: snapshotSourceNames(snapshot), actual_platforms: [], tags: [], manual_contributions: [] }), created: true };
+      return { gameId, created: true };
     };
-    try { return await this.db.transaction(run); }
+    try {
+      const created = await this.db.transaction(run);
+      const game = await this.get(created.gameId);
+      if (!game) throw new SourcePersistenceFailedError();
+      return { game, created: true };
+    }
     catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "23505") {
         const conflict = await this.db.execute(sql`select g.id, g.trashed_at from app_private.external_game_identities i join app_private.games g on g.external_game_identity_id = i.id where i.provider = ${ref.provider} and i.source_id = ${ref.sourceId} limit 1`) as Row[];
@@ -302,17 +312,82 @@ export class PostgresGameStore implements GameStore {
     return game;
   }
 
-  async addManualContribution(input: ManualContributionInput) {
-    const duplicateRows = await this.db.execute(sql`select 1 from app_private.contributors where lower(name) = lower(${input.name.trim()}) limit 1`) as Row[];
-    const run = async (tx: QueryExecutor) => {
-      const contributorRows = await tx.execute(sql`insert into app_private.contributors (name, entity_kind) values (${input.name.trim()}, ${input.entityKind}) returning id`) as Row[];
-      await tx.execute(sql`insert into app_private.manual_contributions (game_id, contributor_id, role) values (${input.gameId}, ${String(contributorRows[0].id)}, ${input.role})`);
-    };
-    if (!input.name.trim()) throw new Error("貢獻者名稱不可為空。");
-    await this.db.transaction(run);
-    const game = await this.get(input.gameId);
-    if (!game) throw new SourcePersistenceFailedError();
-    return { game, possibleDuplicate: duplicateRows.length > 0 };
+  private async readContributorMatches(executor: QueryExecutor, gameId: string, name: string): Promise<readonly ContributorMatch[]> {
+    const rows = await executor.execute(sql`
+      select c.id as contributor_id, c.name, c.entity_kind, c.source_provider, c.source_contributor_id,
+        coalesce((
+          select jsonb_agg(role order by role) from (
+            select mc.role from app_private.manual_contributions mc where mc.game_id = ${gameId} and mc.contributor_id = c.id
+            union
+            select sc.role from app_private.games g
+              join app_private.source_contributions sc on sc.identity_id = g.external_game_identity_id
+              where g.id = ${gameId} and sc.contributor_id = c.id
+          ) roles
+        ), '[]'::jsonb) as roles_on_game
+      from app_private.contributors c
+      where lower(btrim(c.name)) = ${normalized(name)}
+      order by c.id asc
+    `) as Row[];
+    return rows.map((row) => ({
+      contributorId: String(row.contributor_id),
+      name: String(row.name),
+      entityKind: row.entity_kind as ContributorMatch["entityKind"],
+      provider: row.source_provider === "bgg" || row.source_provider === "igdb" ? row.source_provider : null,
+      sourceContributorId: row.source_contributor_id === null ? null : String(row.source_contributor_id),
+      rolesOnGame: jsonArray<GameContribution["role"]>(row.roles_on_game),
+    }));
+  }
+
+  async findContributorMatches(gameId: string, name: string): Promise<readonly ContributorMatch[]> {
+    if (!name.trim()) return [];
+    return this.readContributorMatches(this.db, gameId, name);
+  }
+
+  async addManualContribution(input: ManualContributionInput | LegacyManualContributionInput): Promise<ManualContributionResult> {
+    const manualInput: ManualContributionInput = "kind" in input
+      ? input
+      : { kind: "new", gameId: input.gameId, name: input.name, entityKind: input.entityKind, role: input.role, allowDuplicate: false };
+    try {
+      const result = await this.db.transaction(async (tx) => {
+        const gameRows = await tx.execute(sql`select id from app_private.games where id = ${manualInput.gameId} for update`) as Row[];
+        if (!gameRows[0]) throw new SourcePersistenceFailedError();
+
+        if (manualInput.kind === "new") {
+          const name = manualInput.name.trim();
+          if (!name) throw new Error("貢獻者名稱不可為空。");
+          if (!manualInput.allowDuplicate) {
+            await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${normalized(name)}, 0))`);
+            const matches = await this.readContributorMatches(tx, manualInput.gameId, name);
+            if (matches.length > 0) return { status: "confirmation_required", matches, possibleDuplicate: true } as const;
+          }
+          const contributorRows = await tx.execute(sql`insert into app_private.contributors (name, entity_kind) values (${name}, ${manualInput.entityKind}) returning id`) as Row[];
+          await tx.execute(sql`insert into app_private.manual_contributions (game_id, contributor_id, role) values (${manualInput.gameId}, ${String(contributorRows[0].id)}, ${manualInput.role})`);
+          const game = await this.readGame(tx, manualInput.gameId);
+          if (!game) throw new SourcePersistenceFailedError();
+          return { status: "created", game, possibleDuplicate: false } as const;
+        }
+
+        const contributorRows = await tx.execute(sql`select id from app_private.contributors where id = ${manualInput.contributorId} for key share`) as Row[];
+        if (!contributorRows[0]) throw new SourcePersistenceFailedError();
+        const relationshipRows = await tx.execute(sql`
+          select 1 from app_private.games g
+          left join app_private.manual_contributions mc on mc.game_id = g.id and mc.contributor_id = ${manualInput.contributorId} and mc.role = ${manualInput.role}
+          left join app_private.source_contributions sc on sc.identity_id = g.external_game_identity_id and sc.contributor_id = ${manualInput.contributorId} and sc.role = ${manualInput.role}
+          where g.id = ${manualInput.gameId} and (mc.id is not null or sc.id is not null)
+          limit 1
+        `) as Row[];
+        if (relationshipRows[0]) throw new LibraryConflictError("library_contribution_exists", "此貢獻者已在此遊戲擁有相同分類。");
+        await tx.execute(sql`insert into app_private.manual_contributions (game_id, contributor_id, role) values (${manualInput.gameId}, ${manualInput.contributorId}, ${manualInput.role})`);
+        const game = await this.readGame(tx, manualInput.gameId);
+        if (!game) throw new SourcePersistenceFailedError();
+        return { status: "created", game, possibleDuplicate: false } as const;
+      });
+      return result;
+    } catch (error) {
+      if (error instanceof LibraryConflictError || error instanceof SourcePersistenceFailedError) throw error;
+      if (error && typeof error === "object" && "code" in error && error.code === "23505") throw new LibraryConflictError("library_contribution_exists", "此貢獻者已在此遊戲擁有相同分類。");
+      throw new SourcePersistenceFailedError();
+    }
   }
 
   async removeManualContribution(gameId: string, contributionId: string): Promise<GameRecord> {

@@ -16,7 +16,7 @@ type TestGamesService = Pick<GamesService, "linkExternalSource" | "refreshExtern
 
 function makeSetup() {
   const libraryService: TestLibraryService = {
-    addManualContribution: vi.fn(async () => ({ game: emptyGame, possibleDuplicate: true })),
+    addManualContribution: vi.fn(async () => ({ status: "created" as const, game: emptyGame, possibleDuplicate: false as const })),
     removeManualContribution: vi.fn(async () => emptyGame),
     editGame: vi.fn(async () => emptyGame),
     deletePlatform: vi.fn(async () => undefined),
@@ -53,12 +53,12 @@ describe("private mutation adapter", () => {
     expect(libraryService.editGame).not.toHaveBeenCalled();
   });
 
-  it("adds a contribution and returns only the duplicate hint", async () => {
+  it("保留既有 private action 的最小回應，以便 UI 逐步切換確認流程", async () => {
     const { adapter, libraryService } = makeSetup();
 
     const result = await adapter.addManualContribution({ gameId, name: "作者", entityKind: "person", role: "design" });
 
-    expect(result).toEqual({ ok: true, possibleDuplicate: true });
+    expect(result).toEqual({ ok: true, possibleDuplicate: false });
     expect(libraryService.addManualContribution).toHaveBeenCalledWith({ gameId, name: "作者", entityKind: "person", role: "design" });
   });
 

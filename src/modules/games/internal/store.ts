@@ -11,14 +11,46 @@ export type GameEditInput = Readonly<{
   playerCountNote?: string | null;
 }>;
 
-export type ManualContributionInput = Readonly<{
+type ContributionRole = Extract<GameContribution["role"], "design" | "art" | "publisher">;
+
+export type ContributorMatch = Readonly<{
+  contributorId: string;
+  name: string;
+  entityKind: "person" | "company";
+  provider: "bgg" | "igdb" | null;
+  sourceContributorId: string | null;
+  rolesOnGame: readonly ContributionRole[];
+}>;
+
+export type ExistingManualContributionInput = Readonly<{
+  kind: "existing";
+  gameId: string;
+  contributorId: string;
+  role: ContributionRole;
+}>;
+
+export type NewManualContributionInput = Readonly<{
+  kind: "new";
   gameId: string;
   name: string;
   entityKind: "person" | "company";
-  role: Extract<GameContribution["role"], "design" | "art" | "publisher">;
+  role: ContributionRole;
+  allowDuplicate: boolean;
 }>;
 
-export type ManualContributionResult = Readonly<{ game: GameRecord; possibleDuplicate: boolean }>;
+export type ManualContributionInput = ExistingManualContributionInput | NewManualContributionInput;
+
+/** @deprecated 僅供尚未切換確認流程的 private action 過渡使用。 */
+export type LegacyManualContributionInput = Readonly<{
+  gameId: string;
+  name: string;
+  entityKind: "person" | "company";
+  role: ContributionRole;
+}>;
+
+export type ManualContributionResult =
+  | Readonly<{ status: "created"; game: GameRecord; possibleDuplicate: false }>
+  | Readonly<{ status: "confirmation_required"; matches: readonly ContributorMatch[]; possibleDuplicate: true }>;
 export type SharedLibraryItem = Readonly<{ name: string; usageCount: number; isSystem: boolean }>;
 
 export type GameStore = {
@@ -31,7 +63,8 @@ export type GameStore = {
   linkFromSource(gameId: string, ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<GameRecord>;
   refreshSource(gameId: string, snapshot: SourceSnapshot): Promise<GameRecord>;
   edit(gameId: string, input: GameEditInput): Promise<GameRecord>;
-  addManualContribution(input: ManualContributionInput): Promise<ManualContributionResult>;
+  findContributorMatches(gameId: string, name: string): Promise<readonly ContributorMatch[]>;
+  addManualContribution(input: ManualContributionInput | LegacyManualContributionInput): Promise<ManualContributionResult>;
   removeManualContribution(gameId: string, contributionId: string): Promise<GameRecord>;
   deletePlatform(name: string): Promise<void>;
   deleteTag(name: string): Promise<void>;
@@ -57,30 +90,13 @@ function uniqueNames(values: readonly string[]): readonly string[] {
   return result;
 }
 
-function sourceContributions(snapshot: SourceSnapshot): readonly GameContribution[] {
-  return snapshot.contributors.map((contributor) => ({
-    id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}:${contributor.role}`,
-    contributorId: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}`,
-    name: contributor.name,
-    entityKind: contributor.entityKind,
-    role: contributor.role,
-    origin: "source" as const,
-    provider: snapshot.ref.provider,
-    sourceContributorId: contributor.sourceContributorId,
-  }));
-}
-
-function applySnapshot(game: GameRecord, snapshot: SourceSnapshot): GameRecord {
-  const nextName = game.customDisplayName ?? snapshot.title;
-  return {
-    ...game,
-    displayName: nextName,
-    sourceNames: sourceNames(snapshot),
-    aliases: snapshot.aliases,
-    snapshot,
-    contributors: [...sourceContributions(snapshot), ...game.contributors.filter((contributor) => contributor.origin === "manual")],
-  };
-}
+type ContributorEntity = Readonly<{
+  id: string;
+  name: string;
+  entityKind: "person" | "company";
+  provider: "bgg" | "igdb" | null;
+  sourceContributorId: string | null;
+}>;
 
 function assertVideoGamePlatforms(medium: Medium, platforms: readonly string[]) {
   if (medium === "board_game" && platforms.length > 0) throw new Error("桌遊不可設定實際平台。");
@@ -92,6 +108,41 @@ export class InMemoryGameStore implements GameStore {
   private readonly games = new Map<string, GameRecord>();
   private readonly identities = new Map<string, string>();
   private readonly locks = new Map<string, Promise<void>>();
+  private readonly contributors = new Map<string, ContributorEntity>();
+  private readonly sourceContributors = new Map<string, string>();
+
+  private sourceContributionsFor(snapshot: SourceSnapshot): readonly GameContribution[] {
+    return snapshot.contributors.map((contributor) => {
+      const sourceKey = `${snapshot.ref.provider}:${contributor.sourceContributorId}`;
+      const existingId = this.sourceContributors.get(sourceKey);
+      const entity: ContributorEntity = existingId
+        ? { id: existingId, name: contributor.name, entityKind: contributor.entityKind, provider: snapshot.ref.provider, sourceContributorId: contributor.sourceContributorId }
+        : { id: randomUUID(), name: contributor.name, entityKind: contributor.entityKind, provider: snapshot.ref.provider, sourceContributorId: contributor.sourceContributorId };
+      this.contributors.set(entity.id, entity);
+      this.sourceContributors.set(sourceKey, entity.id);
+      return { id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}:${contributor.role}`, contributorId: entity.id, name: entity.name, entityKind: entity.entityKind, role: contributor.role, origin: "source" as const, provider: entity.provider, sourceContributorId: entity.sourceContributorId };
+    });
+  }
+
+  private matchesFor(game: GameRecord, name: string): readonly ContributorMatch[] {
+    const key = normalize(name);
+    return [...this.contributors.values()]
+      .filter((contributor) => normalize(contributor.name) === key)
+      .map((contributor) => ({
+        contributorId: contributor.id,
+        name: contributor.name,
+        entityKind: contributor.entityKind,
+        provider: contributor.provider,
+        sourceContributorId: contributor.sourceContributorId,
+        rolesOnGame: game.contributors.filter((item) => item.contributorId === contributor.id).map((item) => item.role),
+      }));
+  }
+
+  private assertContributionIsNew(game: GameRecord, contributorId: string, role: ContributionRole): void {
+    if (game.contributors.some((item) => item.contributorId === contributorId && item.role === role)) {
+      throw new LibraryConflictError("library_contribution_exists", "此貢獻者已在此遊戲擁有相同分類。");
+    }
+  }
 
   async list(query = ""): Promise<readonly GameRecord[]> {
     const normalized = query.trim().toLocaleLowerCase("en-US");
@@ -131,7 +182,7 @@ export class InMemoryGameStore implements GameStore {
         const existing = this.games.get(existingId);
         if (existing) throw new SourceIdentityConflictError(existing.id, existing.trashedAt !== null);
       }
-      const game: GameRecord = { id: randomUUID(), medium: ref.medium, displayName: snapshot.title, customDisplayName: null, sourceNames: sourceNames(snapshot), aliases: snapshot.aliases, actualPlatforms: [], tags: [], contributors: sourceContributions(snapshot), playerCountNote: null, coverIngestState: null, trashedAt: null, externalIdentityId: randomUUID(), snapshot, createdAt: new Date().toISOString() };
+      const game: GameRecord = { id: randomUUID(), medium: ref.medium, displayName: snapshot.title, customDisplayName: null, sourceNames: sourceNames(snapshot), aliases: snapshot.aliases, actualPlatforms: [], tags: [], contributors: this.sourceContributionsFor(snapshot), playerCountNote: null, coverIngestState: null, trashedAt: null, externalIdentityId: randomUUID(), snapshot, createdAt: new Date().toISOString() };
       this.games.set(game.id, game);
       this.identities.set(key, game.id);
       return { game, created: true };
@@ -151,7 +202,7 @@ export class InMemoryGameStore implements GameStore {
       const existing = this.games.get(existingId);
       if (existing) throw new SourceIdentityConflictError(existing.id, existing.trashedAt !== null);
     }
-    const linked = { ...game, displayName: game.customDisplayName ?? snapshot.title, sourceNames: sourceNames(snapshot), aliases: snapshot.aliases, externalIdentityId: randomUUID(), snapshot, contributors: [...sourceContributions(snapshot), ...game.contributors.filter((contributor) => contributor.origin === "manual")] };
+    const linked = { ...game, displayName: game.customDisplayName ?? snapshot.title, sourceNames: sourceNames(snapshot), aliases: snapshot.aliases, externalIdentityId: randomUUID(), snapshot, contributors: [...this.sourceContributionsFor(snapshot), ...game.contributors.filter((contributor) => contributor.origin === "manual")] };
     this.games.set(gameId, linked);
     this.identities.set(`${ref.provider}:${ref.sourceId}`, gameId);
     return linked;
@@ -160,7 +211,14 @@ export class InMemoryGameStore implements GameStore {
   async refreshSource(gameId: string, snapshot: SourceSnapshot): Promise<GameRecord> {
     const game = this.games.get(gameId);
     if (!game || !game.externalIdentityId) throw new Error("遊戲尚未連結來源。");
-    const refreshed = applySnapshot(game, snapshot);
+    const refreshed = {
+      ...game,
+      displayName: game.customDisplayName ?? snapshot.title,
+      sourceNames: sourceNames(snapshot),
+      aliases: snapshot.aliases,
+      snapshot,
+      contributors: [...this.sourceContributionsFor(snapshot), ...game.contributors.filter((contributor) => contributor.origin === "manual")],
+    };
     this.games.set(gameId, refreshed);
     return refreshed;
   }
@@ -177,17 +235,36 @@ export class InMemoryGameStore implements GameStore {
     return updated;
   }
 
-  async addManualContribution(input: ManualContributionInput): Promise<ManualContributionResult> {
+  async findContributorMatches(gameId: string, name: string): Promise<readonly ContributorMatch[]> {
+    const game = this.games.get(gameId);
+    if (!game) throw new Error("找不到遊戲條目。");
+    return this.matchesFor(game, name);
+  }
+
+  async addManualContribution(input: ManualContributionInput | LegacyManualContributionInput): Promise<ManualContributionResult> {
     const game = this.games.get(input.gameId);
     if (!game) throw new Error("找不到遊戲條目。");
-    const name = input.name.trim();
-    if (!name) throw new Error("貢獻者名稱不可為空。");
-    const possibleDuplicate = [...this.games.values()].some((item) => item.contributors.some((contributor) => contributor.name.toLocaleLowerCase("en-US") === name.toLocaleLowerCase("en-US")));
-    const contributionId = randomUUID();
-    const contribution: GameContribution = { id: contributionId, contributorId: contributionId, name, entityKind: input.entityKind, role: input.role, origin: "manual", provider: null, sourceContributorId: null };
+    if (!("kind" in input) || input.kind === "new") {
+      const name = input.name.trim();
+      if (!name) throw new Error("貢獻者名稱不可為空。");
+      const allowDuplicate = "kind" in input && input.kind === "new" ? input.allowDuplicate : false;
+      const matches = this.matchesFor(game, name);
+      if (matches.length > 0 && !allowDuplicate) return { status: "confirmation_required", matches, possibleDuplicate: true };
+      const contributorId = randomUUID();
+      const contributor: ContributorEntity = { id: contributorId, name, entityKind: input.entityKind, provider: null, sourceContributorId: null };
+      this.contributors.set(contributorId, contributor);
+      const contribution: GameContribution = { id: randomUUID(), contributorId, name, entityKind: contributor.entityKind, role: input.role, origin: "manual", provider: null, sourceContributorId: null };
+      const updated = { ...game, contributors: [...game.contributors, contribution] };
+      this.games.set(game.id, updated);
+      return { status: "created", game: updated, possibleDuplicate: false };
+    }
+    const contributor = this.contributors.get(input.contributorId);
+    if (!contributor) throw new Error("找不到貢獻者。");
+    this.assertContributionIsNew(game, contributor.id, input.role);
+    const contribution: GameContribution = { id: randomUUID(), contributorId: contributor.id, name: contributor.name, entityKind: contributor.entityKind, role: input.role, origin: "manual", provider: null, sourceContributorId: null };
     const updated = { ...game, contributors: [...game.contributors, contribution] };
     this.games.set(game.id, updated);
-    return { game: updated, possibleDuplicate };
+    return { status: "created", game: updated, possibleDuplicate: false };
   }
 
   async removeManualContribution(gameId: string, contributionId: string): Promise<GameRecord> {
@@ -249,6 +326,7 @@ export class UnavailableGameStore implements GameStore {
   async linkFromSource(): Promise<GameRecord> { return this.fail(); }
   async refreshSource(): Promise<GameRecord> { return this.fail(); }
   async edit(): Promise<GameRecord> { return this.fail(); }
+  async findContributorMatches(): Promise<readonly ContributorMatch[]> { return this.fail(); }
   async addManualContribution(): Promise<ManualContributionResult> { return this.fail(); }
   async removeManualContribution(): Promise<GameRecord> { return this.fail(); }
   async deletePlatform(): Promise<void> { this.fail(); }

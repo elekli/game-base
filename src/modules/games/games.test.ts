@@ -94,7 +94,9 @@ describe("games service", () => {
   it("手動條目首次連結保留自訂資料與手動貢獻", async () => {
     const { service, store } = setup();
     const manual = await service.createManualGame({ displayName: "我的名稱", medium: "board_game" });
-    const withManual = (await store.addManualContribution({ gameId: manual.id, name: "我的作者", entityKind: "person", role: "design" })).game;
+    const manualContribution = await store.addManualContribution({ kind: "new", gameId: manual.id, name: "我的作者", entityKind: "person", role: "design", allowDuplicate: false });
+    if (manualContribution.status !== "created") throw new Error("expected created manual contribution");
+    const withManual = manualContribution.game;
     const ref = { provider: "bgg" as const, medium: "board_game" as const, sourceId: "1" };
     const confirmation = await service.getExternalGameConfirmation({ ref });
     const linked = await service.linkExternalSource({ gameId: manual.id, ref, confirmationFingerprint: confirmation.fingerprint });
@@ -110,7 +112,7 @@ describe("games service", () => {
     const confirmation = await service.getExternalGameConfirmation({ ref });
     const created = await service.createGameFromExternalSource({ ref, confirmationFingerprint: confirmation.fingerprint });
     await store.edit(created.game.id, { displayName: "收藏名稱", tags: ["合作"] });
-    await store.addManualContribution({ gameId: created.game.id, name: "手動作者", entityKind: "person", role: "art" });
+    await store.addManualContribution({ kind: "new", gameId: created.game.id, name: "手動作者", entityKind: "person", role: "art", allowDuplicate: false });
     bgg.setSnapshot({ ...confirmation.snapshot, title: "來源更新", aliases: ["新別名"], categories: [{ kind: "category", sourceCategoryId: "9", name: "策略" }] });
     const refreshed = await service.refreshExternalMetadata({ gameId: created.game.id });
     expect(refreshed.displayName).toBe("收藏名稱");

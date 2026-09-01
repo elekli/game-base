@@ -1,12 +1,13 @@
 import { clearIncompatibleSourceCategories, type LibraryFilters } from "./internal/filters";
-import type { GameRecord, Medium, SourceCategory } from "@/modules/games";
-import type { GameEditInput, GameStore, ManualContributionInput, ManualContributionResult, SharedLibraryItem } from "@/modules/games";
+import type { ContributorMatch, GameRecord, Medium, SourceCategory } from "@/modules/games";
+import type { GameEditInput, GameStore, LegacyManualContributionInput, ManualContributionInput, ManualContributionResult, SharedLibraryItem } from "@/modules/games";
 
 export type LibraryService = Readonly<{
   listGames(filters?: LibraryFilters): Promise<readonly GameRecord[]>;
   listSourceCategoryFacets(media: readonly Medium[]): Promise<readonly SourceCategory[]>;
   editGame(gameId: string, input: GameEditInput): Promise<GameRecord>;
-  addManualContribution(input: ManualContributionInput): Promise<ManualContributionResult>;
+  findContributorMatches(gameId: string, name: string): Promise<readonly ContributorMatch[]>;
+  addManualContribution(input: ManualContributionInput | LegacyManualContributionInput): Promise<ManualContributionResult>;
   removeManualContribution(gameId: string, contributionId: string): Promise<GameRecord>;
   deletePlatform(name: string): Promise<void>;
   deleteTag(name: string): Promise<void>;
@@ -36,6 +37,7 @@ export function createLibraryService(store: GameStore): LibraryService {
       return media.length === 1 ? store.listSourceCategoryFacets(media[0]) : Promise.resolve([]);
     },
     editGame(gameId, input) { return store.edit(gameId, input); },
+    findContributorMatches(gameId, name) { return store.findContributorMatches(gameId, name); },
     addManualContribution(input) { return store.addManualContribution(input); },
     removeManualContribution(gameId, contributionId) { return store.removeManualContribution(gameId, contributionId); },
     deletePlatform(name) { return store.deletePlatform(name); },

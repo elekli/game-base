@@ -105,28 +105,88 @@ describe("library service", () => {
     await expect(service.editGame(board.id, { actualPlatforms: ["Steam"] })).rejects.toThrow("桌遊不可設定實際平台");
   });
 
-  it("手動貢獻可新增與移除，來源貢獻不會被移除命令刪掉", async () => {
+  it("首次手動貢獻會建立全庫 contributor 實體", async () => {
     const store = new InMemoryGameStore();
     const game = await store.createManual("手動條目", "board_game");
     const service = createLibraryService(store);
-    const result = await service.addManualContribution({ gameId: game.id, name: "  作者 ", entityKind: "person", role: "design" });
+    const result = await service.addManualContribution({ kind: "new", gameId: game.id, name: "  作者 ", entityKind: "person", role: "design", allowDuplicate: false });
+
+    expect(result.status).toBe("created");
+    if (result.status !== "created") throw new Error("expected created contribution");
     const withContributor = result.game;
     const manual = withContributor.contributors.find((item) => item.origin === "manual");
     expect(manual?.name).toBe("作者");
-    expect(result.possibleDuplicate).toBe(false);
     const removed = await service.removeManualContribution(game.id, manual?.id ?? "missing");
     expect(removed.contributors).toHaveLength(0);
   });
 
-  it("同名手動貢獻只提示可能重複，使用中的平台與標籤不能刪除", async () => {
+  it("同名未確認時回傳 matches 且不寫 contributor 或關係", async () => {
+    const store = new InMemoryGameStore();
+    const service = createLibraryService(store);
+    const game = await store.createManual("電子遊戲", "video_game");
+    const first = await service.addManualContribution({ kind: "new", gameId: game.id, name: "同名作者", entityKind: "person", role: "design", allowDuplicate: false });
+    if (first.status !== "created") throw new Error("expected initial contributor");
+    const before = await store.get(game.id);
+    const second = await service.addManualContribution({ kind: "new", gameId: game.id, name: " 同名作者 ", entityKind: "person", role: "art", allowDuplicate: false });
+
+    expect(second).toMatchObject({ status: "confirmation_required", matches: [{ contributorId: first.game.contributors[0].contributorId, name: "同名作者", rolesOnGame: ["design"] }] });
+    expect(await store.get(game.id)).toEqual(before);
+    expect(await service.findContributorMatches(game.id, " 同名作者 ")).toHaveLength(1);
+  });
+
+  it("可重用同一 contributor 到同一遊戲的不同 role", async () => {
+    const store = new InMemoryGameStore();
+    const service = createLibraryService(store);
+    const game = await store.createManual("電子遊戲", "video_game");
+    const created = await service.addManualContribution({ kind: "new", gameId: game.id, name: "同名作者", entityKind: "person", role: "design", allowDuplicate: false });
+    if (created.status !== "created") throw new Error("expected initial contributor");
+    const contributorId = created.game.contributors[0].contributorId;
+
+    const reused = await service.addManualContribution({ kind: "existing", gameId: game.id, contributorId, role: "art" });
+
+    expect(reused.status).toBe("created");
+    if (reused.status !== "created") throw new Error("expected reused contributor");
+    expect(reused.game.contributors.filter((item) => item.origin === "manual").map((item) => [item.contributorId, item.role])).toEqual([[contributorId, "design"], [contributorId, "art"]]);
+    await expect(service.addManualContribution({ kind: "existing", gameId: game.id, contributorId, role: "design" })).rejects.toThrow("相同分類");
+  });
+
+  it("確認同名後仍可建立不同 contributor 實體", async () => {
+    const store = new InMemoryGameStore();
+    const service = createLibraryService(store);
+    const game = await store.createManual("電子遊戲", "video_game");
+    const first = await service.addManualContribution({ kind: "new", gameId: game.id, name: "同名作者", entityKind: "person", role: "design", allowDuplicate: false });
+    if (first.status !== "created") throw new Error("expected initial contributor");
+
+    const duplicate = await service.addManualContribution({ kind: "new", gameId: game.id, name: " 同名作者 ", entityKind: "person", role: "art", allowDuplicate: true });
+
+    expect(duplicate.status).toBe("created");
+    if (duplicate.status !== "created") throw new Error("expected duplicate contributor");
+    const manualContributorIds = duplicate.game.contributors.filter((item) => item.origin === "manual").map((item) => item.contributorId);
+    expect(manualContributorIds).toHaveLength(2);
+    expect(manualContributorIds[1]).not.toBe(first.game.contributors[0].contributorId);
+  });
+
+  it("來源 contributor 可被手動關係重用，且 refresh 保留手動關係", async () => {
+    const store = new InMemoryGameStore();
+    const service = createLibraryService(store);
+    const snapshot = { ref: { provider: "bgg" as const, medium: "board_game" as const, sourceId: "source-contributor-reuse" }, canonicalUrl: "https://example.test/source-contributor-reuse", title: "來源遊戲", localizedTitle: null, aliases: [], description: null, releaseYear: null, coverUrl: null, categories: [], contributors: [{ sourceContributorId: "source-author", name: "來源作者", entityKind: "person" as const, role: "design" as const }], minPlayers: null, maxPlayers: null, supportsSolo: "unknown" as const, playtimeMinutes: null, weight: null, strategyRank: null, supportedPlatforms: [] };
+    const created = await store.createFromSource(snapshot.ref, snapshot);
+    const sourceContributor = created.game.contributors[0];
+    expect(await service.findContributorMatches(created.game.id, " 來源作者 ")).toMatchObject([{ contributorId: sourceContributor.contributorId, provider: "bgg", sourceContributorId: "source-author", rolesOnGame: ["design"] }]);
+
+    const reused = await service.addManualContribution({ kind: "existing", gameId: created.game.id, contributorId: sourceContributor.contributorId, role: "art" });
+    if (reused.status !== "created") throw new Error("expected source contributor reuse");
+    const refreshed = await store.refreshSource(created.game.id, { ...snapshot, title: "來源遊戲更新" });
+
+    expect(reused.game.contributors.find((item) => item.origin === "manual")?.contributorId).toBe(sourceContributor.contributorId);
+    expect(refreshed.contributors.filter((item) => item.origin === "manual").map((item) => item.contributorId)).toEqual([sourceContributor.contributorId]);
+  });
+
+  it("使用中的平台與標籤不能刪除", async () => {
     const store = new InMemoryGameStore();
     const service = createLibraryService(store);
     const game = await store.createManual("電子遊戲", "video_game");
     await service.editGame(game.id, { actualPlatforms: ["自訂平台"], tags: ["合作"] });
-    const first = await service.addManualContribution({ gameId: game.id, name: "同名作者", entityKind: "person", role: "design" });
-    const second = await service.addManualContribution({ gameId: game.id, name: " 同名作者 ", entityKind: "person", role: "art" });
-    expect(first.possibleDuplicate).toBe(false);
-    expect(second.possibleDuplicate).toBe(true);
     await expect(service.deletePlatform(" 自訂平台 ")).rejects.toThrow("仍有遊戲使用");
     await expect(service.deleteTag("合作")).rejects.toThrow("仍有遊戲使用");
     await expect(service.deletePlatform("PS5")).rejects.toThrow("系統預設平台不可刪除");
