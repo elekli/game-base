@@ -15,6 +15,7 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run --exclude 'tests/integration/**'",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:database": "DIRECT_DATABASE_URL=${DIRECT_DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:54322/postgres} vitest run --config vitest.database.config.ts",
     "test:e2e": "playwright test",
     "integrity:check": "tsx scripts/check-integrity.ts",
     "environment:check": "tsx scripts/check-environment.ts",

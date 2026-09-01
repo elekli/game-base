@@ -6,9 +6,11 @@ import { SourceIdentityConflictError, SourceMediumMismatchError, SourcePersisten
 import { beginSourceCoverIngest, isAllowedSourceCoverUrl } from "@/modules/media/internal/source-cover-ingest";
 import { LibraryConflictError } from "@/modules/library/internal/errors";
 
-type Executor = Readonly<{
+export type QueryExecutor = Readonly<{
   execute(query: SQL): Promise<unknown>;
-  transaction?<T>(callback: (tx: Executor) => Promise<T>): Promise<T>;
+}>;
+export type ProductionExecutor = QueryExecutor & Readonly<{
+  transaction<T>(callback: (tx: QueryExecutor) => Promise<T>): Promise<T>;
 }>;
 type Row = Readonly<Record<string, unknown>>;
 
@@ -76,7 +78,7 @@ function uniqueNames(values: readonly string[]): readonly string[] {
 }
 
 export class PostgresGameStore implements GameStore {
-  constructor(private readonly db: Executor) {}
+  constructor(private readonly db: ProductionExecutor) {}
 
   private readonly selectFields = sql`g.id, g.medium, g.display_name, g.player_count_note, g.external_game_identity_id, g.trashed_at, g.created_at, custom_name.name as custom_display_name, i.snapshot,
     coalesce((select jsonb_agg(gn.name order by gn.id) from app_private.game_names gn where gn.game_id = g.id and gn.name_kind in ('source', 'alias')), '[]'::jsonb) as source_names,
@@ -104,23 +106,23 @@ export class PostgresGameStore implements GameStore {
   async createManual(displayName: string, medium: Medium): Promise<GameRecord> {
     const title = displayName.trim();
     if (!title) throw new Error("手動遊戲名稱不可為空。");
-    const run = async (tx: Executor) => {
+    const run = async (tx: QueryExecutor) => {
       const rows = await tx.execute(sql`insert into app_private.games (medium, display_name) values (${medium}, ${title}) returning id, medium, display_name, player_count_note, external_game_identity_id, trashed_at, created_at`) as Row[];
       await tx.execute(sql`insert into app_private.game_names (game_id, name, name_kind) values (${String(rows[0].id)}, ${title}, 'custom')`);
       return rows[0];
     };
-    const row = this.db.transaction ? await this.db.transaction(run) : await run(this.db);
+    const row = await this.db.transaction(run);
     return record({ ...row, custom_display_name: title, source_names: [], actual_platforms: [], tags: [], manual_contributions: [] });
   }
 
-  private async writeSourceRows(tx: Executor, identityId: string, snapshot: SourceSnapshot) {
+  private async writeSourceRows(tx: QueryExecutor, identityId: string, snapshot: SourceSnapshot) {
     const rows = sourceRows(snapshot);
     for (const category of rows.categories) {
       const categoryRows = await tx.execute(sql`insert into app_private.source_categories (provider, category_kind, source_category_id, name) values (${snapshot.ref.provider}, ${category.kind}, ${category.sourceCategoryId}, ${category.name}) on conflict (provider, category_kind, source_category_id) do update set name = excluded.name returning id`) as Row[];
       await tx.execute(sql`insert into app_private.external_game_categories (identity_id, category_id) values (${identityId}, ${String(categoryRows[0].id)}) on conflict do nothing`);
     }
     for (const contributor of rows.contributors) {
-      const contributorRows = await tx.execute(sql`insert into app_private.contributors (name, entity_kind, source_provider, source_contributor_id) values (${contributor.name}, ${contributor.entityKind}, ${snapshot.ref.provider}, ${contributor.sourceContributorId}) on conflict (source_provider, source_contributor_id) do update set name = excluded.name, entity_kind = excluded.entity_kind returning id`) as Row[];
+      const contributorRows = await tx.execute(sql`insert into app_private.contributors (name, entity_kind, source_provider, source_contributor_id) values (${contributor.name}, ${contributor.entityKind}, ${snapshot.ref.provider}, ${contributor.sourceContributorId}) on conflict (source_provider, source_contributor_id) where source_provider is not null do update set name = excluded.name, entity_kind = excluded.entity_kind returning id`) as Row[];
       await tx.execute(sql`insert into app_private.source_contributions (identity_id, contributor_id, source_contributor_id, name, entity_kind, role) values (${identityId}, ${String(contributorRows[0].id)}, ${contributor.sourceContributorId}, ${contributor.name}, ${contributor.entityKind}, ${contributor.role}) on conflict (identity_id, source_contributor_id, role) do update set contributor_id = excluded.contributor_id, name = excluded.name, entity_kind = excluded.entity_kind`);
     }
     if (snapshot.minPlayers !== null || snapshot.maxPlayers !== null) {
@@ -132,21 +134,21 @@ export class PostgresGameStore implements GameStore {
     if (snapshot.ref.provider === "bgg") await tx.execute(sql`insert into app_private.bgg_current_metrics (identity_id, weight, strategy_rank, last_successful_sync_at) values (${identityId}, ${snapshot.weight}, ${snapshot.strategyRank}, now()) on conflict (identity_id) do update set weight = excluded.weight, strategy_rank = excluded.strategy_rank, last_successful_sync_at = excluded.last_successful_sync_at`);
   }
 
-  private async writeSourceNames(tx: Executor, gameId: string, snapshot: SourceSnapshot) {
+  private async writeSourceNames(tx: QueryExecutor, gameId: string, snapshot: SourceSnapshot) {
     await tx.execute(sql`delete from app_private.game_names where game_id = ${gameId} and name_kind in ('source', 'alias')`);
     await tx.execute(sql`insert into app_private.game_names (game_id, name, name_kind) values (${gameId}, ${snapshot.title}, 'source') on conflict do nothing`);
     if (snapshot.localizedTitle) await tx.execute(sql`insert into app_private.game_names (game_id, name, name_kind) values (${gameId}, ${snapshot.localizedTitle}, 'source') on conflict do nothing`);
     for (const alias of uniqueNames(snapshot.aliases)) await tx.execute(sql`insert into app_private.game_names (game_id, name, name_kind) values (${gameId}, ${alias}, 'alias') on conflict do nothing`);
   }
 
-  private async writeSourceCoverIngest(tx: Executor, gameId: string, snapshot: SourceSnapshot) {
+  private async writeSourceCoverIngest(tx: QueryExecutor, gameId: string, snapshot: SourceSnapshot) {
     if (!snapshot.coverUrl || !isAllowedSourceCoverUrl(snapshot.coverUrl)) return;
     const ingest = beginSourceCoverIngest(gameId, snapshot.coverUrl);
     await tx.execute(sql`insert into app_private.media_ingests (id, game_id, source_url, object_key, original_state, thumbnail_state) values (${ingest.id}, ${gameId}, ${ingest.sourceUrl}, ${ingest.objectKey}, ${ingest.originalState}, ${ingest.thumbnailState}) on conflict (object_key) do update set original_state = case when media_ingests.original_state = 'failed' then 'pending' else media_ingests.original_state end, thumbnail_state = case when media_ingests.thumbnail_state = 'failed' then 'pending' else media_ingests.thumbnail_state end`);
   }
 
   async createFromSource(ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<{ game: GameRecord; created: boolean }> {
-    const run = async (tx: Executor) => {
+    const run = async (tx: QueryExecutor) => {
       const identityRows = await tx.execute(sql`insert into app_private.external_game_identities (provider, source_id, medium, snapshot) values (${ref.provider}, ${ref.sourceId}, ${ref.medium}, ${JSON.stringify(snapshot)}::jsonb) returning id`) as Row[];
       const identityId = String(identityRows[0].id);
       const gameRows = await tx.execute(sql`insert into app_private.games (medium, display_name, external_game_identity_id) values (${ref.medium}, ${snapshot.title}, ${identityId}) returning id, medium, display_name, player_count_note, external_game_identity_id, trashed_at, created_at`) as Row[];
@@ -156,7 +158,7 @@ export class PostgresGameStore implements GameStore {
       await this.writeSourceCoverIngest(tx, gameId, snapshot);
       return { game: record({ ...gameRows[0], snapshot, custom_display_name: null, source_names: snapshotSourceNames(snapshot), actual_platforms: [], tags: [], manual_contributions: [] }), created: true };
     };
-    try { return this.db.transaction ? await this.db.transaction(run) : await run(this.db); }
+    try { return await this.db.transaction(run); }
     catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "23505") {
         const conflict = await this.db.execute(sql`select g.id, g.trashed_at from app_private.external_game_identities i join app_private.games g on g.external_game_identity_id = i.id where i.provider = ${ref.provider} and i.source_id = ${ref.sourceId} limit 1`) as Row[];
@@ -167,7 +169,7 @@ export class PostgresGameStore implements GameStore {
   }
 
   async linkFromSource(gameId: string, ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<GameRecord> {
-    const run = async (tx: Executor) => {
+    const run = async (tx: QueryExecutor) => {
       const gameRows = await tx.execute(sql`select id, medium, external_game_identity_id, trashed_at from app_private.games where id = ${gameId} for update`) as Row[];
       if (!gameRows[0]) throw new SourcePersistenceFailedError();
       if (gameRows[0].external_game_identity_id) throw new SourcePersistenceFailedError();
@@ -181,7 +183,7 @@ export class PostgresGameStore implements GameStore {
       await this.writeSourceRows(tx, identityId, snapshot);
       await this.writeSourceCoverIngest(tx, gameId, snapshot);
     };
-    try { if (this.db.transaction) await this.db.transaction(run); else await run(this.db); }
+    try { await this.db.transaction(run); }
     catch (error) {
       if (error instanceof SourceIdentityConflictError || error instanceof SourceMediumMismatchError) throw error;
       if (error && typeof error === "object" && "code" in error && error.code === "23505") {
@@ -196,7 +198,7 @@ export class PostgresGameStore implements GameStore {
   }
 
   async refreshSource(gameId: string, snapshot: SourceSnapshot): Promise<GameRecord> {
-    const run = async (tx: Executor) => {
+    const run = async (tx: QueryExecutor) => {
       const rows = await tx.execute(sql`select g.external_game_identity_id from app_private.games g where g.id = ${gameId} and g.external_game_identity_id is not null for update`) as Row[];
       if (!rows[0]) throw new SourcePersistenceFailedError();
       const identityId = String(rows[0].external_game_identity_id);
@@ -209,7 +211,7 @@ export class PostgresGameStore implements GameStore {
       await tx.execute(sql`update app_private.games set display_name = coalesce((select name from app_private.game_names where game_id = ${gameId} and name_kind = 'custom'), ${snapshot.title}) where id = ${gameId}`);
       await this.writeSourceCoverIngest(tx, gameId, snapshot);
     };
-    if (this.db.transaction) await this.db.transaction(run); else await run(this.db);
+    await this.db.transaction(run);
     const game = await this.get(gameId);
     if (!game) throw new SourcePersistenceFailedError();
     return game;
@@ -221,10 +223,10 @@ export class PostgresGameStore implements GameStore {
     const actualPlatforms = input.actualPlatforms === undefined ? current.actualPlatforms : uniqueNames(input.actualPlatforms);
     assertVideoGamePlatforms(current.medium, actualPlatforms);
     const tags = input.tags === undefined ? current.tags : uniqueNames(input.tags);
-    const run = async (tx: Executor) => {
+    const run = async (tx: QueryExecutor) => {
       if (input.displayName !== undefined) {
         if (input.displayName === null || !input.displayName.trim()) await tx.execute(sql`delete from app_private.game_names where game_id = ${gameId} and name_kind = 'custom'`);
-        else await tx.execute(sql`insert into app_private.game_names (game_id, name, name_kind) values (${gameId}, ${input.displayName.trim()}, 'custom') on conflict (game_id, name_kind) do update set name = excluded.name`);
+        else await tx.execute(sql`insert into app_private.game_names (game_id, name, name_kind) values (${gameId}, ${input.displayName.trim()}, 'custom') on conflict (game_id, name_kind) where name_kind = 'custom' do update set name = excluded.name`);
       }
       if (input.actualPlatforms !== undefined) {
         await tx.execute(sql`delete from app_private.game_platforms where game_id = ${gameId}`);
@@ -244,7 +246,7 @@ export class PostgresGameStore implements GameStore {
       if (input.displayName !== undefined && input.displayName !== null && input.displayName.trim()) await tx.execute(sql`update app_private.games set display_name = ${input.displayName.trim()} where id = ${gameId}`);
       else if (input.displayName === null || (input.displayName !== undefined && !input.displayName.trim())) await tx.execute(sql`update app_private.games set display_name = coalesce((select name from app_private.game_names where game_id = ${gameId} and name_kind = 'source' order by id limit 1), display_name) where id = ${gameId}`);
     };
-    if (this.db.transaction) await this.db.transaction(run); else await run(this.db);
+    await this.db.transaction(run);
     const game = await this.get(gameId);
     if (!game) throw new SourcePersistenceFailedError();
     return game;
@@ -252,12 +254,12 @@ export class PostgresGameStore implements GameStore {
 
   async addManualContribution(input: ManualContributionInput) {
     const duplicateRows = await this.db.execute(sql`select 1 from app_private.contributors where lower(name) = lower(${input.name.trim()}) limit 1`) as Row[];
-    const run = async (tx: Executor) => {
+    const run = async (tx: QueryExecutor) => {
       const contributorRows = await tx.execute(sql`insert into app_private.contributors (name, entity_kind) values (${input.name.trim()}, ${input.entityKind}) returning id`) as Row[];
       await tx.execute(sql`insert into app_private.manual_contributions (game_id, contributor_id, role) values (${input.gameId}, ${String(contributorRows[0].id)}, ${input.role})`);
     };
     if (!input.name.trim()) throw new Error("貢獻者名稱不可為空。");
-    if (this.db.transaction) await this.db.transaction(run); else await run(this.db);
+    await this.db.transaction(run);
     const game = await this.get(input.gameId);
     if (!game) throw new SourcePersistenceFailedError();
     return { game, possibleDuplicate: duplicateRows.length > 0 };
