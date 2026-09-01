@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createGamesService } from ".";
 import { SourceContentChangedError } from "./internal/errors";
 import { InMemoryGameStore } from "./internal/store";
@@ -18,6 +18,46 @@ describe("games service", () => {
     const result = await service.searchExternalGames({ query: "同名" });
     expect(result.groups.find((group) => group.provider === "bgg")?.errorCode).toBe("source_unavailable");
     expect(result.groups.find((group) => group.provider === "igdb")?.items).toHaveLength(1);
+  });
+
+  it("依桌遊媒介只搜尋 BGG，並維持單一來源結果群組", async () => {
+    const { service, bgg, igdb } = setup();
+    const bggSearch = vi.spyOn(bgg, "search");
+    const igdbSearch = vi.spyOn(igdb, "search");
+
+    const result = await service.searchExternalGamesForMedium({ query: "同名", medium: "board_game" });
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.provider).toBe("bgg");
+    expect(result.groups[0]?.items).toHaveLength(1);
+    expect(bggSearch).toHaveBeenCalledOnce();
+    expect(igdbSearch).not.toHaveBeenCalled();
+  });
+
+  it("單一媒介來源失敗時回該來源錯誤與空結果，不呼叫另一來源", async () => {
+    const { service, bgg, igdb } = setup();
+    const bggSearch = vi.spyOn(bgg, "search");
+    const igdbSearch = vi.spyOn(igdb, "search");
+    igdb.setScenario("rate_limited");
+
+    const result = await service.searchExternalGamesForMedium({ query: "同名", medium: "video_game" });
+
+    expect(result.groups).toEqual([
+      { provider: "igdb", items: [], errorCode: "source_rate_limited" },
+    ]);
+    expect(igdbSearch).toHaveBeenCalledOnce();
+    expect(bggSearch).not.toHaveBeenCalled();
+  });
+
+  it("單一媒介搜尋沿用空白與過長查詢的無效錯誤，且不呼叫來源", async () => {
+    const { service, bgg, igdb } = setup();
+    const bggSearch = vi.spyOn(bgg, "search");
+    const igdbSearch = vi.spyOn(igdb, "search");
+
+    await expect(service.searchExternalGamesForMedium({ query: "   ", medium: "board_game" })).rejects.toMatchObject({ sourceCode: "source_query_invalid" });
+    await expect(service.searchExternalGamesForMedium({ query: "x".repeat(121), medium: "video_game" })).rejects.toMatchObject({ sourceCode: "source_query_invalid" });
+    expect(bggSearch).not.toHaveBeenCalled();
+    expect(igdbSearch).not.toHaveBeenCalled();
   });
 
   it("fresh fingerprint 改變時零寫入", async () => {

@@ -19,6 +19,7 @@ import type {
 
 export type GamesService = Readonly<{
   searchExternalGames(input: Readonly<{ query: string }>): Promise<Readonly<{ groups: readonly { provider: Provider; items: readonly NormalizedSearchCandidate[]; errorCode: string | null }[] }>>;
+  searchExternalGamesForMedium(input: Readonly<{ query: string; medium: Medium }>): Promise<Readonly<{ groups: readonly { provider: Provider; items: readonly NormalizedSearchCandidate[]; errorCode: string | null }[] }>>;
   getExternalGameConfirmation(input: Readonly<{ ref: ExternalGameRef }>): Promise<Confirmation>;
   createGameFromExternalSource(input: Readonly<{ ref: ExternalGameRef; confirmationFingerprint: string }>): Promise<CreateGameResult>;
   linkExternalSource(input: Readonly<{ gameId: string; ref: ExternalGameRef; confirmationFingerprint: string }>): Promise<GameRecord>;
@@ -29,14 +30,28 @@ export type GamesService = Readonly<{
 }>;
 
 export function createGamesService(catalogs: Readonly<Record<Provider, SourceCatalogPort>>, store: GameStore = new InMemoryGameStore()): GamesService {
+  const searchProvider = async (provider: Provider, query: string) => {
+    try {
+      return { provider, items: await catalogs[provider].search({ provider, query, limit: 20 }), errorCode: null };
+    } catch (error) {
+      return { provider, items: [], errorCode: error instanceof Error && "code" in error ? String((error as { code: unknown }).code) : "source_unavailable" };
+    }
+  };
+
+  const validateSearchQuery = (query: string) => {
+    if (!query.trim() || query.trim().length > 120) throw new SourceQueryInvalidError();
+  };
+
   return {
     async searchExternalGames({ query }) {
-      if (!query.trim() || query.trim().length > 120) throw new SourceQueryInvalidError();
-      const results = await Promise.all(["bgg", "igdb"].map(async (provider) => {
-        try { return { provider: provider as Provider, items: await catalogs[provider as Provider].search({ provider: provider as Provider, query, limit: 20 }), errorCode: null }; }
-        catch (error) { return { provider: provider as Provider, items: [], errorCode: error instanceof Error && "code" in error ? String((error as { code: unknown }).code) : "source_unavailable" }; }
-      }));
+      validateSearchQuery(query);
+      const results = await Promise.all(["bgg", "igdb"].map((provider) => searchProvider(provider as Provider, query)));
       return { groups: results };
+    },
+    async searchExternalGamesForMedium({ query, medium }) {
+      validateSearchQuery(query);
+      const provider: Provider = medium === "board_game" ? "bgg" : "igdb";
+      return { groups: [await searchProvider(provider, query)] };
     },
     async getExternalGameConfirmation({ ref }) {
       const snapshot = await catalogs[ref.provider].fetchSnapshot(ref, "cache_ok");
