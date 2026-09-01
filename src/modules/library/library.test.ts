@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cleanSharedNames, normalizeSharedName } from "./internal/names";
 import { clearIncompatibleSourceCategories, filterAndSortGames } from "./internal/filters";
-import type { GameRecord } from "@/modules/games";
+import type { GameRecord, Medium } from "@/modules/games";
 import { createLibraryService } from ".";
 import { InMemoryGameStore } from "@/modules/games";
 
@@ -34,14 +34,12 @@ describe("library names", () => {
 });
 
 describe("library filters", () => {
-  it("同維度取聯集，不同維度取交集，並以名稱與別名搜尋", () => {
+  it("遊戲媒介以同維度聯集篩選", () => {
     const games = [
-      game({ id: "a", displayName: "Alpha", tags: ["合作"], actualPlatforms: ["Steam"] }),
-      game({ id: "b", displayName: "Beta", sourceNames: ["Beta"], tags: ["策略"], actualPlatforms: ["PS5"] }),
-      game({ id: "c", displayName: "Gamma", aliases: ["Alpha 2"], tags: ["合作"], actualPlatforms: ["Steam"] }),
+      game({ id: "a", medium: "board_game" }),
+      game({ id: "b", medium: "video_game" }),
     ];
-    expect(filterAndSortGames(games, { tags: ["合作", "策略"], platforms: ["steam"] }).map((item) => item.id)).toEqual(["a", "c"]);
-    expect(filterAndSortGames(games, { query: "alpha" }).map((item) => item.id)).toEqual(["a", "c"]);
+    expect(filterAndSortGames(games, { media: ["video_game", "board_game"] }).map((item) => item.id)).toEqual(["a", "b"]);
   });
 
   it("來源分類同種類取聯集，不同種類取交集，排序缺值永遠在後", () => {
@@ -56,9 +54,45 @@ describe("library filters", () => {
     expect(clearIncompatibleSourceCategories(["board_game", "video_game"], [{ kind: "category", sourceCategoryId: "1" }])).toEqual([]);
     expect(clearIncompatibleSourceCategories(["board_game"], [{ kind: "category", sourceCategoryId: "1" }, { kind: "genre", sourceCategoryId: "2" }])).toEqual([{ kind: "category", sourceCategoryId: "1" }]);
   });
+
+  it("三種數值排序均將空值置後，並以名稱與識別碼穩定排序", () => {
+    const games = [
+      game({ id: "z", displayName: "相同", snapshot: { ref: { provider: "bgg", medium: "board_game", sourceId: "1" }, canonicalUrl: "https://example.test/1", title: "相同", localizedTitle: null, aliases: [], description: null, releaseYear: null, coverUrl: null, categories: [], contributors: [], minPlayers: null, maxPlayers: null, supportsSolo: "unknown", playtimeMinutes: null, weight: 2, strategyRank: 20, supportedPlatforms: [] } }),
+      game({ id: "a", displayName: "相同", snapshot: { ref: { provider: "bgg", medium: "board_game", sourceId: "2" }, canonicalUrl: "https://example.test/2", title: "相同", localizedTitle: null, aliases: [], description: null, releaseYear: null, coverUrl: null, categories: [], contributors: [], minPlayers: null, maxPlayers: null, supportsSolo: "unknown", playtimeMinutes: null, weight: 2, strategyRank: 10, supportedPlatforms: [] } }),
+      game({ id: "missing", displayName: "缺值", snapshot: { ref: { provider: "bgg", medium: "board_game", sourceId: "3" }, canonicalUrl: "https://example.test/3", title: "缺值", localizedTitle: null, aliases: [], description: null, releaseYear: null, coverUrl: null, categories: [], contributors: [], minPlayers: null, maxPlayers: null, supportsSolo: "unknown", playtimeMinutes: null, weight: null, strategyRank: null, supportedPlatforms: [] } }),
+    ];
+    expect(filterAndSortGames(games, { sort: "weight_asc" }).map((item) => item.id)).toEqual(["a", "z", "missing"]);
+    expect(filterAndSortGames(games, { sort: "weight_desc" }).map((item) => item.id)).toEqual(["a", "z", "missing"]);
+    expect(filterAndSortGames(games, { sort: "strategy_rank" }).map((item) => item.id)).toEqual(["a", "z", "missing"]);
+  });
 });
 
 describe("library service", () => {
+  it("將收藏庫查詢交給 adapter，且在多媒介時清除不相容條件", async () => {
+    const queries: unknown[] = [];
+    const store = {
+      async listLibraryGames(query: unknown) {
+        queries.push(query);
+        return [game({ id: "adapter-result" })];
+      },
+    } as unknown as import("@/modules/games").GameStore;
+    const service = createLibraryService(store);
+
+    await expect(service.listGames({
+      media: ["board_game", "video_game"],
+      sourceCategories: [{ kind: "category", sourceCategoryId: "1" }],
+      weightMin: 2,
+      sort: "weight_asc",
+    })).resolves.toEqual([game({ id: "adapter-result" })]);
+    expect(queries).toEqual([{
+      media: ["board_game", "video_game"],
+      sourceCategories: [],
+      weightMin: undefined,
+      weightMax: undefined,
+      sort: "name",
+    }]);
+  });
+
   it("編輯電子遊戲時清理共享名稱並保留來源貢獻，桌遊拒絕平台", async () => {
     const store = new InMemoryGameStore();
     const game = await store.createManual("手動條目", "video_game");
@@ -103,5 +137,21 @@ describe("library service", () => {
     const service = createLibraryService(store);
     const game = await store.createManual("遊戲", "board_game");
     await expect(service.listGames({ media: ["board_game", "video_game"], sourceCategories: [{ kind: "category", sourceCategoryId: "1" }] })).resolves.toEqual([game]);
+  });
+
+  it("只在單一媒介讀取來源分類 facet", async () => {
+    const calls: Medium[] = [];
+    const store = {
+      async listSourceCategoryFacets(medium: Medium) {
+        calls.push(medium);
+        return [];
+      },
+    } as unknown as import("@/modules/games").GameStore;
+    const service = createLibraryService(store);
+
+    await expect(service.listSourceCategoryFacets([])).resolves.toEqual([]);
+    await expect(service.listSourceCategoryFacets(["board_game", "video_game"])).resolves.toEqual([]);
+    await expect(service.listSourceCategoryFacets(["video_game"])).resolves.toEqual([]);
+    expect(calls).toEqual(["video_game"]);
   });
 });

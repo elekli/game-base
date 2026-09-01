@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError } from "./errors";
 import { LibraryConflictError } from "@/modules/library/internal/errors";
-import type { ExternalGameRef, GameContribution, GameRecord, Medium, SourceSnapshot } from "./types";
+import type { ExternalGameRef, GameContribution, GameRecord, LibraryGameQuery, Medium, SourceCategory, SourceSnapshot } from "./types";
+import { filterAndSortLibraryGames, sourceCategoryFacets } from "./library-query";
 
 export type GameEditInput = Readonly<{
   displayName?: string | null;
@@ -22,6 +23,8 @@ export type SharedLibraryItem = Readonly<{ name: string; usageCount: number; isS
 
 export type GameStore = {
   list(query?: string): Promise<readonly GameRecord[]>;
+  listLibraryGames(query?: LibraryGameQuery): Promise<readonly GameRecord[]>;
+  listSourceCategoryFacets(medium: Medium): Promise<readonly SourceCategory[]>;
   get(id: string): Promise<GameRecord | null>;
   createManual(displayName: string, medium: Medium): Promise<GameRecord>;
   createFromSource(ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<{ game: GameRecord; created: boolean }>;
@@ -95,6 +98,14 @@ export class InMemoryGameStore implements GameStore {
     return [...this.games.values()]
       .filter((game) => game.trashedAt === null && (!normalized || [game.displayName, ...game.sourceNames, ...game.aliases].some((name) => name.toLocaleLowerCase("en-US").includes(normalized))))
       .sort((a, b) => a.displayName.localeCompare(b.displayName, "zh-Hant"));
+  }
+
+  async listLibraryGames(query: LibraryGameQuery = {}): Promise<readonly GameRecord[]> {
+    return filterAndSortLibraryGames([...this.games.values()].filter((game) => game.trashedAt === null), query);
+  }
+
+  async listSourceCategoryFacets(medium: Medium): Promise<readonly SourceCategory[]> {
+    return sourceCategoryFacets([...this.games.values()].filter((game) => game.trashedAt === null), medium);
   }
 
   async get(id: string) { return this.games.get(id) ?? null; }
@@ -230,6 +241,8 @@ export class InMemoryGameStore implements GameStore {
 export class UnavailableGameStore implements GameStore {
   private fail(): never { throw new SourcePersistenceFailedError(); }
   async list(): Promise<readonly GameRecord[]> { return this.fail(); }
+  async listLibraryGames(): Promise<readonly GameRecord[]> { return this.fail(); }
+  async listSourceCategoryFacets(): Promise<readonly SourceCategory[]> { return this.fail(); }
   async get(): Promise<GameRecord | null> { return this.fail(); }
   async createManual(): Promise<GameRecord> { return this.fail(); }
   async createFromSource(): Promise<{ game: GameRecord; created: boolean }> { return this.fail(); }

@@ -1,5 +1,5 @@
 import type { Medium } from "@/modules/games";
-import type { LibraryFilters, LibrarySort } from "@/modules/library";
+import { clearIncompatibleSourceCategories, type LibraryFilters, type LibrarySort } from "@/modules/library";
 
 export function parseLibrarySearchParams(
   params: Readonly<Record<string, string | string[] | undefined>>,
@@ -22,17 +22,14 @@ export function parseLibrarySearchParams(
     return Number.isFinite(parsed) ? parsed : undefined;
   };
   const sort = many("sort")[0];
+  const isBoardOnly = media.length === 1 && media[0] === "board_game";
   return {
-    query: many("q")[0] ?? "",
     media,
-    platforms: many("platform"),
-    tags: many("tag"),
-    contributors: many("contributor"),
-    sourceCategories,
-    weightMin: number("weightMin"),
-    weightMax: number("weightMax"),
-    sort: ["name", "recent", "weight_asc", "weight_desc", "strategy_rank"].includes(sort ?? "")
+    sourceCategories: clearIncompatibleSourceCategories(media, sourceCategories),
+    weightMin: isBoardOnly ? number("weightMin") : undefined,
+    weightMax: isBoardOnly ? number("weightMax") : undefined,
+    sort: isBoardOnly && ["weight_asc", "weight_desc", "strategy_rank"].includes(sort ?? "")
       ? sort as LibrarySort
-      : "name",
+      : ["name", "recent"].includes(sort ?? "") ? sort as LibrarySort : "name",
   };
 }

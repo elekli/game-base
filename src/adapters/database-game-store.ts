@@ -1,7 +1,7 @@
 import "server-only";
 import { sql, type SQL } from "drizzle-orm";
-import type { GameStore, GameEditInput, ManualContributionInput, SharedLibraryItem } from "@/modules/games";
-import type { ExternalGameRef, GameContribution, GameRecord, Medium, SourceSnapshot } from "@/modules/games";
+import type { GameStore, GameEditInput, LibraryGameQuery, ManualContributionInput, SharedLibraryItem } from "@/modules/games";
+import type { ExternalGameRef, GameContribution, GameRecord, Medium, SourceCategory, SourceSnapshot } from "@/modules/games";
 import { SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError } from "@/modules/games";
 import { beginSourceCoverIngest, isAllowedSourceCoverUrl } from "@/modules/media/internal/source-cover-ingest";
 import { LibraryConflictError } from "@/modules/library/internal/errors";
@@ -30,8 +30,13 @@ function sourceContributions(snapshot: SourceSnapshot | null): readonly GameCont
   return snapshot?.contributors.map((contributor) => ({ id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}:${contributor.role}`, contributorId: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}`, name: contributor.name, entityKind: contributor.entityKind, role: contributor.role, origin: "source" as const, provider: snapshot.ref.provider, sourceContributorId: contributor.sourceContributorId })) ?? [];
 }
 
+function withCurrentBggMetrics(snapshot: SourceSnapshot | null, row: Row): SourceSnapshot | null {
+  if (!snapshot || snapshot.ref.provider !== "bgg" || row.metrics_identity_id === null || row.metrics_identity_id === undefined) return snapshot;
+  return { ...snapshot, weight: row.metrics_weight === null ? null : Number(row.metrics_weight), strategyRank: row.metrics_strategy_rank === null ? null : Number(row.metrics_strategy_rank) };
+}
+
 function record(row: Row): GameRecord {
-  const snapshot = (row.snapshot as SourceSnapshot | null | undefined) ?? null;
+  const snapshot = withCurrentBggMetrics((row.snapshot as SourceSnapshot | null | undefined) ?? null, row);
   const manualContributions = jsonArray<GameContribution>(row.manual_contributions).map((contribution) => ({ ...contribution, contributorId: contribution.contributorId ?? contribution.id, origin: "manual" as const, provider: null, sourceContributorId: null }));
   return {
     id: String(row.id),
@@ -84,11 +89,12 @@ export class PostgresGameStore implements GameStore {
     coalesce((select jsonb_agg(gn.name order by gn.id) from app_private.game_names gn where gn.game_id = g.id and gn.name_kind in ('source', 'alias')), '[]'::jsonb) as source_names,
     coalesce((select jsonb_agg(p.name order by p.name) from app_private.game_platforms gp join app_private.platforms p on p.id = gp.platform_id where gp.game_id = g.id), '[]'::jsonb) as actual_platforms,
     coalesce((select jsonb_agg(t.name order by t.name) from app_private.game_tags gt join app_private.tags t on t.id = gt.tag_id where gt.game_id = g.id), '[]'::jsonb) as tags,
+    bcm.identity_id as metrics_identity_id, bcm.weight as metrics_weight, bcm.strategy_rank as metrics_strategy_rank,
     coalesce((select jsonb_agg(jsonb_build_object('id', mc.id, 'contributorId', c.id, 'name', c.name, 'entityKind', c.entity_kind, 'role', mc.role)) from app_private.manual_contributions mc join app_private.contributors c on c.id = mc.contributor_id where mc.game_id = g.id), '[]'::jsonb) as manual_contributions,
     (select case when mi.original_state = 'failed' or mi.thumbnail_state = 'failed' then 'failed' when mi.original_state = 'ready' and mi.thumbnail_state = 'ready' then 'ready' else 'pending' end from app_private.media_ingests mi where mi.game_id = g.id and mi.source_url = i.snapshot ->> 'coverUrl' limit 1) as cover_ingest_state`;
 
   private selectFrom(where: SQL) {
-    return sql`select ${this.selectFields} from app_private.games g left join app_private.external_game_identities i on i.id = g.external_game_identity_id left join app_private.game_names custom_name on custom_name.game_id = g.id and custom_name.name_kind = 'custom' ${where}`;
+    return sql`select ${this.selectFields} from app_private.games g left join app_private.external_game_identities i on i.id = g.external_game_identity_id left join app_private.bgg_current_metrics bcm on bcm.identity_id = i.id and i.provider = 'bgg' left join app_private.game_names custom_name on custom_name.game_id = g.id and custom_name.name_kind = 'custom' ${where}`;
   }
 
   async list(query = ""): Promise<readonly GameRecord[]> {
@@ -96,6 +102,50 @@ export class PostgresGameStore implements GameStore {
     const needle = `%${escaped}%`;
     const rows = await this.db.execute(this.selectFrom(sql`where g.trashed_at is null and (g.display_name ilike ${needle} escape '\\' or exists (select 1 from app_private.game_names gn where gn.game_id = g.id and gn.name ilike ${needle} escape '\\')) order by g.display_name asc`)) as Row[];
     return rows.map(record);
+  }
+
+  async listLibraryGames(query: LibraryGameQuery = {}): Promise<readonly GameRecord[]> {
+    const clauses: SQL[] = [sql`g.trashed_at is null`];
+    if (query.media?.length) clauses.push(sql`g.medium in (${sql.join(query.media.map((medium) => sql`${medium}`), sql`, `)})`);
+    const selectedByKind = new Map<string, string[]>();
+    for (const category of query.sourceCategories ?? []) {
+      const ids = selectedByKind.get(category.kind) ?? [];
+      if (!ids.includes(category.sourceCategoryId)) ids.push(category.sourceCategoryId);
+      selectedByKind.set(category.kind, ids);
+    }
+    for (const [kind, ids] of selectedByKind) {
+      clauses.push(sql`exists (select 1 from app_private.external_game_categories ec join app_private.source_categories sc on sc.id = ec.category_id where ec.identity_id = i.id and sc.provider = i.provider and sc.category_kind = ${kind} and sc.source_category_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)}))`);
+    }
+    if (query.weightMin !== undefined && query.weightMin !== null) clauses.push(sql`bcm.weight >= ${query.weightMin}`);
+    if (query.weightMax !== undefined && query.weightMax !== null) clauses.push(sql`bcm.weight <= ${query.weightMax}`);
+    const orderBy = query.sort === "recent"
+      ? sql`g.created_at desc, g.id asc`
+      : query.sort === "weight_asc"
+        ? sql`bcm.weight asc nulls last, g.display_name asc, g.id asc`
+        : query.sort === "weight_desc"
+          ? sql`bcm.weight desc nulls last, g.display_name asc, g.id asc`
+          : query.sort === "strategy_rank"
+            ? sql`bcm.strategy_rank asc nulls last, g.display_name asc, g.id asc`
+            : sql`g.display_name asc, g.id asc`;
+    const rows = await this.db.execute(this.selectFrom(sql`where ${sql.join(clauses, sql` and `)} order by ${orderBy}`)) as Row[];
+    return rows.map(record);
+  }
+
+  async listSourceCategoryFacets(medium: Medium): Promise<readonly SourceCategory[]> {
+    const provider = medium === "board_game" ? "bgg" : "igdb";
+    const kinds = medium === "board_game" ? ["category", "mechanic"] : ["genre", "theme", "game_mode", "player_perspective"];
+    const rows = await this.db.execute(sql`
+      select distinct sc.category_kind as kind, sc.source_category_id, sc.name
+      from app_private.games g
+      join app_private.external_game_identities i on i.id = g.external_game_identity_id
+      join app_private.external_game_categories ec on ec.identity_id = i.id
+      join app_private.source_categories sc on sc.id = ec.category_id
+      where g.trashed_at is null and g.medium = ${medium} and i.provider = ${provider}
+        and sc.provider = ${provider}
+        and sc.category_kind in (${sql.join(kinds.map((kind) => sql`${kind}`), sql`, `)})
+      order by sc.name asc, sc.category_kind asc, sc.source_category_id asc
+    `) as Row[];
+    return rows.map((row) => ({ kind: String(row.kind), sourceCategoryId: String(row.source_category_id), name: String(row.name) }));
   }
 
   async get(id: string): Promise<GameRecord | null> {

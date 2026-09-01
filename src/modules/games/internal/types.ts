@@ -24,6 +24,16 @@ export type SourceCategory = Readonly<{
   name: string;
 }>;
 
+export type LibrarySort = "name" | "recent" | "weight_asc" | "weight_desc" | "strategy_rank";
+
+export type LibraryGameQuery = Readonly<{
+  media?: readonly Medium[];
+  sourceCategories?: readonly Pick<SourceCategory, "kind" | "sourceCategoryId">[];
+  weightMin?: number | null;
+  weightMax?: number | null;
+  sort?: LibrarySort;
+}>;
+
 export type SourceContributor = Readonly<{
   sourceContributorId: string;
   name: string;
