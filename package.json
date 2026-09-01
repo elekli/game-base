@@ -18,7 +18,6 @@
     "test:e2e": "playwright test",
     "integrity:check": "tsx scripts/check-integrity.ts",
     "environment:check": "tsx scripts/check-environment.ts",
-    "preview:replay": "tsx scripts/preview-replay.ts",
     "db:schema:pull": "drizzle-kit pull && tsx scripts/normalize-drizzle-schema.ts",
     "db:schema:check": "tsx scripts/check-drizzle-schema-drift.ts",
     "supabase:start": "supabase start",
