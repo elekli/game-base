@@ -3,20 +3,20 @@
 import { useState } from "react";
 import Link from "next/link";
 import type { GameRecord } from "@/modules/games";
+import { addManualContribution, deletePlatform, deleteTag, editGame, linkExternalSource, refreshExternalMetadata, removeManualContribution } from "@/app/private-mutation-actions";
+import type { PrivateActionResult } from "@/shared/auth/private-action";
 
 type Props = Readonly<{ game: GameRecord }>;
 const systemPlatforms = new Set(["steam", "ps5", "xbox series", "nintendo switch"]);
 const roleLabels = { design: "設計／開發", art: "美術", publisher: "發行" } as const;
 
-class ApiRequestError extends Error {
-  constructor(message: string, readonly body: Record<string, unknown>) { super(message); this.name = "ApiRequestError"; }
+class PrivateActionError extends Error {
+  constructor(readonly result: Extract<PrivateActionResult, { ok: false }>) { super(result.message); this.name = "PrivateActionError"; }
 }
 
-async function post<T = { message?: string }>(path: string, payload: unknown): Promise<T> {
-  const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
-  const body = await response.json() as Record<string, unknown>;
-  if (!response.ok) throw new ApiRequestError(typeof body.message === "string" ? body.message : "操作失敗，請稍後再試。", body);
-  return body as T;
+function unwrapPrivateAction<Success extends object>(result: PrivateActionResult<Success>): Success {
+  if (!result.ok) throw new PrivateActionError(result);
+  return result;
 }
 
 export function GameEditClient({ game }: Props) {
@@ -32,12 +32,10 @@ export function GameEditClient({ game }: Props) {
   const platformOptions = [...new Set(["Steam", "PS5", "Xbox Series", "Nintendo Switch", ...game.actualPlatforms])];
   const customPlatforms = game.actualPlatforms.filter((platform) => !systemPlatforms.has(platform.toLocaleLowerCase("en-US")));
 
-  async function deleteShared(path: string, name: string) {
+  async function deleteShared(action: typeof deletePlatform | typeof deleteTag, name: string) {
     try {
       setMessage("刪除中……");
-      const response = await fetch(path, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) });
-      const body = await response.json() as { message?: string };
-      if (!response.ok) throw new Error(body.message ?? "刪除失敗。");
+      unwrapPrivateAction(await action({ name }));
       window.location.reload();
     } catch (error) { setMessage(error instanceof Error ? error.message : "刪除失敗，請重試。"); }
   }
@@ -45,13 +43,13 @@ export function GameEditClient({ game }: Props) {
   async function edit(form: FormData) {
     try {
       setMessage("儲存中……");
-      await post("/api/private/games/edit", {
+      unwrapPrivateAction(await editGame({
         gameId: game.id,
         displayName: form.get("displayName"),
-        actualPlatforms: [...form.getAll("actualPlatforms"), ...String(form.get("customPlatform") ?? "").split(",")],
+        actualPlatforms: [...form.getAll("actualPlatforms").filter((value): value is string => typeof value === "string"), ...String(form.get("customPlatform") ?? "").split(",")],
         tags: String(form.get("tags") ?? "").split(","),
         playerCountNote: form.get("playerCountNote"),
-      });
+      }));
       window.location.reload();
     } catch (error) { setMessage(error instanceof Error ? error.message : "儲存失敗，請重試。"); }
   }
@@ -59,7 +57,7 @@ export function GameEditClient({ game }: Props) {
   async function addContribution(form: FormData) {
     try {
       setMessage("儲存中……");
-      const result = await post<{ possibleDuplicate?: boolean }>("/api/private/games/contributions", { gameId: game.id, name: form.get("name"), entityKind: form.get("entityKind"), role: form.get("role") });
+      const result = unwrapPrivateAction(await addManualContribution({ gameId: game.id, name: form.get("name"), entityKind: form.get("entityKind"), role: form.get("role") }));
       if (result.possibleDuplicate) {
         setMessage("已新增；名稱可能與既有貢獻者重複，未自動合併。頁面即將更新。");
         window.setTimeout(() => window.location.reload(), 1200);
@@ -72,15 +70,13 @@ export function GameEditClient({ game }: Props) {
   async function removeManual(id: string) {
     try {
       setMessage("移除中……");
-      const response = await fetch("/api/private/games/contributions", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ gameId: game.id, contributionId: id }) });
-      const body = await response.json() as { message?: string };
-      if (!response.ok) throw new Error(body.message ?? "移除失敗。");
+      unwrapPrivateAction(await removeManualContribution({ gameId: game.id, contributionId: id }));
       window.location.reload();
     } catch (error) { setMessage(error instanceof Error ? error.message : "移除失敗，請重試。"); }
   }
 
   async function refresh() {
-    try { setMessage("重新整理中……"); await post("/api/private/games/refresh", { gameId: game.id }); window.location.reload(); }
+    try { setMessage("重新整理中……"); unwrapPrivateAction(await refreshExternalMetadata({ gameId: game.id })); window.location.reload(); }
     catch (error) { setMessage(error instanceof Error ? error.message : "重新整理失敗，舊資料仍可使用。"); }
   }
 
@@ -100,10 +96,10 @@ export function GameEditClient({ game }: Props) {
     try {
       setConflictGameId(null);
       setMessage("連結中……");
-      await post("/api/private/games/link", { gameId: game.id, provider, sourceId, confirmationFingerprint: fingerprint });
+      unwrapPrivateAction(await linkExternalSource({ gameId: game.id, provider, sourceId, confirmationFingerprint: fingerprint }));
       window.location.reload();
     } catch (error) {
-      if (error instanceof ApiRequestError && typeof error.body.existingGameId === "string") setConflictGameId(error.body.existingGameId);
+      if (error instanceof PrivateActionError && typeof error.result.existingGameId === "string") setConflictGameId(error.result.existingGameId);
       setMessage(error instanceof Error ? error.message : "連結失敗，原條目未變更。");
     }
   }
@@ -114,9 +110,9 @@ export function GameEditClient({ game }: Props) {
       <summary className="cursor-pointer font-semibold">編輯擁有者資料</summary>
       <form action={edit} className="mt-4 space-y-3">
         <label className="block text-sm">自訂顯示名稱<input name="displayName" defaultValue={game.customDisplayName ?? ""} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="留白則使用來源名稱" /></label>
-        {game.medium === "video_game" && <fieldset><legend className="text-sm">實際平台</legend><div className="mt-2 flex flex-wrap gap-3">{platformOptions.map((platform) => <label className="flex items-center gap-2 text-sm" key={platform}><input type="checkbox" name="actualPlatforms" value={platform} defaultChecked={game.actualPlatforms.some((value) => value.toLocaleLowerCase() === platform.toLocaleLowerCase())} />{platform}</label>)}</div>{customPlatforms.length > 0 && <div className="mt-2 flex flex-wrap gap-2 text-xs">{customPlatforms.map((platform) => <button type="button" className="rounded-full border border-rose-200 px-3 py-1 text-rose-700" key={platform} onClick={() => void deleteShared("/api/private/library/platforms", platform)}>刪除平台：{platform}</button>)}</div>}<input name="customPlatform" className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="新增自訂平台（以逗號分隔）" /></fieldset>}
+        {game.medium === "video_game" && <fieldset><legend className="text-sm">實際平台</legend><div className="mt-2 flex flex-wrap gap-3">{platformOptions.map((platform) => <label className="flex items-center gap-2 text-sm" key={platform}><input type="checkbox" name="actualPlatforms" value={platform} defaultChecked={game.actualPlatforms.some((value) => value.toLocaleLowerCase() === platform.toLocaleLowerCase())} />{platform}</label>)}</div>{customPlatforms.length > 0 && <div className="mt-2 flex flex-wrap gap-2 text-xs">{customPlatforms.map((platform) => <button type="button" className="rounded-full border border-rose-200 px-3 py-1 text-rose-700" key={platform} onClick={() => void deleteShared(deletePlatform, platform)}>刪除平台：{platform}</button>)}</div>}<input name="customPlatform" className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="新增自訂平台（以逗號分隔）" /></fieldset>}
         <label className="block text-sm">自由標籤（以逗號分隔）<input name="tags" defaultValue={game.tags.join(", ")} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3" /></label>
-        {game.tags.length > 0 && <div className="flex flex-wrap gap-2 text-xs">{game.tags.map((tag) => <button type="button" className="rounded-full border border-rose-200 px-3 py-1 text-rose-700" key={tag} onClick={() => void deleteShared("/api/private/library/tags", tag)}>刪除標籤：{tag}</button>)}</div>}
+        {game.tags.length > 0 && <div className="flex flex-wrap gap-2 text-xs">{game.tags.map((tag) => <button type="button" className="rounded-full border border-rose-200 px-3 py-1 text-rose-700" key={tag} onClick={() => void deleteShared(deleteTag, tag)}>刪除標籤：{tag}</button>)}</div>}
         <label className="block text-sm">人數說明（選填）<textarea name="playerCountNote" defaultValue={game.playerCountNote ?? ""} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3" rows={3} /></label>
         <button className="w-full rounded-xl bg-emerald-900 px-4 py-3 font-semibold text-white" type="submit">儲存資料</button>
       </form>
