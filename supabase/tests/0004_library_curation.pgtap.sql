@@ -1,0 +1,24 @@
+begin;
+select plan(12);
+select has_table('app_private', 'platforms', '平台表存在');
+select has_table('app_private', 'game_platforms', '遊戲平台關聯表存在');
+select has_table('app_private', 'tags', '標籤表存在');
+select has_table('app_private', 'game_tags', '遊戲標籤關聯表存在');
+select has_table('app_private', 'contributors', '貢獻者表存在');
+select has_table('app_private', 'manual_contributions', '手動貢獻表存在');
+select has_table('app_private', 'external_supported_platforms', '來源支援平台表存在');
+select has_column('app_private', 'games', 'player_count_note', '遊戲有人數說明欄位');
+select col_not_null('app_private', 'source_contributions', 'contributor_id', '來源貢獻者關係不可為空');
+select ok(exists(select 1 from pg_constraint where conname = 'manual_contributions_role_check'), '手動貢獻使用固定角色分類');
+
+grant app_runtime to postgres;
+grant usage on schema extensions to app_runtime;
+set local role app_runtime;
+insert into app_private.games (id, medium, display_name) values ('00000000-0000-0000-0000-000000000001', 'video_game', '平台標籤探針');
+insert into app_private.platforms (id, name, normalized_name) values ('00000000-0000-0000-0000-000000000002', 'Custom', 'custom');
+insert into app_private.game_platforms (game_id, platform_id) values ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002');
+select extensions.throws_like($$delete from app_private.platforms where id = '00000000-0000-0000-0000-000000000002'$$, '%violates foreign key constraint%', '仍有關聯的平台不可刪除');
+select ok((select count(*) from app_private.game_platforms where game_id = '00000000-0000-0000-0000-000000000001') = 1, '實際平台關係可保存');
+reset role;
+select * from finish();
+rollback;

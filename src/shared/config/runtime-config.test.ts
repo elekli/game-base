@@ -36,6 +36,28 @@ describe("parseRuntimeConfig", () => {
     expect(config.supavisor.port).toBe(54329);
   });
 
+  it("accepts a local HTTP Cloudflare Access fixture only in development", () => {
+    const config = parseRuntimeConfig({
+      ...validPreviewEnvironment,
+      VERCEL_ENV: "development",
+      EXPECTED_VERCEL_ENV: "development",
+      SUPABASE_PROJECT_REF: "local",
+      EXPECTED_SUPABASE_PROJECT_REF: "local",
+      SUPABASE_URL: "http://127.0.0.1:54321",
+      SUPAVISOR_HOST: "127.0.0.1",
+      EXPECTED_SUPAVISOR_HOST: "127.0.0.1",
+      SUPAVISOR_PORT: "54329",
+      SUPAVISOR_USERNAME: "app_runtime.local",
+      EXPECTED_SUPAVISOR_USERNAME: "app_runtime.local",
+      DATABASE_URL:
+        "postgres://app_runtime.local:fixture@127.0.0.1:54329/postgres?sslmode=disable",
+      CLOUDFLARE_ACCESS_ISSUER: "http://127.0.0.1:8787",
+      CLOUDFLARE_ACCESS_JWKS_URL: "http://127.0.0.1:8787/cdn-cgi/access/certs",
+    });
+
+    expect(config.cloudflare.jwksUrl).toContain("127.0.0.1:8787");
+  });
+
   it("rejects a hosted database URL with sslmode=disable without exposing values", () => {
     const databaseUrl =
       "postgres://app_runtime.preview-ref:fixture@aws-0-us-east-1.pooler.supabase.com:6543/postgres?sslmode=disable";

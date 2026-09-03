@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createGamesService } from ".";
 import { SourceContentChangedError } from "./internal/errors";
 import { InMemoryGameStore } from "./internal/store";
@@ -18,6 +18,46 @@ describe("games service", () => {
     const result = await service.searchExternalGames({ query: "同名" });
     expect(result.groups.find((group) => group.provider === "bgg")?.errorCode).toBe("source_unavailable");
     expect(result.groups.find((group) => group.provider === "igdb")?.items).toHaveLength(1);
+  });
+
+  it("依桌遊媒介只搜尋 BGG，並維持單一來源結果群組", async () => {
+    const { service, bgg, igdb } = setup();
+    const bggSearch = vi.spyOn(bgg, "search");
+    const igdbSearch = vi.spyOn(igdb, "search");
+
+    const result = await service.searchExternalGamesForMedium({ query: "同名", medium: "board_game" });
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.provider).toBe("bgg");
+    expect(result.groups[0]?.items).toHaveLength(1);
+    expect(bggSearch).toHaveBeenCalledOnce();
+    expect(igdbSearch).not.toHaveBeenCalled();
+  });
+
+  it("單一媒介來源失敗時回該來源錯誤與空結果，不呼叫另一來源", async () => {
+    const { service, bgg, igdb } = setup();
+    const bggSearch = vi.spyOn(bgg, "search");
+    const igdbSearch = vi.spyOn(igdb, "search");
+    igdb.setScenario("rate_limited");
+
+    const result = await service.searchExternalGamesForMedium({ query: "同名", medium: "video_game" });
+
+    expect(result.groups).toEqual([
+      { provider: "igdb", items: [], errorCode: "source_rate_limited" },
+    ]);
+    expect(igdbSearch).toHaveBeenCalledOnce();
+    expect(bggSearch).not.toHaveBeenCalled();
+  });
+
+  it("單一媒介搜尋沿用空白與過長查詢的無效錯誤，且不呼叫來源", async () => {
+    const { service, bgg, igdb } = setup();
+    const bggSearch = vi.spyOn(bgg, "search");
+    const igdbSearch = vi.spyOn(igdb, "search");
+
+    await expect(service.searchExternalGamesForMedium({ query: "   ", medium: "board_game" })).rejects.toMatchObject({ sourceCode: "source_query_invalid" });
+    await expect(service.searchExternalGamesForMedium({ query: "x".repeat(121), medium: "video_game" })).rejects.toMatchObject({ sourceCode: "source_query_invalid" });
+    expect(bggSearch).not.toHaveBeenCalled();
+    expect(igdbSearch).not.toHaveBeenCalled();
   });
 
   it("fresh fingerprint 改變時零寫入", async () => {
@@ -49,5 +89,62 @@ describe("games service", () => {
     const again = await service.createGameFromExternalSource({ ref, confirmationFingerprint: confirmation.fingerprint });
     expect(again.created).toBe(false);
     expect(again.identityConflict).toBe("trashed");
+  });
+
+  it("手動條目首次連結保留自訂資料與手動貢獻", async () => {
+    const { service, store } = setup();
+    const manual = await service.createManualGame({ displayName: "我的名稱", medium: "board_game" });
+    const manualContribution = await store.addManualContribution({ kind: "new", gameId: manual.id, name: "我的作者", entityKind: "person", role: "design", allowDuplicate: false });
+    if (manualContribution.status !== "created") throw new Error("expected created manual contribution");
+    const withManual = manualContribution.game;
+    const ref = { provider: "bgg" as const, medium: "board_game" as const, sourceId: "1" };
+    const confirmation = await service.getExternalGameConfirmation({ ref });
+    const linked = await service.linkExternalSource({ gameId: manual.id, ref, confirmationFingerprint: confirmation.fingerprint });
+    expect(linked.displayName).toBe("我的名稱");
+    expect(linked.snapshot?.title).toBe("同名遊戲");
+    expect(linked.contributors.filter((item) => item.origin === "manual").map((item) => item.name)).toEqual(["我的作者"]);
+    expect(withManual.contributors).toHaveLength(1);
+  });
+
+  it("來源刷新替換來源資料但保留名稱、標籤與手動貢獻", async () => {
+    const { service, bgg, store } = setup();
+    const ref = { provider: "bgg" as const, medium: "board_game" as const, sourceId: "1" };
+    const confirmation = await service.getExternalGameConfirmation({ ref });
+    const created = await service.createGameFromExternalSource({ ref, confirmationFingerprint: confirmation.fingerprint });
+    await store.edit(created.game.id, { displayName: "收藏名稱", tags: ["合作"] });
+    await store.addManualContribution({ kind: "new", gameId: created.game.id, name: "手動作者", entityKind: "person", role: "art", allowDuplicate: false });
+    bgg.setSnapshot({ ...confirmation.snapshot, title: "來源更新", aliases: ["新別名"], categories: [{ kind: "category", sourceCategoryId: "9", name: "策略" }] });
+    const refreshed = await service.refreshExternalMetadata({ gameId: created.game.id });
+    expect(refreshed.displayName).toBe("收藏名稱");
+    expect(refreshed.sourceNames).toContain("新別名");
+    expect(refreshed.tags).toEqual(["合作"]);
+    expect(refreshed.contributors.filter((item) => item.origin === "manual").map((item) => item.name)).toEqual(["手動作者"]);
+  });
+
+  it("首次連結遇到內容變動或來源衝突時不寫入手動條目", async () => {
+    const { service, bgg, store } = setup();
+    const manual = await service.createManualGame({ displayName: "原手動名稱", medium: "board_game" });
+    const ref = { provider: "bgg" as const, medium: "board_game" as const, sourceId: "1" };
+    const confirmation = await service.getExternalGameConfirmation({ ref });
+    bgg.setSnapshot({ ...confirmation.snapshot, title: "更新後來源名稱" });
+    await expect(service.linkExternalSource({ gameId: manual.id, ref, confirmationFingerprint: confirmation.fingerprint })).rejects.toBeInstanceOf(SourceContentChangedError);
+    expect((await store.get(manual.id))?.externalIdentityId).toBeNull();
+
+    const current = await service.getExternalGameConfirmation({ ref });
+    const existing = await service.createGameFromExternalSource({ ref, confirmationFingerprint: current.fingerprint });
+    const secondManual = await service.createManualGame({ displayName: "第二筆手動", medium: "board_game" });
+    await expect(service.linkExternalSource({ gameId: secondManual.id, ref, confirmationFingerprint: current.fingerprint })).rejects.toThrow("來源已存在");
+    expect((await store.get(secondManual.id))?.externalIdentityId).toBeNull();
+    expect(existing.game.externalIdentityId).not.toBeNull();
+  });
+
+  it("來源刷新抓取失敗時保留上一份快照", async () => {
+    const { service, bgg, store } = setup();
+    const ref = { provider: "bgg" as const, medium: "board_game" as const, sourceId: "1" };
+    const confirmation = await service.getExternalGameConfirmation({ ref });
+    const created = await service.createGameFromExternalSource({ ref, confirmationFingerprint: confirmation.fingerprint });
+    bgg.setScenario("unavailable");
+    await expect(service.refreshExternalMetadata({ gameId: created.game.id })).rejects.toThrow("來源暫時無法使用");
+    expect((await store.get(created.game.id))?.snapshot?.title).toBe(confirmation.snapshot.title);
   });
 });

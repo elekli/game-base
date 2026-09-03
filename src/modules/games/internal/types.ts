@@ -24,11 +24,21 @@ export type SourceCategory = Readonly<{
   name: string;
 }>;
 
+export type LibrarySort = "name" | "recent" | "weight_asc" | "weight_desc" | "strategy_rank";
+
+export type LibraryGameQuery = Readonly<{
+  media?: readonly Medium[];
+  sourceCategories?: readonly Pick<SourceCategory, "kind" | "sourceCategoryId">[];
+  weightMin?: number | null;
+  weightMax?: number | null;
+  sort?: LibrarySort;
+}>;
+
 export type SourceContributor = Readonly<{
   sourceContributorId: string;
   name: string;
   entityKind: "person" | "company";
-  role: "design" | "art" | "publisher" | "developer";
+  role: "design" | "art" | "publisher";
 }>;
 
 export type SourceSnapshot = Readonly<{
@@ -51,6 +61,17 @@ export type SourceSnapshot = Readonly<{
   supportedPlatforms: readonly string[];
 }>;
 
+export type GameContribution = Readonly<{
+  id: string;
+  contributorId: string;
+  name: string;
+  entityKind: "person" | "company";
+  role: "design" | "art" | "publisher";
+  origin: "source" | "manual";
+  provider: Provider | null;
+  sourceContributorId: string | null;
+}>;
+
 export type SourceCatalogPort = Readonly<{
   search(input: SourceSearchQuery): Promise<readonly NormalizedSearchCandidate[]>;
   fetchSnapshot(ref: ExternalGameRef, freshness: "cache_ok" | "fresh"): Promise<SourceSnapshot>;
@@ -60,6 +81,14 @@ export type GameRecord = Readonly<{
   id: string;
   medium: Medium;
   displayName: string;
+  customDisplayName: string | null;
+  sourceNames: readonly string[];
+  aliases: readonly string[];
+  actualPlatforms: readonly string[];
+  tags: readonly string[];
+  contributors: readonly GameContribution[];
+  playerCountNote: string | null;
+  coverIngestState: "pending" | "ready" | "failed" | null;
   trashedAt: string | null;
   externalIdentityId: string | null;
   snapshot: SourceSnapshot | null;
