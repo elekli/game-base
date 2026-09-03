@@ -15,6 +15,25 @@ describe("parseRuntimeConfig", () => {
     });
   });
 
+  it.each([
+    "DIRECT_DATABASE_URL",
+    "PREVIEW_DIRECT_DATABASE_URL",
+    "SUPABASE_ACCESS_TOKEN",
+    "SUPABASE_DB_PASSWORD",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "PGPASSWORD",
+  ])(
+    "rejects hosted runtime when high-privilege operation variable %s is present",
+    (name) => {
+      expect(() =>
+        parseRuntimeConfig({
+          ...validPreviewEnvironment,
+          [name]: "operation-secret",
+        }),
+      ).toThrow(RuntimeConfigError);
+    },
+  );
+
   it("accepts a local Supabase and transaction-pooler binding", () => {
     const config = parseRuntimeConfig({
       ...validPreviewEnvironment,
