@@ -73,6 +73,11 @@ test.describe("Vditor ir 行動版隔離原型", () => {
     await expect(page.getByTestId("roundtrip-result")).toHaveText("保留一致");
     await expect(page.getByTestId("markdown-export")).toHaveText(independentRoundTripFixture);
     await expect(page.getByTestId("markdown-export")).toContainText("%% VDITOR_IR_UNSUPPORTED_MARKER: keep-this-line %%");
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      window.scrollTo(0, 0);
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
     await hideNextDevIndicator(page);
     await page.screenshot({ path: "test-results/vditor-ir-390px.png", fullPage: true });
   });
