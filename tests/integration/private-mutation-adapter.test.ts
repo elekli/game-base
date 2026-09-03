@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SourceIdentityConflictError } from "@/modules/games/internal/errors";
-import type { GameRecord, GamesService } from "@/modules/games";
+import type { ContributorMatch, GameRecord, GamesService, ManualContributionResult } from "@/modules/games";
 import type { LibraryService } from "@/modules/library";
 import { createPrivateMutationAdapter } from "@/app/private-mutation-adapter";
 import type { PrivateActionDependencies } from "@/shared/auth/private-action";
@@ -15,8 +15,9 @@ type TestLibraryService = Pick<LibraryService, "addManualContribution" | "remove
 type TestGamesService = Pick<GamesService, "linkExternalSource" | "refreshExternalMetadata">;
 
 function makeSetup() {
+  const addManualContribution = vi.fn(async (): Promise<ManualContributionResult> => ({ status: "created", game: emptyGame, possibleDuplicate: false }));
   const libraryService: TestLibraryService = {
-    addManualContribution: vi.fn(async () => ({ status: "created" as const, game: emptyGame, possibleDuplicate: false as const })),
+    addManualContribution,
     removeManualContribution: vi.fn(async () => emptyGame),
     editGame: vi.fn(async () => emptyGame),
     deletePlatform: vi.fn(async () => undefined),
@@ -53,13 +54,59 @@ describe("private mutation adapter", () => {
     expect(libraryService.editGame).not.toHaveBeenCalled();
   });
 
-  it("保留既有 private action 的最小回應，以便 UI 逐步切換確認流程", async () => {
+  it("confirmation_required 只回傳候選 matches，不宣稱已建立且不帶 game", async () => {
+    const { adapter, libraryService } = makeSetup();
+    const matches: readonly ContributorMatch[] = [{
+      contributorId: contributionId,
+      name: "作者",
+      entityKind: "person",
+      provider: "bgg",
+      sourceContributorId: "bgg-author",
+      rolesOnGame: ["design"],
+    }];
+    vi.mocked(libraryService.addManualContribution).mockResolvedValueOnce({ status: "confirmation_required", matches, possibleDuplicate: true });
+
+    const result = await adapter.addManualContribution({ kind: "new", gameId, name: "作者", entityKind: "person", role: "art", allowDuplicate: false });
+
+    expect(result).toEqual({ ok: true, status: "confirmation_required", matches });
+    expect(libraryService.addManualContribution).toHaveBeenCalledWith({ kind: "new", gameId, name: "作者", entityKind: "person", role: "art", allowDuplicate: false });
+    expect(result).not.toHaveProperty("game");
+  });
+
+  it("created 只回傳最小成功 payload", async () => {
+    const { adapter } = makeSetup();
+
+    const result = await adapter.addManualContribution({ kind: "new", gameId, name: "作者", entityKind: "person", role: "design", allowDuplicate: false });
+
+    expect(result).toEqual({ ok: true, status: "created" });
+    expect(result).not.toHaveProperty("game");
+  });
+
+  it("接受 existing 輸入並回傳 created", async () => {
+    const { adapter, libraryService } = makeSetup();
+
+    const result = await adapter.addManualContribution({ kind: "existing", gameId, contributorId: contributionId, role: "art" });
+
+    expect(result).toEqual({ ok: true, status: "created" });
+    expect(libraryService.addManualContribution).toHaveBeenCalledWith({ kind: "existing", gameId, contributorId: contributionId, role: "art" });
+  });
+
+  it("接受已確認的 new 輸入並回傳 created", async () => {
+    const { adapter, libraryService } = makeSetup();
+
+    const result = await adapter.addManualContribution({ kind: "new", gameId, name: "作者", entityKind: "person", role: "publisher", allowDuplicate: true });
+
+    expect(result).toEqual({ ok: true, status: "created" });
+    expect(libraryService.addManualContribution).toHaveBeenCalledWith({ kind: "new", gameId, name: "作者", entityKind: "person", role: "publisher", allowDuplicate: true });
+  });
+
+  it("拒絕無效的手動貢獻輸入且不呼叫服務", async () => {
     const { adapter, libraryService } = makeSetup();
 
     const result = await adapter.addManualContribution({ gameId, name: "作者", entityKind: "person", role: "design" });
 
-    expect(result).toEqual({ ok: true, possibleDuplicate: false });
-    expect(libraryService.addManualContribution).toHaveBeenCalledWith({ gameId, name: "作者", entityKind: "person", role: "design" });
+    expect(result).toEqual({ ok: false, code: "invalid_input", message: "貢獻關係參數無效。", requestId });
+    expect(libraryService.addManualContribution).not.toHaveBeenCalled();
   });
 
   it("removes a contribution without returning the updated game", async () => {

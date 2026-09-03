@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import Link from "next/link";
-import type { ExternalGameRef, GameRecord, NormalizedSearchCandidate, Provider } from "@/modules/games";
+import type { ContributorMatch, ExternalGameRef, GameRecord, NormalizedSearchCandidate, Provider } from "@/modules/games";
 import { addManualContribution, deletePlatform, deleteTag, editGame, linkExternalSource, refreshExternalMetadata, removeManualContribution } from "@/app/private-mutation-actions";
 import type { PrivateActionResult } from "@/shared/auth/private-action";
 
@@ -12,6 +12,14 @@ type SearchResponse = Readonly<{ groups?: readonly SearchGroup[]; message?: stri
 type ConfirmationResponse = Readonly<{ candidate?: NormalizedSearchCandidate; fingerprint?: string; message?: string }>;
 const systemPlatforms = new Set(["steam", "ps5", "xbox series", "nintendo switch"]);
 const roleLabels = { design: "設計／開發", art: "美術", publisher: "發行" } as const;
+type ContributionRole = keyof typeof roleLabels;
+type ContributionEntityKind = "person" | "company";
+type ContributionConfirmation = Readonly<{
+  name: string;
+  entityKind: ContributionEntityKind;
+  role: ContributionRole;
+  matches: readonly ContributorMatch[];
+}>;
 
 class PrivateActionError extends Error {
   constructor(readonly result: Extract<PrivateActionResult, { ok: false }>) { super(result.message); this.name = "PrivateActionError"; }
@@ -37,8 +45,14 @@ export function GameEditClient({ game }: Props) {
   const [isSearching, setIsSearching] = useState(false);
   const [confirmingRefKey, setConfirmingRefKey] = useState<string | null>(null);
   const [isLinking, setIsLinking] = useState(false);
+  const [contributionName, setContributionName] = useState("");
+  const [contributionEntityKind, setContributionEntityKind] = useState<ContributionEntityKind>("person");
+  const [contributionRole, setContributionRole] = useState<ContributionRole>("design");
+  const [contributionConfirmation, setContributionConfirmation] = useState<ContributionConfirmation | null>(null);
+  const [isAddingContribution, setIsAddingContribution] = useState(false);
   const requestVersion = useRef(0);
   const linkingRef = useRef(false);
+  const addingContributionRef = useRef(false);
   const manualContributions = game.contributors.filter((item) => item.origin === "manual");
   const sourceContributions = game.contributors.filter((item) => item.origin === "source");
   const platformOptions = [...new Set(["Steam", "PS5", "Xbox Series", "Nintendo Switch", ...game.actualPlatforms])];
@@ -66,17 +80,67 @@ export function GameEditClient({ game }: Props) {
     } catch (error) { setMessage(error instanceof Error ? error.message : "儲存失敗，請重試。"); }
   }
 
-  async function addContribution(form: FormData) {
+  async function submitContribution(input: unknown, newContribution: Omit<ContributionConfirmation, "matches"> | null = null) {
+    if (addingContributionRef.current) return;
+    addingContributionRef.current = true;
     try {
+      setIsAddingContribution(true);
       setMessage("儲存中……");
-      const result = unwrapPrivateAction(await addManualContribution({ gameId: game.id, name: form.get("name"), entityKind: form.get("entityKind"), role: form.get("role") }));
-      if (result.possibleDuplicate) {
-        setMessage("已新增；名稱可能與既有貢獻者重複，未自動合併。頁面即將更新。");
-        window.setTimeout(() => window.location.reload(), 1200);
-      } else {
-        window.location.reload();
+      const result = unwrapPrivateAction(await addManualContribution(input));
+      if (result.status === "confirmation_required") {
+        if (!newContribution) throw new Error("確認資料無效，請重新輸入。");
+        setContributionConfirmation({ ...newContribution, matches: result.matches });
+        setMessage("找到同名貢獻者，請選擇重用或建立新的同名貢獻者。");
+        return;
       }
+      window.location.reload();
     } catch (error) { setMessage(error instanceof Error ? error.message : "新增失敗，請重試。"); }
+    finally {
+      addingContributionRef.current = false;
+      setIsAddingContribution(false);
+    }
+  }
+
+  async function addContribution() {
+    if (contributionConfirmation) return;
+    await submitContribution({ kind: "new", gameId: game.id, name: contributionName, entityKind: contributionEntityKind, role: contributionRole, allowDuplicate: false }, {
+      name: contributionName.trim(),
+      entityKind: contributionEntityKind,
+      role: contributionRole,
+    });
+  }
+
+  function changeContributionName(value: string) {
+    setContributionName(value);
+    setContributionConfirmation(null);
+    setMessage("");
+  }
+
+  function changeContributionEntityKind(value: ContributionEntityKind) {
+    setContributionEntityKind(value);
+    setContributionConfirmation(null);
+    setMessage("");
+  }
+
+  function changeContributionRole(value: ContributionRole) {
+    setContributionRole(value);
+    setContributionConfirmation(null);
+    setMessage("");
+  }
+
+  async function reuseContributor(match: ContributorMatch) {
+    if (!contributionConfirmation || match.rolesOnGame.includes(contributionConfirmation.role)) return;
+    await submitContribution({ kind: "existing", gameId: game.id, contributorId: match.contributorId, role: contributionConfirmation.role });
+  }
+
+  async function confirmNewContribution() {
+    if (!contributionConfirmation) return;
+    await submitContribution({ kind: "new", gameId: game.id, name: contributionConfirmation.name, entityKind: contributionConfirmation.entityKind, role: contributionConfirmation.role, allowDuplicate: true });
+  }
+
+  function cancelContributionConfirmation() {
+    setContributionConfirmation(null);
+    setMessage("");
   }
 
   async function removeManual(id: string) {
@@ -252,8 +316,45 @@ export function GameEditClient({ game }: Props) {
     <details>
       <summary className="cursor-pointer font-semibold">貢獻關係</summary>
       <div className="mt-4 space-y-4">
-        <div><h3 className="text-sm font-medium">來源貢獻（唯讀）</h3>{sourceContributions.length === 0 ? <p className="mt-1 text-sm text-slate-500">沒有來源貢獻。</p> : <ul className="mt-1 space-y-1 text-sm">{sourceContributions.map((item) => <li key={`${item.id}:${item.role}`}>{item.name} · {roleLabels[item.role]} · {item.provider?.toUpperCase()}</li>)}</ul>}</div>
-        <div><h3 className="text-sm font-medium">手動貢獻</h3>{manualContributions.length > 0 && <ul className="mt-1 space-y-1 text-sm">{manualContributions.map((item) => <li className="flex items-center justify-between gap-2" key={item.id}><span>{item.name} · {roleLabels[item.role]}</span><button type="button" className="text-sm text-rose-700" onClick={() => void removeManual(item.id)}>移除</button></li>)}</ul>}<form action={addContribution} className="mt-3 space-y-2"><input name="name" className="w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="人物或組織名稱" required /><div className="flex gap-2"><select name="entityKind" className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-3"><option value="person">人物</option><option value="company">組織</option></select><select name="role" className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-3"><option value="design">設計／開發</option><option value="art">美術</option><option value="publisher">發行</option></select></div><button className="w-full rounded-xl border border-emerald-900 px-4 py-3 font-semibold text-emerald-900" type="submit">新增手動貢獻</button></form></div>
+        <div>
+          <h3 className="text-sm font-medium">來源貢獻（唯讀）</h3>
+          {sourceContributions.length === 0 ? <p className="mt-1 text-sm text-slate-500">沒有來源貢獻。</p> : <ul className="mt-1 space-y-1 text-sm">{sourceContributions.map((item) => <li key={`${item.id}:${item.role}`}>{item.name} · {roleLabels[item.role]} · {item.provider?.toUpperCase()}</li>)}</ul>}
+        </div>
+        <div>
+          <h3 className="text-sm font-medium">手動貢獻</h3>
+          {manualContributions.length > 0 && <ul className="mt-1 space-y-1 text-sm">{manualContributions.map((item) => <li className="flex items-center justify-between gap-2" key={item.id}><span>{item.name} · {roleLabels[item.role]}</span><button type="button" className="text-sm text-rose-700" onClick={() => void removeManual(item.id)}>移除</button></li>)}</ul>}
+          <form action={addContribution} className="mt-3 space-y-2">
+            <input name="name" value={contributionName} onChange={(event) => changeContributionName(event.target.value)} disabled={isAddingContribution} className="w-full rounded-xl border border-slate-300 px-3 py-3 disabled:opacity-60" placeholder="人物或組織名稱" required />
+            <div className="flex gap-2">
+              <select name="entityKind" value={contributionEntityKind} onChange={(event) => changeContributionEntityKind(event.target.value as ContributionEntityKind)} disabled={isAddingContribution} className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-3 disabled:opacity-60"><option value="person">人物</option><option value="company">組織</option></select>
+              <select name="role" value={contributionRole} onChange={(event) => changeContributionRole(event.target.value as ContributionRole)} disabled={isAddingContribution} className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-3 disabled:opacity-60"><option value="design">設計／開發</option><option value="art">美術</option><option value="publisher">發行</option></select>
+            </div>
+            <button className="w-full rounded-xl border border-emerald-900 px-4 py-3 font-semibold text-emerald-900 disabled:opacity-60" disabled={isAddingContribution || contributionConfirmation !== null} type="submit">{isAddingContribution ? "新增中……" : "新增手動貢獻"}</button>
+          </form>
+          {contributionConfirmation && <section role="alert" aria-labelledby="contribution-confirmation-title" className="mt-4 space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+            <div>
+              <h4 id="contribution-confirmation-title" className="font-semibold">確認同名貢獻者</h4>
+              <p className="mt-1">名稱：{contributionConfirmation.name} · 類型：{contributionConfirmation.entityKind === "person" ? "人物" : "組織"} · 分類：{roleLabels[contributionConfirmation.role]}</p>
+              <p className="mt-1 text-amber-800">尚未建立任何新資料，請選擇重用既有貢獻者，或明確建立新的同名貢獻者。</p>
+            </div>
+            <ul className="space-y-2">
+              {contributionConfirmation.matches.map((match) => {
+                const hasSameRole = match.rolesOnGame.includes(contributionConfirmation.role);
+                const providerLabel = match.provider === "bgg" ? "BGG" : match.provider === "igdb" ? "IGDB" : "手動";
+                return <li key={`${match.contributorId}:${match.provider ?? "manual"}`} className="rounded-lg border border-amber-200 bg-white p-3">
+                  <p className="font-semibold">{match.name} · {match.entityKind === "person" ? "人物" : "組織"}</p>
+                  <p className="mt-1 text-amber-800">來源：{providerLabel}</p>
+                  <p className="mt-1 text-amber-800">已在本遊戲的角色：{match.rolesOnGame.length > 0 ? match.rolesOnGame.map((role) => roleLabels[role]).join("、") : "尚未建立角色"}</p>
+                  <button type="button" disabled={isAddingContribution || hasSameRole} onClick={() => void reuseContributor(match)} className="mt-2 w-full rounded-lg border border-amber-700 px-3 py-2 font-semibold text-amber-900 disabled:cursor-not-allowed disabled:opacity-60">{hasSameRole ? "此分類已存在，無法重用" : "重用此貢獻者"}</button>
+                </li>;
+              })}
+            </ul>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button type="button" disabled={isAddingContribution} onClick={() => void confirmNewContribution()} className="flex-1 rounded-lg bg-amber-900 px-3 py-2 font-semibold text-white disabled:opacity-60">仍建立新的同名貢獻者</button>
+              <button type="button" disabled={isAddingContribution} onClick={cancelContributionConfirmation} className="flex-1 rounded-lg border border-amber-700 px-3 py-2 font-semibold text-amber-900 disabled:opacity-60">取消並修改</button>
+            </div>
+          </section>}
+        </div>
       </div>
     </details>
     {game.snapshot ? <button type="button" onClick={() => void refresh()} className="w-full rounded-xl border border-slate-300 px-4 py-3 font-semibold">重新整理來源資料</button> : <details>
