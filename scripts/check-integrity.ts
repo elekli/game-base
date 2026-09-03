@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
+import { validatePreviewReplayWorkflow } from "./preview-workflow-contract";
 
 const run = promisify(execFile);
 
@@ -12,7 +13,9 @@ const requiredPaths = [
   "src/shared/config/runtime-config.ts",
   "src/shared/observability/structured-log.ts",
   "scripts/preview-replay.ts",
+  "scripts/preview-workflow-contract.ts",
   "tests/unit/preview-replay.test.ts",
+  "tests/unit/preview-workflow.test.ts",
   ".github/workflows/preview-supabase-replay.yml",
   "docs/deployment/preview-supabase-replay.md",
   "supabase/config.toml",
@@ -103,20 +106,8 @@ for (const expected of [
 }
 
 const previewWorkflow = await readFile(".github/workflows/preview-supabase-replay.yml", "utf8");
-for (const expected of [
-  "refs/heads/main",
-  "environment: preview",
-  "cancel-in-progress: false",
-  "PREVIEW_DIRECT_DATABASE_URL: ${{ secrets.PREVIEW_DIRECT_DATABASE_URL }}",
-  "PREVIEW_REPLAY_COMMIT_SHA: ${{ github.sha }}",
-]) {
-  if (!previewWorkflow.includes(expected)) violations.push(`preview-workflow:${expected}`);
-}
-const workflowActions = [...previewWorkflow.matchAll(/^\s+uses:\s+([^\s]+)$/gm)].map(
-  (match) => match[1],
-);
-if (workflowActions.some((action) => !/@[0-9a-f]{40}$/.test(action))) {
-  violations.push("preview-workflow:unpinned-action");
+for (const violation of validatePreviewReplayWorkflow(previewWorkflow)) {
+  violations.push(`preview-workflow:${violation}`);
 }
 
 const { stdout: trackedFiles } = await run("git", ["ls-files"]);

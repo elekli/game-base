@@ -35,6 +35,8 @@ main + GitHub preview Environment
 
 ## 操作與失敗處理
 
-在 GitHub Actions 選 `main` 執行 `Preview Supabase Replay`。工作流程是 serial，`cancel-in-progress: false`，可安全重跑；每次會先清空再重播全部 migration，不能把 Production URL 當重試替代品。若 `migration reset`、`migration list`、migration history 或 `security tests` 任一步失敗，先修正同一 Preview Environment／binding，再重跑；失敗執行不應上傳 artifact。
+在 GitHub Actions 選 `main` 執行 `Preview Supabase Replay`，並在 required 的 `confirmation` 欄位手動輸入精確字串 `RESET_PREVIEW_ONLY`。任何錯字、大小寫差異或多餘空白都會在任何 Supabase 命令前被既有 preflight 拒絕。工作流程是 serial，`cancel-in-progress: false`，可安全重跑；每次會先清空再重播全部 migration，不能把 Production URL 當重試替代品。若 `migration reset`、`migration list`、migration history 或 `security tests` 任一步失敗，先修正同一 Preview Environment／binding，再重跑；失敗執行不應上傳 artifact。
+
+非 `refs/heads/main` 的手動執行會由具名 `ref-guard` step 明確失敗；replay job 不會執行，也不會產生 evidence。
 
 本機只可使用本機或明確受控的 Preview fixture 進行純單元測試。不要把 Hosted direct URL 放入 Vercel runtime，也不要在未確認 repository binding 與目標 project ref 前執行任何 reset。
