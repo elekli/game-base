@@ -7,11 +7,13 @@ import { createDatabase } from "@/adapters/database";
 import { PostgresGameStore } from "@/adapters/database-game-store";
 
 const bggFixture = sampleFixture("bgg", "1", "範例桌遊");
+const bggLinkFixture = sampleFixture("bgg", "3", "連結範例桌遊");
 const igdbFixture = sampleFixture("igdb", "2", "範例電子遊戲");
-const fixtureBgg = new TestCatalogAdapter("bgg", [bggFixture]);
+const fixtureBgg = new TestCatalogAdapter("bgg", [bggFixture, bggLinkFixture]);
 const fixtureIgdb = new TestCatalogAdapter("igdb", [igdbFixture]);
 
-const allowFixtures = process.env.VERCEL_ENV === "development" || process.env.ALLOW_SOURCE_FIXTURES === "true";
+const forceFixtures = process.env.ALLOW_SOURCE_FIXTURES === "true";
+const isDevelopment = process.env.VERCEL_ENV === "development";
 const useFixtureStore = process.env.ALLOW_SOURCE_FIXTURES === "true" ||
   (process.env.VERCEL_ENV === "development" && !process.env.DATABASE_URL?.startsWith("postgres"));
 const database = !useFixtureStore && process.env.DATABASE_URL?.startsWith("postgres") ? createDatabase(process.env.DATABASE_URL) : null;
@@ -23,9 +25,24 @@ function getFixtureStore() {
 }
 const store = database ? new PostgresGameStore(database.db) : useFixtureStore ? getFixtureStore() : new UnavailableGameStore();
 
+function createBggCatalog() {
+  if (forceFixtures) return fixtureBgg;
+  const token = process.env.BGG_TOKEN;
+  if (token) return new BggCatalogAdapter({ token });
+  return isDevelopment ? fixtureBgg : new BggCatalogAdapter();
+}
+
+function createIgdbCatalog() {
+  if (forceFixtures) return fixtureIgdb;
+  const clientId = process.env.IGDB_CLIENT_ID;
+  const clientSecret = process.env.IGDB_CLIENT_SECRET;
+  if (clientId && clientSecret) return new IgdbCatalogAdapter({ clientId, clientSecret });
+  return isDevelopment ? fixtureIgdb : new IgdbCatalogAdapter();
+}
+
 export const gamesService = createGamesService({
-  bgg: process.env.BGG_TOKEN ? new BggCatalogAdapter({ token: process.env.BGG_TOKEN }) : allowFixtures ? fixtureBgg : new BggCatalogAdapter(),
-  igdb: process.env.IGDB_CLIENT_ID && process.env.IGDB_CLIENT_SECRET ? new IgdbCatalogAdapter({ clientId: process.env.IGDB_CLIENT_ID, clientSecret: process.env.IGDB_CLIENT_SECRET }) : allowFixtures ? fixtureIgdb : new IgdbCatalogAdapter(),
+  bgg: createBggCatalog(),
+  igdb: createIgdbCatalog(),
 }, store);
 
 export const libraryService = createLibraryService(store);
