@@ -110,6 +110,8 @@ export class InMemoryGameStore implements GameStore {
   private readonly locks = new Map<string, Promise<void>>();
   private readonly contributors = new Map<string, ContributorEntity>();
   private readonly sourceContributors = new Map<string, string>();
+  private readonly customPlatforms = new Map<string, string>();
+  private readonly customTags = new Map<string, string>();
 
   private sourceContributionsFor(snapshot: SourceSnapshot): readonly GameContribution[] {
     return snapshot.contributors.map((contributor) => {
@@ -229,6 +231,14 @@ export class InMemoryGameStore implements GameStore {
     const actualPlatforms = input.actualPlatforms === undefined ? game.actualPlatforms : uniqueNames(input.actualPlatforms);
     assertVideoGamePlatforms(game.medium, actualPlatforms);
     const tags = input.tags === undefined ? game.tags : uniqueNames(input.tags);
+    for (const platform of actualPlatforms) {
+      const key = normalize(platform);
+      if (!SYSTEM_PLATFORMS.has(key) && !this.customPlatforms.has(key)) this.customPlatforms.set(key, platform);
+    }
+    for (const tag of tags) {
+      const key = normalize(tag);
+      if (!this.customTags.has(key)) this.customTags.set(key, tag);
+    }
     const customDisplayName = input.displayName === undefined ? game.customDisplayName : input.displayName === null ? null : input.displayName.trim() || null;
     const updated = { ...game, customDisplayName, displayName: customDisplayName ?? game.snapshot?.title ?? game.sourceNames[0] ?? game.displayName, actualPlatforms, tags, playerCountNote: input.playerCountNote === undefined ? game.playerCountNote : input.playerCountNote?.trim() || null };
     this.games.set(gameId, updated);
@@ -279,32 +289,34 @@ export class InMemoryGameStore implements GameStore {
     const key = normalize(name);
     if (SYSTEM_PLATFORMS.has(key)) throw new LibraryConflictError("library_system_platform", "系統預設平台不可刪除。");
     if ([...this.games.values()].some((game) => game.actualPlatforms.some((platform) => normalize(platform) === key))) throw new LibraryConflictError("library_item_in_use", "仍有遊戲使用此平台，請先移除關係。");
+    this.customPlatforms.delete(key);
   }
 
   async deleteTag(name: string): Promise<void> {
     const key = normalize(name);
     if ([...this.games.values()].some((game) => game.tags.some((tag) => normalize(tag) === key))) throw new LibraryConflictError("library_item_in_use", "仍有遊戲使用此標籤，請先移除關係。");
+    this.customTags.delete(key);
   }
 
   async listPlatforms(): Promise<readonly SharedLibraryItem[]> {
     const usage = new Map<string, number>();
     const displayNames = new Map<string, string>([["steam", "Steam"], ["ps5", "PS5"], ["xbox series", "Xbox Series"], ["nintendo switch", "Nintendo Switch"]]);
+    for (const [key, name] of this.customPlatforms) displayNames.set(key, name);
     for (const game of this.games.values()) {
-      if (game.trashedAt !== null) continue;
       for (const platform of game.actualPlatforms) {
         const key = normalize(platform);
         usage.set(key, (usage.get(key) ?? 0) + 1);
         if (!displayNames.has(key)) displayNames.set(key, platform);
       }
     }
-    return [...new Set([...SYSTEM_PLATFORMS, ...usage.keys()])].map((key) => ({ name: displayNames.get(key) ?? key, usageCount: usage.get(key) ?? 0, isSystem: SYSTEM_PLATFORMS.has(key) })).sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
+    return [...new Set([...SYSTEM_PLATFORMS, ...this.customPlatforms.keys(), ...usage.keys()])].map((key) => ({ name: displayNames.get(key) ?? key, usageCount: usage.get(key) ?? 0, isSystem: SYSTEM_PLATFORMS.has(key) })).sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
   }
 
   async listTags(): Promise<readonly SharedLibraryItem[]> {
     const names = new Map<string, SharedLibraryItem>();
+    for (const [key, name] of this.customTags) names.set(key, { name, usageCount: 0, isSystem: false });
     for (const game of this.games.values()) {
-      if (game.trashedAt !== null) continue;
-      for (const tag of game.tags) { const key = normalize(tag); names.set(key, { name: tag, usageCount: (names.get(key)?.usageCount ?? 0) + 1, isSystem: false }); }
+      for (const tag of game.tags) { const key = normalize(tag); names.set(key, { name: names.get(key)?.name ?? tag, usageCount: (names.get(key)?.usageCount ?? 0) + 1, isSystem: false }); }
     }
     return [...names.values()].sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
   }

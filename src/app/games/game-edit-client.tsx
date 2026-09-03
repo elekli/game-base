@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import type { ContributorMatch, ExternalGameRef, GameRecord, NormalizedSearchCandidate, Provider } from "@/modules/games";
-import { addManualContribution, deletePlatform, deleteTag, editGame, linkExternalSource, refreshExternalMetadata, removeManualContribution } from "@/app/private-mutation-actions";
+import { addManualContribution, editGame, linkExternalSource, refreshExternalMetadata, removeManualContribution } from "@/app/private-mutation-actions";
 import type { PrivateActionResult } from "@/shared/auth/private-action";
 
 type Props = Readonly<{ game: GameRecord }>;
@@ -50,21 +50,15 @@ export function GameEditClient({ game }: Props) {
   const [contributionRole, setContributionRole] = useState<ContributionRole>("design");
   const [contributionConfirmation, setContributionConfirmation] = useState<ContributionConfirmation | null>(null);
   const [isAddingContribution, setIsAddingContribution] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const requestVersion = useRef(0);
   const linkingRef = useRef(false);
   const addingContributionRef = useRef(false);
+  const refreshingRef = useRef(false);
   const manualContributions = game.contributors.filter((item) => item.origin === "manual");
   const sourceContributions = game.contributors.filter((item) => item.origin === "source");
   const platformOptions = [...new Set(["Steam", "PS5", "Xbox Series", "Nintendo Switch", ...game.actualPlatforms])];
   const customPlatforms = game.actualPlatforms.filter((platform) => !systemPlatforms.has(platform.toLocaleLowerCase("en-US")));
-
-  async function deleteShared(action: typeof deletePlatform | typeof deleteTag, name: string) {
-    try {
-      setMessage("刪除中……");
-      unwrapPrivateAction(await action({ name }));
-      window.location.reload();
-    } catch (error) { setMessage(error instanceof Error ? error.message : "刪除失敗，請重試。"); }
-  }
 
   async function edit(form: FormData) {
     try {
@@ -152,8 +146,12 @@ export function GameEditClient({ game }: Props) {
   }
 
   async function refresh() {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setIsRefreshing(true);
     try { setMessage("重新整理中……"); unwrapPrivateAction(await refreshExternalMetadata({ gameId: game.id })); window.location.reload(); }
     catch (error) { setMessage(error instanceof Error ? error.message : "重新整理失敗，舊資料仍可使用。"); }
+    finally { refreshingRef.current = false; setIsRefreshing(false); }
   }
 
   function clearLinkState() {
@@ -306,9 +304,9 @@ export function GameEditClient({ game }: Props) {
       <summary className="cursor-pointer font-semibold">編輯擁有者資料</summary>
       <form action={edit} className="mt-4 space-y-3">
         <label className="block text-sm">自訂顯示名稱<input name="displayName" defaultValue={game.customDisplayName ?? ""} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="留白則使用來源名稱" /></label>
-        {game.medium === "video_game" && <fieldset><legend className="text-sm">實際平台</legend><div className="mt-2 flex flex-wrap gap-3">{platformOptions.map((platform) => <label className="flex items-center gap-2 text-sm" key={platform}><input type="checkbox" name="actualPlatforms" value={platform} defaultChecked={game.actualPlatforms.some((value) => value.toLocaleLowerCase() === platform.toLocaleLowerCase())} />{platform}</label>)}</div>{customPlatforms.length > 0 && <div className="mt-2 flex flex-wrap gap-2 text-xs">{customPlatforms.map((platform) => <button type="button" className="rounded-full border border-rose-200 px-3 py-1 text-rose-700" key={platform} onClick={() => void deleteShared(deletePlatform, platform)}>刪除平台：{platform}</button>)}</div>}<input name="customPlatform" className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="新增自訂平台（以逗號分隔）" /></fieldset>}
+        {game.medium === "video_game" && <fieldset><legend className="text-sm">實際平台</legend><div className="mt-2 flex flex-wrap gap-3">{platformOptions.map((platform) => <label className="flex items-center gap-2 text-sm" key={platform}><input type="checkbox" name="actualPlatforms" value={platform} defaultChecked={game.actualPlatforms.some((value) => value.toLocaleLowerCase() === platform.toLocaleLowerCase())} />{platform}</label>)}</div>{customPlatforms.length > 0 && <p className="mt-2 text-xs text-slate-600">自訂平台請取消勾選後儲存；共享項目只能在收藏庫管理區刪除。</p>}<input name="customPlatform" className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="新增自訂平台（以逗號分隔）" /></fieldset>}
         <label className="block text-sm">自由標籤（以逗號分隔）<input name="tags" defaultValue={game.tags.join(", ")} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3" /></label>
-        {game.tags.length > 0 && <div className="flex flex-wrap gap-2 text-xs">{game.tags.map((tag) => <button type="button" className="rounded-full border border-rose-200 px-3 py-1 text-rose-700" key={tag} onClick={() => void deleteShared(deleteTag, tag)}>刪除標籤：{tag}</button>)}</div>}
+        {game.tags.length > 0 && <p className="text-xs text-slate-600">標籤請直接編輯後儲存；共享項目只能在收藏庫管理區刪除。</p>}
         <label className="block text-sm">人數說明（選填）<textarea name="playerCountNote" defaultValue={game.playerCountNote ?? ""} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3" rows={3} /></label>
         <button className="w-full rounded-xl bg-emerald-900 px-4 py-3 font-semibold text-white" type="submit">儲存資料</button>
       </form>
@@ -357,7 +355,7 @@ export function GameEditClient({ game }: Props) {
         </div>
       </div>
     </details>
-    {game.snapshot ? <button type="button" onClick={() => void refresh()} className="w-full rounded-xl border border-slate-300 px-4 py-3 font-semibold">重新整理來源資料</button> : <details>
+    {game.snapshot ? <button type="button" disabled={isRefreshing} onClick={() => void refresh()} className="w-full rounded-xl border border-slate-300 px-4 py-3 font-semibold disabled:cursor-not-allowed disabled:opacity-60">{isRefreshing ? "重新整理中……" : "重新整理來源資料"}</button> : <details>
       <summary className="cursor-pointer font-semibold">首次連結外部來源</summary>
       <div className="mt-4 space-y-4">
         <p className="text-sm text-slate-600">同媒介來源：{game.medium === "board_game" ? "BGG 桌遊" : "IGDB 電子遊戲"}</p>

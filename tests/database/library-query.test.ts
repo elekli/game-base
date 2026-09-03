@@ -155,4 +155,15 @@ describe("Postgres 收藏庫 SQL 查詢", () => {
       { kind: "genre", sourceCategoryId: "sql-query-genre", name: "角色扮演" },
     ]);
   });
+
+  it("回收區遊戲仍計入共享平台與標籤使用數，且刪除受關係約束", async () => {
+    const game = await store.createManual("SQL 篩選測試：回收區共享項目", "video_game");
+    await store.edit(game.id, { actualPlatforms: ["SQL 回收平台"], tags: ["SQL 回收標籤"] });
+    await store.trash(game.id);
+
+    expect(await store.listPlatforms()).toEqual(expect.arrayContaining([{ name: "SQL 回收平台", usageCount: 1, isSystem: false }]));
+    expect(await store.listTags()).toEqual([{ name: "SQL 回收標籤", usageCount: 1, isSystem: false }]);
+    await expect(library.deletePlatform("SQL 回收平台")).rejects.toThrow("仍有遊戲使用");
+    await expect(library.deleteTag("SQL 回收標籤")).rejects.toThrow("仍有遊戲使用");
+  });
 });

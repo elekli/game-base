@@ -14,6 +14,21 @@ export type ProductionExecutor = QueryExecutor & Readonly<{
 }>;
 type Row = Readonly<Record<string, unknown>>;
 
+export function sqlState(error: unknown): string | null {
+  const seen = new Set<object>();
+  let current: unknown = error;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (!current || typeof current !== "object" || seen.has(current)) return null;
+    seen.add(current);
+    const candidate = current as Record<string, unknown>;
+    for (const key of ["code", "sqlState", "sqlstate"]) {
+      if (typeof candidate[key] === "string" && /^[0-9A-Z]{5}$/i.test(candidate[key])) return candidate[key];
+    }
+    current = candidate.cause;
+  }
+  return null;
+}
+
 function jsonArray<T>(value: unknown): T[] {
   if (Array.isArray(value)) return value as T[];
   if (typeof value === "string") {
@@ -220,7 +235,7 @@ export class PostgresGameStore implements GameStore {
       return { game, created: true };
     }
     catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "23505") {
+      if (sqlState(error) === "23505") {
         const conflict = await this.db.execute(sql`select g.id, g.trashed_at from app_private.external_game_identities i join app_private.games g on g.external_game_identity_id = i.id where i.provider = ${ref.provider} and i.source_id = ${ref.sourceId} limit 1`) as Row[];
         if (conflict[0]) throw new SourceIdentityConflictError(String(conflict[0].id), Boolean(conflict[0].trashed_at));
       }
@@ -246,7 +261,7 @@ export class PostgresGameStore implements GameStore {
     try { await this.db.transaction(run); }
     catch (error) {
       if (error instanceof SourceIdentityConflictError || error instanceof SourceMediumMismatchError) throw error;
-      if (error && typeof error === "object" && "code" in error && error.code === "23505") {
+      if (sqlState(error) === "23505") {
         const conflict = await this.db.execute(sql`select g.id, g.trashed_at from app_private.external_game_identities i join app_private.games g on g.external_game_identity_id = i.id where i.provider = ${ref.provider} and i.source_id = ${ref.sourceId} limit 1`) as Row[];
         if (conflict[0]) throw new SourceIdentityConflictError(String(conflict[0].id), Boolean(conflict[0].trashed_at));
       }
@@ -385,7 +400,7 @@ export class PostgresGameStore implements GameStore {
       return result;
     } catch (error) {
       if (error instanceof LibraryConflictError || error instanceof SourcePersistenceFailedError) throw error;
-      if (error && typeof error === "object" && "code" in error && error.code === "23505") throw new LibraryConflictError("library_contribution_exists", "此貢獻者已在此遊戲擁有相同分類。");
+      if (sqlState(error) === "23505") throw new LibraryConflictError("library_contribution_exists", "此貢獻者已在此遊戲擁有相同分類。");
       throw new SourcePersistenceFailedError();
     }
   }
@@ -398,24 +413,27 @@ export class PostgresGameStore implements GameStore {
   }
 
   async deletePlatform(name: string): Promise<void> {
-    const rows = await this.db.execute(sql`select is_system from app_private.platforms where normalized_name = ${normalized(name)} limit 1`) as Row[];
+    const rows = await this.db.execute(sql`select p.is_system, count(gp.game_id)::int as usage_count from app_private.platforms p left join app_private.game_platforms gp on gp.platform_id = p.id where p.normalized_name = ${normalized(name)} group by p.id limit 1`) as Row[];
     if (rows[0]?.is_system) throw new LibraryConflictError("library_system_platform", "系統預設平台不可刪除。");
+    if (Number(rows[0]?.usage_count ?? 0) > 0) throw new LibraryConflictError("library_item_in_use", "仍有遊戲使用此平台，請先移除關係。");
     try { await this.db.execute(sql`delete from app_private.platforms where normalized_name = ${normalized(name)} and is_system = false`); }
-    catch (error) { if (error && typeof error === "object" && "code" in error && error.code === "23503") throw new LibraryConflictError("library_item_in_use", "仍有遊戲使用此平台，請先移除關係。"); throw error; }
+    catch (error) { if (sqlState(error) === "23503") throw new LibraryConflictError("library_item_in_use", "仍有遊戲使用此平台，請先移除關係。"); throw error; }
   }
 
   async deleteTag(name: string): Promise<void> {
+    const rows = await this.db.execute(sql`select count(gt.game_id)::int as usage_count from app_private.tags t left join app_private.game_tags gt on gt.tag_id = t.id where t.normalized_name = ${normalized(name)} group by t.id limit 1`) as Row[];
+    if (Number(rows[0]?.usage_count ?? 0) > 0) throw new LibraryConflictError("library_item_in_use", "仍有遊戲使用此標籤，請先移除關係。");
     try { await this.db.execute(sql`delete from app_private.tags where normalized_name = ${normalized(name)}`); }
-    catch (error) { if (error && typeof error === "object" && "code" in error && error.code === "23503") throw new LibraryConflictError("library_item_in_use", "仍有遊戲使用此標籤，請先移除關係。"); throw error; }
+    catch (error) { if (sqlState(error) === "23503") throw new LibraryConflictError("library_item_in_use", "仍有遊戲使用此標籤，請先移除關係。"); throw error; }
   }
 
   async listPlatforms(): Promise<readonly SharedLibraryItem[]> {
-    const rows = await this.db.execute(sql`select p.name, p.is_system, count(g.id)::int as usage_count from app_private.platforms p left join app_private.game_platforms gp on gp.platform_id = p.id left join app_private.games g on g.id = gp.game_id and g.trashed_at is null group by p.id order by p.name asc`) as Row[];
+    const rows = await this.db.execute(sql`select p.name, p.is_system, count(g.id)::int as usage_count from app_private.platforms p left join app_private.game_platforms gp on gp.platform_id = p.id left join app_private.games g on g.id = gp.game_id group by p.id order by p.name asc`) as Row[];
     return rows.map((row) => ({ name: String(row.name), usageCount: Number(row.usage_count), isSystem: Boolean(row.is_system) }));
   }
 
   async listTags(): Promise<readonly SharedLibraryItem[]> {
-    const rows = await this.db.execute(sql`select t.name, count(g.id)::int as usage_count from app_private.tags t left join app_private.game_tags gt on gt.tag_id = t.id left join app_private.games g on g.id = gt.game_id and g.trashed_at is null group by t.id order by t.name asc`) as Row[];
+    const rows = await this.db.execute(sql`select t.name, count(g.id)::int as usage_count from app_private.tags t left join app_private.game_tags gt on gt.tag_id = t.id left join app_private.games g on g.id = gt.game_id group by t.id order by t.name asc`) as Row[];
     return rows.map((row) => ({ name: String(row.name), usageCount: Number(row.usage_count), isSystem: false }));
   }
 

@@ -14,11 +14,17 @@ import type {
 
 export type FixtureScenario = "ok" | "unavailable" | "rate_limited" | "not_found";
 
+type FixtureGlobalState = typeof globalThis & { __puizeruGamebaseFixtureState?: { refreshFailures: Map<string, number>; freshFetches: Map<string, number> } };
+const fixtureGlobal = globalThis as FixtureGlobalState;
+const fixtureState = fixtureGlobal.__puizeruGamebaseFixtureState ??= { refreshFailures: new Map(), freshFetches: new Map() };
+
 export class TestCatalogAdapter implements SourceCatalogPort {
   readonly provider: ExternalGameRef["provider"];
   private scenario: FixtureScenario = "ok";
   private readonly candidates: NormalizedSearchCandidate[];
   private readonly snapshots = new Map<string, SourceSnapshot>();
+  private readonly refreshFailures = fixtureState.refreshFailures;
+  private readonly freshFetches = fixtureState.freshFetches;
 
   constructor(provider: ExternalGameRef["provider"], fixtures: readonly SourceSnapshot[] = []) {
     this.provider = provider;
@@ -33,6 +39,11 @@ export class TestCatalogAdapter implements SourceCatalogPort {
 
   setScenario(scenario: FixtureScenario) { this.scenario = scenario; }
   setSnapshot(snapshot: SourceSnapshot) { this.snapshots.set(snapshot.ref.sourceId.replace(/^0+(?=\d)/, ""), snapshot); }
+  setRefreshFailures(sourceId: string, count: number) {
+    const key = `${this.provider}:${sourceId.replace(/^0+(?=\d)/, "")}`;
+    this.refreshFailures.set(key, count);
+    this.freshFetches.delete(key);
+  }
 
   async search(input: SourceSearchQuery): Promise<readonly NormalizedSearchCandidate[]> {
     if (input.provider !== this.provider) return [];
@@ -42,8 +53,18 @@ export class TestCatalogAdapter implements SourceCatalogPort {
     return this.candidates.filter((item) => item.title.toLocaleLowerCase().includes(input.query.trim().toLocaleLowerCase())).slice(0, input.limit ?? 20);
   }
 
-  async fetchSnapshot(ref: ExternalGameRef): Promise<SourceSnapshot> {
+  async fetchSnapshot(ref: ExternalGameRef, freshness: "cache_ok" | "fresh" = "cache_ok"): Promise<SourceSnapshot> {
     const normalized = assertReference(ref);
+    if (freshness === "fresh") {
+      const sourceKey = `${this.provider}:${normalized.sourceId}`;
+      const fetchCount = (this.freshFetches.get(sourceKey) ?? 0) + 1;
+      this.freshFetches.set(sourceKey, fetchCount);
+      const failures = this.refreshFailures.get(sourceKey) ?? 0;
+      if (fetchCount > 1 && failures > 0) {
+        this.refreshFailures.set(sourceKey, failures - 1);
+        throw new SourceUnavailableError();
+      }
+    }
     if (this.scenario === "unavailable") throw new SourceUnavailableError();
     if (this.scenario === "rate_limited") throw new SourceRateLimitedError(1);
     const snapshot = this.snapshots.get(normalized.sourceId);

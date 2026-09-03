@@ -192,6 +192,43 @@ describe("library service", () => {
     await expect(service.deletePlatform("PS5")).rejects.toThrow("系統預設平台不可刪除");
   });
 
+  it("回收區遊戲仍計入共享平台與標籤使用數，且關係未移除前不能刪除", async () => {
+    const store = new InMemoryGameStore();
+    const service = createLibraryService(store);
+    const game = await store.createManual("回收區共享項目", "video_game");
+    await service.editGame(game.id, { actualPlatforms: ["舊平台"], tags: ["舊標籤"] });
+    await store.trash(game.id);
+
+    expect(await service.listPlatforms()).toEqual(expect.arrayContaining([{ name: "舊平台", usageCount: 1, isSystem: false }]));
+    expect(await service.listTags()).toEqual([{ name: "舊標籤", usageCount: 1, isSystem: false }]);
+    await expect(service.deletePlatform("舊平台")).rejects.toThrow("仍有遊戲使用");
+    await expect(service.deleteTag("舊標籤")).rejects.toThrow("仍有遊戲使用");
+
+    await service.editGame(game.id, { actualPlatforms: [], tags: [] });
+    expect(await service.listPlatforms()).toEqual(expect.arrayContaining([{ name: "舊平台", usageCount: 0, isSystem: false }]));
+    expect(await service.listTags()).toEqual([{ name: "舊標籤", usageCount: 0, isSystem: false }]);
+    await service.deletePlatform(" 舊平台 ");
+    await service.deleteTag("舊標籤");
+    expect(await service.listPlatforms()).not.toEqual(expect.arrayContaining([{ name: "舊平台", usageCount: 0, isSystem: false }]));
+    expect(await service.listTags()).toEqual([]);
+  });
+
+  it("InMemory 共享項目以第一次顯示名稱合併大小寫，零使用時仍可刪除", async () => {
+    const store = new InMemoryGameStore();
+    const service = createLibraryService(store);
+    const game = await store.createManual("共享項目登錄", "video_game");
+    await service.editGame(game.id, { actualPlatforms: [" Custom Platform "], tags: [" Custom Tag "] });
+    await service.editGame(game.id, { actualPlatforms: ["custom platform"], tags: ["custom tag"] });
+
+    expect(await service.listPlatforms()).toEqual(expect.arrayContaining([{ name: "Custom Platform", usageCount: 1, isSystem: false }]));
+    expect(await service.listTags()).toEqual([{ name: "Custom Tag", usageCount: 1, isSystem: false }]);
+    await service.editGame(game.id, { actualPlatforms: [], tags: [] });
+    expect(await service.listPlatforms()).toEqual(expect.arrayContaining([{ name: "Custom Platform", usageCount: 0, isSystem: false }]));
+    expect(await service.listTags()).toEqual([{ name: "Custom Tag", usageCount: 0, isSystem: false }]);
+    await service.deletePlatform(" CUSTOM PLATFORM ");
+    await service.deleteTag(" custom tag ");
+  });
+
   it("多類型篩選會清除不相容的來源分類", async () => {
     const store = new InMemoryGameStore();
     const service = createLibraryService(store);

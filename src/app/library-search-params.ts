@@ -1,6 +1,26 @@
 import type { Medium } from "@/modules/games";
 import { clearIncompatibleSourceCategories, type LibraryFilters, type LibrarySort } from "@/modules/library";
 
+export function buildLibrarySearchParams(form: FormData): URLSearchParams {
+  const media = form.getAll("medium").filter((value): value is string => value === "board_game" || value === "video_game");
+  const boardOnly = media.length === 1 && media[0] === "board_game";
+  const params = new URLSearchParams();
+  for (const medium of media) params.append("medium", medium);
+  if (media.length === 1) {
+    for (const category of form.getAll("category")) if (typeof category === "string") params.append("category", category);
+  }
+  const sort = form.get("sort");
+  const allowedSort = boardOnly && (sort === "weight_asc" || sort === "weight_desc" || sort === "strategy_rank") || sort === "name" || sort === "recent" ? sort : "name";
+  params.set("sort", allowedSort);
+  if (boardOnly) {
+    for (const field of ["weightMin", "weightMax"]) {
+      const value = form.get(field);
+      if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) params.set(field, value);
+    }
+  }
+  return params;
+}
+
 export function parseLibrarySearchParams(
   params: Readonly<Record<string, string | string[] | undefined>>,
 ): LibraryFilters {
