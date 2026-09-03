@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import type Vditor from "vditor";
-import { canPersistDraft, classifyDraft, normalizeMarkdown, preservesMarkdown, prototypeMarkdown, type DraftState, type NoteKind } from "./prototype-state";
+import "vditor/dist/index.css";
+import styles from "./vditor-ir-prototype.module.css";
+import { canPersistDraft, classifyDraft, normalizeMarkdown, preservesMarkdown, prototypeDraftStorageKey, prototypeMarkdown, readPrototypeDraft, writePrototypeDraft, type DraftState, type NoteKind } from "./prototype-state";
 
-const draftStorageKey = "puizeru-gamebase:prototype:vditor-ir:draft";
 const saveDelay = 450;
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -68,14 +69,22 @@ export function VditorIrPrototype() {
     }
     setSaveState("saving");
     saveCompletionRef.current = window.setTimeout(() => {
-      if (saveFailureRef.current) {
+      try {
+        if (saveFailureRef.current) {
+          setSaveState("error");
+          return;
+        }
+        const result = writePrototypeDraft(window.localStorage, { content: value, kind }, prototypeDraftStorageKey);
+        if (!result.ok) {
+          setSaveState("error");
+          return;
+        }
+        savedContentRef.current = value;
+        setDraftState("clean");
+        setSaveState("saved");
+      } catch {
         setSaveState("error");
-        return;
       }
-      window.localStorage.setItem(draftStorageKey, JSON.stringify({ content: value, kind }));
-      savedContentRef.current = value;
-      setDraftState("clean");
-      setSaveState("saved");
     }, 260);
   }
 
@@ -88,7 +97,13 @@ export function VditorIrPrototype() {
       return;
     }
     setSaveState("idle");
-    saveTimerRef.current = window.setTimeout(() => persistDraft(value), saveDelay);
+    saveTimerRef.current = window.setTimeout(() => {
+      try {
+        persistDraft(value);
+      } catch {
+        setSaveState("error");
+      }
+    }, saveDelay);
   }
 
   function handleInput(value: string, inputType = "input") {
@@ -102,7 +117,7 @@ export function VditorIrPrototype() {
   function exportMarkdown() {
     const value = editorRef.current?.getValue() ?? currentContentRef.current;
     setExportedMarkdown(value);
-    setRoundTripResult(preservesMarkdown(currentContentRef.current, value) ? "保留一致" : "內容有差異");
+    setRoundTripResult(preservesMarkdown(prototypeMarkdown, value) ? "保留一致" : "內容有差異");
   }
 
   function changeNoteKind(nextKind: NoteKind) {
@@ -146,19 +161,19 @@ export function VditorIrPrototype() {
 
     void import("vditor").then(({ default: Vditor }) => {
       if (disposed) return;
-      const stored = window.localStorage.getItem(draftStorageKey);
       let initialValue = prototypeMarkdown;
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored) as { content?: unknown; kind?: unknown };
-          if (typeof parsed.content === "string") initialValue = parsed.content;
-          if (parsed.kind === "new" || parsed.kind === "existing") {
-            noteKindRef.current = parsed.kind;
-            setNoteKind(parsed.kind);
-          }
-        } catch {
-          window.localStorage.removeItem(draftStorageKey);
+      let storageFailed = false;
+      try {
+        const result = readPrototypeDraft(window.localStorage, prototypeDraftStorageKey);
+        if (!result.ok) {
+          storageFailed = true;
+        } else if (result.value) {
+          initialValue = result.value.content;
+          noteKindRef.current = result.value.kind;
+          setNoteKind(result.value.kind);
         }
+      } catch {
+        storageFailed = true;
       }
       currentContentRef.current = initialValue;
       setCurrentContent(initialValue);
@@ -181,6 +196,7 @@ export function VditorIrPrototype() {
       });
       editorRef.current = editor;
       setDraftState("clean");
+      if (storageFailed) setSaveState("error");
     }).catch(() => setSaveState("error"));
 
     return () => {
@@ -209,65 +225,65 @@ export function VditorIrPrototype() {
 
   return (
     <>
-      <section className="prototype-panel prototype-panel--editor" aria-labelledby="editor-title">
-        <div className="prototype-panel__header">
+      <section className={`${styles.panel} ${styles.panelEditor}`} aria-labelledby="editor-title">
+        <div className={styles.panelHeader}>
           <div>
             <h2 id="editor-title">Vditor ir：即時渲染編輯區</h2>
             <p>工具列設定為固定；點進標題、斜體或連結後觀察語法標記是否能回到可編輯狀態。</p>
           </div>
-          <span className="prototype-note-chip">隔離原型</span>
+          <span className={styles.noteChip}>隔離原型</span>
         </div>
-        <div className="prototype-editor" ref={editorHostRef} data-testid="vditor-host" />
-        <div className="prototype-editor__footer">
-          <p className="prototype-save-state" data-state={statusKey} role="status" data-testid="save-status">{isReady ? displayState : "正在載入編輯器……"}</p>
-          {saveState === "error" && <button className="prototype-button prototype-button--quiet" type="button" onClick={retrySave}>重試儲存</button>}
+        <div className={styles.editor} ref={editorHostRef} data-testid="vditor-host" />
+        <div className={styles.editorFooter}>
+          <p className={styles.saveState} data-state={statusKey} role="status" data-testid="save-status">{isReady ? displayState : "正在載入編輯器……"}</p>
+          {saveState === "error" && <button className={`${styles.button} ${styles.buttonQuiet}`} type="button" onClick={retrySave}>重試儲存</button>}
         </div>
-        <div className="prototype-toolbar" aria-label="原型操作">
-          <button className="prototype-button" type="button" onClick={exportMarkdown}>取得 Markdown</button>
-          <button className="prototype-button prototype-button--quiet" type="button" onClick={clearNote}>清空目前內容</button>
-          <button className="prototype-button prototype-button--quiet" type="button" onClick={restoreNote}>還原儲存值</button>
+        <div className={styles.toolbar} aria-label="原型操作">
+          <button className={styles.button} type="button" onClick={exportMarkdown}>取得 Markdown</button>
+          <button className={`${styles.button} ${styles.buttonQuiet}`} type="button" onClick={clearNote}>清空目前內容</button>
+          <button className={`${styles.button} ${styles.buttonQuiet}`} type="button" onClick={restoreNote}>還原儲存值</button>
         </div>
       </section>
 
-      <div className="prototype-grid">
-        <section className="prototype-panel prototype-card" aria-labelledby="roundtrip-title">
+      <div className={styles.grid}>
+        <section className={`${styles.panel} ${styles.card}`} aria-labelledby="roundtrip-title">
           <h2 id="roundtrip-title">Markdown 往返與狀態相容</h2>
-          <p className="prototype-card__intro">原型只把 Markdown 純文字交給儲存適配器；Vditor 的 HTML 是編輯呈現層，不是資料來源。</p>
-          <p className="prototype-result">往返檢查：<strong data-testid="roundtrip-result">{roundTripResult}</strong></p>
-          <p className="prototype-result">目前模式：<strong>{noteKind === "existing" ? "既有筆記" : "新筆記"}</strong>；目前內容：<strong>{hasContent ? "非空白" : "空白"}</strong></p>
-          {exportedMarkdown ? <pre className="prototype-raw" data-testid="markdown-export">{exportedMarkdown}</pre> : <p className="prototype-raw prototype-raw--empty">按下「取得 Markdown」後，這裡會顯示 Vditor.getValue() 的原文。</p>}
+          <p className={styles.cardIntro}>原型只把 Markdown 純文字交給儲存適配器；Vditor 的 HTML 是編輯呈現層，不是資料來源。</p>
+          <p className={styles.result}>往返檢查：<strong data-testid="roundtrip-result">{roundTripResult}</strong></p>
+          <p className={styles.result}>目前模式：<strong>{noteKind === "existing" ? "既有筆記" : "新筆記"}</strong>；目前內容：<strong>{hasContent ? "非空白" : "空白"}</strong></p>
+          {exportedMarkdown ? <pre className={styles.raw} data-testid="markdown-export">{exportedMarkdown}</pre> : <p className={`${styles.raw} ${styles.rawEmpty}`}>按下「取得 Markdown」後，這裡會顯示 Vditor.getValue() 的原文。</p>}
         </section>
 
-        <section className="prototype-panel prototype-card" aria-labelledby="events-title">
+        <section className={`${styles.panel} ${styles.card}`} aria-labelledby="events-title">
           <h2 id="events-title">輸入事件觀察</h2>
-          <p className="prototype-card__intro">自動化只確認事件路徑存在；真實注音組字仍標為人工驗證。</p>
-          <div className="prototype-event-grid">
-            <div className="prototype-event"><span className="prototype-event__label">Composition</span><strong data-testid="composition-state">{compositionState}</strong></div>
-            <div className="prototype-event"><span className="prototype-event__label">Input 次數</span><strong data-testid="input-count">{inputEvents}</strong></div>
-            <div className="prototype-event"><span className="prototype-event__label">最後類型</span><strong data-testid="last-input-type">{lastInputType}</strong></div>
-            <div className="prototype-event"><span className="prototype-event__label">工具列</span><strong>固定</strong></div>
+          <p className={styles.cardIntro}>自動化只確認事件路徑存在；真實注音組字仍標為人工驗證。</p>
+          <div className={styles.eventGrid}>
+            <div className={styles.event}><span className={styles.eventLabel}>Composition</span><strong data-testid="composition-state">{compositionState}</strong></div>
+            <div className={styles.event}><span className={styles.eventLabel}>Input 次數</span><strong data-testid="input-count">{inputEvents}</strong></div>
+            <div className={styles.event}><span className={styles.eventLabel}>最後類型</span><strong data-testid="last-input-type">{lastInputType}</strong></div>
+            <div className={styles.event}><span className={styles.eventLabel}>工具列</span><strong>固定</strong></div>
           </div>
-          <label className="prototype-toggle prototype-spaced">
+          <label className={`${styles.toggle} ${styles.spaced}`}>
             <input type="checkbox" checked={saveFailure} onChange={(event) => { setSaveFailure(event.target.checked); saveFailureRef.current = event.target.checked; }} />
             <span>模擬下一次儲存失敗（確認文字不會回復舊值）</span>
           </label>
-          <div className="prototype-actions prototype-spaced">
-            <button className="prototype-button prototype-button--quiet" type="button" onClick={() => changeNoteKind("existing")}>以既有筆記驗證清空待確認</button>
-            <button className="prototype-button prototype-button--quiet" type="button" onClick={() => changeNoteKind("new")}>以新筆記驗證空白不建立</button>
+          <div className={`${styles.actions} ${styles.spaced}`}>
+            <button className={`${styles.button} ${styles.buttonQuiet}`} type="button" onClick={() => changeNoteKind("existing")}>以既有筆記驗證清空待確認</button>
+            <button className={`${styles.button} ${styles.buttonQuiet}`} type="button" onClick={() => changeNoteKind("new")}>以新筆記驗證空白不建立</button>
           </div>
         </section>
       </div>
 
-      {exportedMarkdown && <section className="prototype-panel prototype-card" aria-labelledby="manual-title">
+      {exportedMarkdown && <section className={`${styles.panel} ${styles.card}`} aria-labelledby="manual-title">
         <h2 id="manual-title">390px 驗證清單</h2>
-        <ul className="prototype-checklist">
+        <ul className={styles.checklist}>
           <li><span>語法揭露：點進 `#` 標題、`*` 斜體與連結，確認標記出現且可以直接調整。</span></li>
           <li><span>固定工具列：向下捲動編輯內容，確認工具列仍在編輯區頂端並可觸控。</span></li>
           <li><span>Markdown 往返：按「取得 Markdown」，確認原文仍包含標題、清單、連結與核取方塊。</span></li>
           <li data-result="manual"><span>繁中 IME：使用真實注音鍵盤輸入、選字、刪除與重新載入；本頁自動化不宣稱此項通過。</span></li>
           <li data-result="manual"><span>離線流程：開啟失敗模擬後輸入，確認顯示失敗、文字保留，再關閉模擬並按重試。</span></li>
         </ul>
-        <div className="prototype-manual"><strong>未決：</strong>只有在真實手機完成繁中注音組字與虛擬鍵盤遮擋檢查後，才能裁決是否取代 MVP 的 Markdown 原始碼編輯器。</div>
+        <div className={styles.manual}><strong>未決：</strong>只有在真實手機完成繁中注音組字與虛擬鍵盤遮擋檢查後，才能裁決是否取代 MVP 的 Markdown 原始碼編輯器。</div>
       </section>}
     </>
   );
