@@ -23,6 +23,25 @@ main + GitHub preview Environment
 - evidence 只包含固定 allowlist 欄位，綁定 `PREVIEW_REPLAY_COMMIT_SHA`／`GITHUB_SHA`，不包含 URL、密碼、token、資料內容或 CLI output。路徑 containment 使用 `path.relative` 判定。
 - hosted runtime 拒絕 `DIRECT_DATABASE_URL`、`PREVIEW_DIRECT_DATABASE_URL`、`SUPABASE_ACCESS_TOKEN`、`SUPABASE_DB_PASSWORD`、`SUPABASE_SERVICE_ROLE_KEY` 與 `PGPASSWORD`；`SUPABASE_SECRET_KEY` 仍可供 server-side 私有 Storage 使用。
 
+## 首次啟用順序
+
+`workflow_dispatch` 只有在 workflow 檔案已存在於 GitHub default branch 時才能觸發，因此第一次 Hosted replay 必須分成兩個明確階段；不能把第一次成功執行列為引入這個 workflow 的 PR 合併前條件。
+
+```text
+階段 A：PR 內驗證 workflow contract、preflight、測試與非秘密 binding
+              │
+              └──► 合併到 main（此時才建立可手動觸發的 workflow）
+                            │
+                            ▼
+階段 B：從 main 輸入 RESET_PREVIEW_ONLY，執行真實 Hosted replay
+              │
+              └──► 保存 commit-bound artifact，才關閉 Hosted replay 驗收
+```
+
+- 合併前：CI 必須證明非 `main` ref 會拒絕、確認字串精確比對、Preview／Production binding 互斥、direct URL 目標受限、失敗不產生成功 evidence；review 另核對 repository 只含非秘密識別與指紋。
+- 合併後：只從 `main` 手動執行真實 replay。成功 artifact 必須綁定實際 merge 後 commit；在此之前只能宣稱「replay 機制已進 `main`」，不能宣稱 Hosted schema 已重播或 #48 已完成。
+- 後續修改：workflow 已存在於 `main` 後，可以用 `--ref` 選擇含修改的分支做非破壞性 contract 驗證；任何會執行 reset 的路徑仍只接受 `refs/heads/main`。
+
 ## 外部 provisioning（本票不執行）
 
 實際 Hosted Preview project／ref 是外部前置條件，不得以 `preview-ref` fixture 冒充。主 session 或維運者必須在受保護平台完成下列設定，並以非秘密識別值更新 repository binding；本票不建立或修改 Hosted Supabase、GitHub、Vercel 資源。
