@@ -1,6 +1,6 @@
-type HostedEnvironment = "preview" | "production";
+export type HostedEnvironment = "preview" | "production";
 
-type DeploymentBinding = Readonly<{
+export type DeploymentBinding = Readonly<{
   databaseName: string;
   projectRef: string;
   publishableKeySha256: string;
@@ -39,3 +39,18 @@ export const deploymentBindings: Readonly<
     supabaseHostname: "production-ref.supabase.co",
   },
 };
+
+export function hostedBindingsAreMutuallyExclusive(
+  bindings: Readonly<Record<HostedEnvironment, DeploymentBinding>> = deploymentBindings,
+): boolean {
+  const preview = bindings.preview;
+  const production = bindings.production;
+
+  return [
+    [preview.projectRef, production.projectRef],
+    [preview.supabaseHostname, production.supabaseHostname],
+    [preview.supavisorUsername, production.supavisorUsername],
+    [preview.publishableKeySha256, production.publishableKeySha256],
+    [preview.secretKeySha256, production.secretKeySha256],
+  ].every(([previewValue, productionValue]) => previewValue !== productionValue);
+}

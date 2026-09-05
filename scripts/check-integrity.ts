@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
+import { validatePreviewReplayWorkflow } from "./preview-workflow-contract";
 
 const run = promisify(execFile);
 
@@ -11,6 +12,12 @@ const requiredPaths = [
   "src/shared/config/deployment-bindings.ts",
   "src/shared/config/runtime-config.ts",
   "src/shared/observability/structured-log.ts",
+  "scripts/preview-replay.ts",
+  "scripts/preview-workflow-contract.ts",
+  "tests/unit/preview-replay.test.ts",
+  "tests/unit/preview-workflow.test.ts",
+  ".github/workflows/preview-supabase-replay.yml",
+  "docs/deployment/preview-supabase-replay.md",
   "supabase/config.toml",
   "supabase/migrations/0001_runtime_security.sql",
   "supabase/tests/0001_runtime_security.pgtap.sql",
@@ -41,6 +48,7 @@ const requiredScripts = [
   "test:e2e",
   "integrity:check",
   "build",
+  "preview:replay",
   "supabase:reset",
   "test:pgtap",
   "db:schema:pull",
@@ -71,6 +79,37 @@ for (const expected of ["app_runtime", "nobypassrls", "app_private", "game-media
   if (!migration.includes(expected)) violations.push(`migration:${expected}`);
 }
 
+const runtimeConfig = await readFile("src/shared/config/runtime-config.ts", "utf8");
+for (const expected of [
+  "DIRECT_DATABASE_URL",
+  "PREVIEW_DIRECT_DATABASE_URL",
+  "SUPABASE_ACCESS_TOKEN",
+  "SUPABASE_DB_PASSWORD",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "PGPASSWORD",
+  "SUPABASE_SECRET_KEY",
+]) {
+  if (!runtimeConfig.includes(expected)) violations.push(`runtime-config:${expected}`);
+}
+
+const previewReplay = await readFile("scripts/preview-replay.ts", "utf8");
+for (const expected of [
+  "RESET_PREVIEW_ONLY",
+  '"--no-seed"',
+  '"migration", "list"',
+  '"test", "db"',
+  "db.${projectRef}.supabase.co",
+  "repositoryCommitSha",
+  "relative(repositoryRoot",
+]) {
+  if (!previewReplay.includes(expected)) violations.push(`preview-replay:${expected}`);
+}
+
+const previewWorkflow = await readFile(".github/workflows/preview-supabase-replay.yml", "utf8");
+for (const violation of validatePreviewReplayWorkflow(previewWorkflow)) {
+  violations.push(`preview-workflow:${violation}`);
+}
+
 const { stdout: trackedFiles } = await run("git", ["ls-files"]);
 const trackedSecrets = trackedFiles
   .split("\n")
@@ -85,5 +124,11 @@ if (violations.length > 0) {
   }));
   process.exitCode = 1;
 } else {
-  console.log(JSON.stringify({ event: "integrity_check_passed", checks: 34 }));
+  const checks =
+    requiredPaths.length +
+    requiredScripts.length +
+    5 +
+    7 +
+    1;
+  console.log(JSON.stringify({ event: "integrity_check_passed", checks }));
 }

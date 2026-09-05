@@ -1,9 +1,17 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { NamedError } from "@/shared/errors/named-error";
-import { deploymentBindings } from "./deployment-bindings";
+import { deploymentBindings, hostedBindingsAreMutuallyExclusive } from "./deployment-bindings";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const hostedOperationVariables = [
+  "DIRECT_DATABASE_URL",
+  "PREVIEW_DIRECT_DATABASE_URL",
+  "SUPABASE_ACCESS_TOKEN",
+  "SUPABASE_DB_PASSWORD",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "PGPASSWORD",
+] as const;
 
 const environmentSchema = z.object({
   VERCEL_ENV: z.enum(["development", "preview", "production"]),
@@ -49,6 +57,14 @@ export function parseRuntimeConfig(
   const parsed = environmentSchema.safeParse(input);
   if (!parsed.success) throw new RuntimeConfigError();
   const env = parsed.data;
+
+  if (!hostedBindingsAreMutuallyExclusive()) throw new RuntimeConfigError();
+  if (
+    (env.VERCEL_ENV === "preview" || env.VERCEL_ENV === "production") &&
+    hostedOperationVariables.some((name) => input[name] !== undefined)
+  ) {
+    throw new RuntimeConfigError();
+  }
 
   const supabaseUrl = new URL(env.SUPABASE_URL);
   const databaseUrl = new URL(env.DATABASE_URL);
