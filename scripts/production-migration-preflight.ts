@@ -1510,14 +1510,13 @@ export async function runProductionMigrationPreflight(options: {
       );
     }
     const pendingMigrations = migrations.slice(snapshot.migrations.length);
-    const namedRemediations = pendingMigrations.filter(
-      (migration) => migration.name === KNOWN_DRIFT_REMEDIATION_NAME,
-    );
+    const pendingRemediation = pendingMigrations[0];
     const knownDriftRemediationPending =
-      namedRemediations.length === 1 &&
-      namedRemediations[0]!.version === PENDING_KNOWN_DRIFT_REMEDIATION.version &&
-      namedRemediations[0]!.filename === PENDING_KNOWN_DRIFT_REMEDIATION.filename &&
-      namedRemediations[0]!.sql === KNOWN_DRIFT_REMEDIATION_SQL;
+      pendingMigrations.length === 1 &&
+      pendingRemediation!.version === PENDING_KNOWN_DRIFT_REMEDIATION.version &&
+      pendingRemediation!.filename === PENDING_KNOWN_DRIFT_REMEDIATION.filename &&
+      pendingRemediation!.name === KNOWN_DRIFT_REMEDIATION_NAME &&
+      pendingRemediation!.sql === KNOWN_DRIFT_REMEDIATION_SQL;
     const preflightState = assertSnapshot(
       snapshot,
       migrations.map(({ version, name }) => ({ version, name })),

@@ -1517,6 +1517,36 @@ describe("production migration preflight", () => {
     });
   });
 
+  it("rejects known PUBLIC drift when a safe 0009 follows the exact 0008", async () => {
+    const root = await migrationFixture({
+      "0001_runtime_security.sql": "create schema app_private;",
+      "0002_games.sql": "create table app_private.games (id uuid primary key);",
+      "0008_revoke_public_platform_trigger_execute.sql":
+        "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n",
+      "0009_safe_followup.sql":
+        "create table app_private.safe_followup (id uuid primary key);",
+    });
+    const snapshot = healthySnapshot();
+    snapshot.unsafeGrantCount = 1;
+    snapshot.knownPublicExecuteDriftCount = 1;
+    snapshot.appRuntimeCanExecuteKnownDriftFunction = true;
+    const session: ReadOnlyDatabaseSession = {
+      async unsafe<T>(sql: string) {
+        return sql.includes("json_build_object") ? ([{ snapshot }] as T[]) : [];
+      },
+      async release() {},
+    };
+
+    await expect(
+      runProductionMigrationPreflight({
+        root,
+        databaseUrl:
+          "postgres://postgres.wbtyuvufhrhybquzwfip:secret@aws-0-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=verify-full",
+        connect: async () => session,
+      }),
+    ).rejects.toThrow("ProductionMigrationPreflightError");
+  });
+
   it("recovers when 0007 is recorded but its REVOKE effect is missing", async () => {
     const repositoryRoot = process.cwd();
     const migrationFilenames = [
