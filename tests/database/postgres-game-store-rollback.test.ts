@@ -74,7 +74,7 @@ async function cleanTestData(): Promise<void> {
   await runtimeDatabase.unsafe("delete from app_private.media_ingests where game_id in (select id from app_private.games where display_name like '交易回滾測試：%')");
   await migrationDatabase.unsafe("delete from app_private.source_refresh_operations where game_id in (select id from app_private.games where display_name like '交易回滾測試：%')");
   await runtimeDatabase.unsafe("delete from app_private.games where display_name like '交易回滾測試：%'");
-  await runtimeDatabase.unsafe("delete from app_private.external_game_identities where provider = 'bgg' and source_id in ('980001', '980002', '980003', '980004', '980005', '980006')");
+  await runtimeDatabase.unsafe("delete from app_private.external_game_identities where provider = 'bgg' and source_id in ('980001', '980002', '980003', '980004', '980005', '980006', '980007')");
   await runtimeDatabase.unsafe("delete from app_private.source_categories where source_category_id like 'rollback-integration-%'");
   await runtimeDatabase.unsafe("delete from app_private.contributors where source_provider = 'bgg' and source_contributor_id like 'rollback-integration-%'");
   await runtimeDatabase.unsafe("delete from app_private.platforms where is_system = false and normalized_name like '交易回滾測試平台%'");
@@ -177,6 +177,17 @@ async function readRefreshState(gameId: string, identityId: string): Promise<{
   };
 }
 
+async function readRefreshReplayFootprint(gameId: string, identityId: string, operationId: string): Promise<readonly unknown[]> {
+  return Promise.all([
+    runtimeDatabase.unsafe("select snapshot, updated_at from app_private.external_game_identities where id = $1", [identityId]),
+    runtimeDatabase.unsafe("select id, name, name_kind from app_private.game_names where game_id = $1 order by id", [gameId]),
+    runtimeDatabase.unsafe("select id, source_contributor_id, role from app_private.source_contributions where identity_id = $1 order by id", [identityId]),
+    runtimeDatabase.unsafe("select normalized_name, name from app_private.external_supported_platforms where identity_id = $1 order by normalized_name", [identityId]),
+    runtimeDatabase.unsafe("select id, created_at from app_private.media_ingests where game_id = $1 order by id", [gameId]),
+    migrationDatabase.unsafe("select operation_id, created_at from app_private.source_refresh_operations where operation_id = $1", [operationId]),
+  ]);
+}
+
 beforeAll(async () => {
   controlDatabase = postgres(requiredDatabaseUrl, postgresTestOptions);
   await controlDatabase.unsafe("grant app_migrator to postgres");
@@ -210,6 +221,22 @@ afterAll(async () => {
 });
 
 describe("PostgresGameStore 真實交易回滾", () => {
+  it("相同 refresh receipt 的 response-loss replay 是交易內 no-op 並回傳既有結果", async () => {
+    const oldSnapshot = snapshotFor("980007", "交易回滾測試：重播舊來源", "rollback-integration-replay-old-category", "rollback-integration-replay-old-contributor", "rollback-replay-old-cover", 3.2);
+    const refreshedSnapshot = snapshotFor("980007", "交易回滾測試：重播新來源", "rollback-integration-replay-new-category", "rollback-integration-replay-new-contributor", "rollback-replay-new-cover", 4.1);
+    const created = await store.createFromSource(oldSnapshot.ref, oldSnapshot);
+    const identityId = created.game.externalIdentityId;
+    if (!identityId) throw new Error("refresh replay fixture did not create an external identity");
+    const operationId = "76000000-0000-4000-8000-000000000001";
+    const first = await store.refreshSource(created.game.id, refreshedSnapshot, operationId);
+    const beforeReplay = await readRefreshReplayFootprint(created.game.id, identityId, operationId);
+
+    const replay = await store.refreshSource(created.game.id, refreshedSnapshot, operationId);
+
+    expect(replay).toEqual(first);
+    expect(await readRefreshReplayFootprint(created.game.id, identityId, operationId)).toEqual(beforeReplay);
+  });
+
   it("回收區手動條目拒絕首次連結，且不留下來源或封面攝取資料", async () => {
     const game = await store.createManual("交易回滾測試：回收區手動連結", "board_game");
     const snapshot = snapshotFor("980005", "交易回滾測試：不應連結的來源", "rollback-integration-trashed-link-category", "rollback-integration-trashed-link-contributor", "rollback-trashed-link-cover", 3.2);

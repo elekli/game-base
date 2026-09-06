@@ -6,7 +6,6 @@ describe("generated database schema", () => {
   it.each([
     { table: mediaIngestsInAppPrivate, columnName: "game_id", catalogConstraintName: "media_ingests_game_id_fkey", onDelete: "cascade" },
     { table: mediaAssetsInAppPrivate, columnName: "ingest_id", catalogConstraintName: "media_assets_ingest_id_fkey", onDelete: "cascade" },
-    { table: mediaAssetsInAppPrivate, columnName: "game_id", catalogConstraintName: "media_assets_game_id_fkey", onDelete: "cascade" },
   ] as const)("keeps $catalogConstraintName exactly once with the catalog delete action", ({ table, columnName, onDelete }) => {
     const matches = getTableConfig(table).foreignKeys.filter((foreignKey) => foreignKey.reference().columns.some((column) => column.name === columnName));
 

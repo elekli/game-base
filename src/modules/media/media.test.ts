@@ -86,6 +86,7 @@ function animatedWebp(input: Readonly<{
   bitstreamHeight?: number;
   bitstreamCount?: number;
   codec?: "VP8L" | "VP8 ";
+  includeAnim?: boolean;
 }> = {}): Uint8Array {
   const frameWidth = input.frameWidth ?? 2;
   const frameHeight = input.frameHeight ?? 3;
@@ -106,7 +107,9 @@ function animatedWebp(input: Readonly<{
   framePayload[6] = frameWidth - 1;
   framePayload[9] = frameHeight - 1;
   for (let index = 0; index < (input.bitstreamCount ?? 1); index += 1) framePayload.set(nested, 16 + nested.byteLength * index);
-  const result = new Uint8Array(12 + 18 + 8 + framePayload.byteLength);
+  const includeAnim = input.includeAnim ?? true;
+  const animLength = includeAnim ? 14 : 0;
+  const result = new Uint8Array(12 + 18 + animLength + 8 + framePayload.byteLength);
   result.set(new TextEncoder().encode("RIFF"));
   new DataView(result.buffer).setUint32(4, result.byteLength - 8, true);
   result.set(new TextEncoder().encode("WEBPVP8X"), 8);
@@ -114,9 +117,14 @@ function animatedWebp(input: Readonly<{
   result[20] = 0x02;
   result[24] = 1;
   result[27] = 2;
-  result.set(new TextEncoder().encode("ANMF"), 30);
-  new DataView(result.buffer).setUint32(34, framePayload.byteLength, true);
-  result.set(framePayload, 38);
+  if (includeAnim) {
+    result.set(new TextEncoder().encode("ANIM"), 30);
+    new DataView(result.buffer).setUint32(34, 6, true);
+  }
+  const frameOffset = 30 + animLength;
+  result.set(new TextEncoder().encode("ANMF"), frameOffset);
+  new DataView(result.buffer).setUint32(frameOffset + 4, framePayload.byteLength, true);
+  result.set(framePayload, frameOffset + 8);
   return result;
 }
 
@@ -322,6 +330,18 @@ describe("媒體公開介面", () => {
     await expect(service.finalizeMediaUpload(owner, { idempotencyKey })).rejects.toBeInstanceOf(MediaStoredObjectInvalidError);
   });
 
+  it("拒絕 frame 超出 logical screen 且超過像素上限的 28-byte GIF", async () => {
+    const bytes = Uint8Array.from([
+      ...new TextEncoder().encode("GIF89a"), 1, 0, 1, 0, 0, 0, 0,
+      0x2c, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0,
+      2, 1, 0, 0, 0x3b,
+    ]);
+    const service = createMediaService({ store: createInMemoryMediaStore({ activeGameIds: [gameId] }), objects: objectStore({ bytes, mimeType: "image/gif" }) });
+    await service.beginMediaUpload(owner, command({ declaredMimeType: "image/gif", declaredByteSize: bytes.byteLength, originalFileName: "oversized-frame.gif" }));
+
+    await expect(service.finalizeMediaUpload(owner, { idempotencyKey })).rejects.toBeInstanceOf(MediaStoredObjectInvalidError);
+  });
+
   it("以分塊掃描大型 JPEG entropy", async () => {
     const base = jpeg();
     const bytes = new Uint8Array(base.byteLength + 2_000_000);
@@ -342,6 +362,23 @@ describe("媒體公開介面", () => {
       if (succeeds) await expect(finalize).resolves.toMatchObject({ asset: { actualMimeType: "image/webp", width: 2, height: 3 } });
       else await expect(finalize).rejects.toBeInstanceOf(MediaStoredObjectInvalidError);
     }
+  });
+
+  it("拒絕 VP8L 三位元版本值為 7 的 26-byte WebP", async () => {
+    const bytes = webp();
+    bytes[24] |= 0xe0;
+    const service = createMediaService({ store: createInMemoryMediaStore({ activeGameIds: [gameId] }), objects: objectStore({ bytes, mimeType: "image/webp" }) });
+    await service.beginMediaUpload(owner, command({ declaredMimeType: "image/webp", declaredByteSize: bytes.byteLength, originalFileName: "vp8l-version-7.webp" }));
+
+    await expect(service.finalizeMediaUpload(owner, { idempotencyKey })).rejects.toBeInstanceOf(MediaStoredObjectInvalidError);
+  });
+
+  it("拒絕宣告 animation 卻缺少 ANIM chunk 的 WebP", async () => {
+    const bytes = animatedWebp({ includeAnim: false });
+    const service = createMediaService({ store: createInMemoryMediaStore({ activeGameIds: [gameId] }), objects: objectStore({ bytes, mimeType: "image/webp" }) });
+    await service.beginMediaUpload(owner, command({ declaredMimeType: "image/webp", declaredByteSize: bytes.byteLength, originalFileName: "missing-anim.webp" }));
+
+    await expect(service.finalizeMediaUpload(owner, { idempotencyKey })).rejects.toBeInstanceOf(MediaStoredObjectInvalidError);
   });
 
   it("animated WebP 拒絕超過像素上限、尺寸不符或多重 image bitstream 的 ANMF", async () => {

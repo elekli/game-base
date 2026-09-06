@@ -91,9 +91,19 @@ export class PostgresMediaStore implements MediaStore {
 
   async begin(command: BeginMediaUploadCommand, reserved: Readonly<{ ingestId: string; assetId: string; objectPath: string; staleAfter: string }>): Promise<BeginMediaRecord> {
     return this.db.transaction(async (tx) => {
-      const games = await tx.execute(sql`select id from app_private.games where id = ${command.gameId} and trashed_at is null for key share`) as Row[];
+      const games = await tx.execute(sql`select id from app_private.games where id = ${command.gameId} and trashed_at is null for update`) as Row[];
       if (!games[0]) throw new MediaGameUnavailableError();
-      const inserted = await tx.execute(sql`
+      const operation = await tx.execute(sql`
+        insert into app_private.media_ingest_operations (
+          idempotency_key, ingest_id, reserved_asset_id, game_id, purpose,
+          original_object_path, original_file_name, declared_mime_type, declared_byte_size
+        ) values (
+          ${command.idempotencyKey}, ${reserved.ingestId}, ${reserved.assetId}, ${command.gameId}, ${command.purpose},
+          ${reserved.objectPath}, ${command.originalFileName}, ${command.declaredMimeType}, ${command.declaredByteSize}
+        ) on conflict (idempotency_key) do nothing
+        returning ingest_id
+      `) as Row[];
+      const inserted = operation[0] ? await tx.execute(sql`
         insert into app_private.media_ingests (
           id, idempotency_key, reserved_asset_id, channel, purpose, game_id,
           original_object_path, original_file_name, declared_mime_type, declared_byte_size,
@@ -102,10 +112,14 @@ export class PostgresMediaStore implements MediaStore {
           ${reserved.ingestId}, ${command.idempotencyKey}, ${reserved.assetId}, 'browser_tus', ${command.purpose}, ${command.gameId},
           ${reserved.objectPath}, ${command.originalFileName}, ${command.declaredMimeType}, ${command.declaredByteSize},
           'issued', ${reserved.staleAfter}, '', ${reserved.objectPath}, 'pending', 'pending'
-        ) on conflict (idempotency_key) do nothing
+        )
         returning ${ingestFields}
+      `) as Row[] : [];
+      const rows = inserted[0] ? inserted : await tx.execute(sql`
+        select ${ingestFields}
+        from app_private.media_ingests
+        where id = (select ingest_id from app_private.media_ingest_operations where idempotency_key = ${command.idempotencyKey})
       `) as Row[];
-      const rows = inserted[0] ? inserted : await tx.execute(sql`select ${ingestFields} from app_private.media_ingests where idempotency_key = ${command.idempotencyKey}`) as Row[];
       const ingest = ingestFrom(rows[0]);
       if (!sameCommand(ingest, command)) throw new MediaUploadIdempotencyConflictError();
       if (ingest.state === "finalized") {
@@ -194,14 +208,14 @@ export class PostgresMediaStore implements MediaStore {
         ) values (
           ${ingest.reservedAssetId}, ${ingest.id}, ${ingest.gameId}, ${ingest.purpose}, ${ingest.originalObjectPath},
           ${ingest.originalFileName}, ${object.actualMimeType}, ${object.byteSize}, ${object.width}, ${object.height}, 'verified',
-          ${ingest.purpose}, ${ingest.originalObjectPath}, ${object.actualMimeType}
+          'user_cover', ${ingest.originalObjectPath}, ${object.actualMimeType}
         ) on conflict (ingest_id) do nothing
       `);
       if (ingest.purpose !== "attachment") {
         await tx.execute(sql`
-          insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind)
-          values (${ingest.reservedAssetId}, ${MEDIA_THUMBNAIL_SPEC}, 'verified', 'pending', 'thumbnail_webp')
-          on conflict (asset_id, spec) do nothing
+          insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind, object_key)
+          values (${ingest.reservedAssetId}, ${MEDIA_THUMBNAIL_SPEC}, 'verified', 'pending', 'thumbnail_webp', ${`pending:${ingest.reservedAssetId}`})
+          on conflict (asset_id, kind) do nothing
         `);
       }
       if (ingest.purpose === "custom_cover") {

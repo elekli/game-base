@@ -6,7 +6,7 @@ alter table app_private.media_ingests
   add column reserved_asset_id uuid,
   add column channel text,
   add column purpose text,
-  add column external_game_identity_id uuid references app_private.external_game_identities(id) on delete restrict,
+  add column external_game_identity_id uuid,
   add column original_object_path text,
   add column original_file_name text,
   add column declared_mime_type text,
@@ -22,34 +22,18 @@ alter table app_private.media_ingests
   add column last_error_code text,
   add column finalized_at timestamptz;
 
-alter table app_private.media_ingests
-  add constraint media_ingests_idempotency_key_key unique (idempotency_key),
-  add constraint media_ingests_reserved_asset_id_key unique (reserved_asset_id),
-  add constraint media_ingests_original_object_path_key unique (original_object_path),
-  add constraint media_ingests_channel_check check (channel in ('browser_tus', 'source_fetch')),
-  add constraint media_ingests_purpose_check check (purpose in ('gallery_image', 'custom_cover', 'attachment', 'source_cover')),
-  add constraint media_ingests_target_check check (
-    (purpose = 'source_cover' and channel = 'source_fetch' and external_game_identity_id is not null) or
-    (purpose in ('gallery_image', 'custom_cover', 'attachment') and channel = 'browser_tus' and external_game_identity_id is null)
-  ),
-  add constraint media_ingests_declared_byte_size_check check (
-    (channel = 'source_fetch' and (declared_byte_size is null or declared_byte_size between 1 and 52428800)) or
-    (channel = 'browser_tus' and declared_byte_size between 1 and 52428800)
-  ),
-  add constraint media_ingests_actual_byte_size_check check (actual_byte_size is null or actual_byte_size between 1 and 52428800),
-  add constraint media_ingests_image_dimensions_check check (
-    (image_width is null and image_height is null) or
-    (image_width > 0 and image_height > 0 and image_width::bigint * image_height::bigint <= 100000000)
-  ),
-  add constraint media_ingests_state_check check (state in ('issued', 'finalizing', 'finalized', 'cleanup_pending', 'expired')),
-  add constraint media_ingests_lease_check check (
-    (state = 'finalizing' and lease_token is not null and lease_until is not null) or
-    (state <> 'finalizing' and lease_token is null and lease_until is null)
-  ),
-  add constraint media_ingests_finalized_check check (
-    state <> 'finalized' or
-    (finalized_at is not null and actual_mime_type is not null and actual_byte_size between 1 and 52428800)
-  ) not valid;
+create table app_private.media_ingest_operations (
+  idempotency_key text primary key,
+  ingest_id uuid not null unique references app_private.media_ingests(id) on delete restrict deferrable initially deferred,
+  reserved_asset_id uuid not null unique,
+  game_id uuid not null references app_private.games(id) on delete restrict,
+  purpose text not null check (purpose in ('gallery_image', 'custom_cover', 'attachment')),
+  original_object_path text not null unique,
+  original_file_name text not null,
+  declared_mime_type text not null,
+  declared_byte_size bigint not null check (declared_byte_size between 1 and 52428800),
+  created_at timestamptz not null default now()
+);
 
 create table app_private.source_refresh_operations (
   operation_id uuid primary key,
@@ -75,36 +59,6 @@ alter table app_private.media_assets
   add column superseded_at timestamptz,
   add column authority_state text default 'legacy_unverified';
 
-alter table app_private.media_assets drop constraint if exists media_assets_kind_check;
-alter table app_private.media_assets
-  add constraint media_assets_game_id_fkey foreign key (game_id) references app_private.games(id) on delete cascade,
-  add constraint media_assets_authority_state_check check (authority_state in ('legacy_unverified', 'verified')),
-  add constraint media_assets_purpose_check check (purpose is null or purpose in ('gallery_image', 'custom_cover', 'attachment', 'source_cover')),
-  add constraint media_assets_verified_check check (
-    authority_state <> 'verified' or
-    (game_id is not null and purpose is not null and original_object_path is not null and original_file_name is not null and
-     actual_mime_type is not null and byte_size between 1 and 52428800)
-  ),
-  add constraint media_assets_dimensions_check check (
-    authority_state <> 'verified' or
-    (purpose = 'attachment' and width is null and height is null) or
-    (purpose <> 'attachment' and width > 0 and height > 0 and width::bigint * height::bigint <= 100000000)
-  ),
-  add constraint media_assets_removal_check check (
-    (removed_at is null and removed_reason is null) or
-    (removed_at is not null and removed_reason is not null and purpose <> 'source_cover')
-  ),
-  add constraint media_assets_metadata_check check (
-    (purpose = 'gallery_image' and display_name is null and description is null) or
-    (purpose = 'custom_cover' and caption is null and display_name is null and description is null) or
-    (purpose = 'attachment' and caption is null) or
-    (purpose = 'source_cover' and caption is null and display_name is null and description is null)
-  ),
-  add constraint media_assets_ingest_identity_unique unique (ingest_id, id),
-  add constraint media_assets_original_object_path_key unique (original_object_path);
-
-alter table app_private.media_derivatives drop constraint if exists media_derivatives_state_check;
-alter table app_private.media_derivatives alter column object_key drop not null;
 alter table app_private.media_derivatives
   add column spec text,
   add column authority_state text default 'legacy_unverified',
@@ -113,31 +67,11 @@ alter table app_private.media_derivatives
   add column height integer,
   add column byte_size bigint,
   add column completed_at timestamptz,
-  add column attempt_count integer not null default 0,
+  add column attempt_count integer default 0,
   add column next_attempt_at timestamptz,
   add column lease_token uuid,
   add column lease_until timestamptz,
   add column last_error_code text;
-
-alter table app_private.media_derivatives
-  add constraint media_derivatives_authority_state_check check (authority_state in ('legacy_unverified', 'verified')),
-  add constraint media_derivatives_spec_check check (spec = 'thumb_webp_v1'),
-  add constraint media_derivatives_state_check check (state in ('pending', 'processing', 'ready', 'failed')),
-  add constraint media_derivatives_attempt_count_check check (attempt_count >= 0),
-  add constraint media_derivatives_lease_check check (
-    (state = 'processing' and lease_token is not null and lease_until is not null) or
-    (state <> 'processing' and lease_token is null and lease_until is null)
-  ),
-  add constraint media_derivatives_ready_check check (
-    authority_state <> 'verified' or
-    (state = 'ready' and current_object_path is not null and width > 0 and height > 0 and byte_size > 0 and completed_at is not null) or
-    (state <> 'ready' and current_object_path is null and width is null and height is null and byte_size is null and completed_at is null)
-  ),
-  add constraint media_derivatives_asset_spec_key unique (asset_id, spec);
-
-create unique index media_derivatives_current_object_path_key
-  on app_private.media_derivatives (current_object_path)
-  where current_object_path is not null;
 
 create table app_private.media_derivative_attempts (
   id uuid primary key default gen_random_uuid(),
@@ -153,16 +87,15 @@ create table app_private.media_derivative_attempts (
 );
 
 alter table app_private.games add column manual_cover_asset_id uuid;
-alter table app_private.games add constraint games_manual_cover_asset_id_fkey
-  foreign key (manual_cover_asset_id) references app_private.media_assets(id) on delete restrict;
 
 alter table app_private.external_game_identities add column source_cover_asset_id uuid;
-alter table app_private.external_game_identities add constraint external_game_identities_source_cover_asset_id_fkey
-  foreign key (source_cover_asset_id) references app_private.media_assets(id) on delete restrict;
 
 create function app_private.assert_valid_media_cover_pointer()
 returns trigger language plpgsql as $$
 begin
+  if new.manual_cover_asset_id is not null then
+    perform 1 from app_private.media_assets where id = new.manual_cover_asset_id for update;
+  end if;
   if new.manual_cover_asset_id is not null and not exists (
     select 1 from app_private.media_assets asset
     where asset.id = new.manual_cover_asset_id
@@ -191,6 +124,9 @@ $$;
 create function app_private.assert_valid_source_cover_pointer()
 returns trigger language plpgsql as $$
 begin
+  if new.source_cover_asset_id is not null then
+    perform 1 from app_private.media_assets where id = new.source_cover_asset_id for update;
+  end if;
   if new.source_cover_asset_id is not null and not exists (
     select 1
     from app_private.media_assets asset
@@ -211,11 +147,18 @@ $$;
 create function app_private.assert_valid_media_asset_references()
 returns trigger language plpgsql as $$
 begin
+  perform 1 from app_private.games where id = new.game_id for update;
+  perform 1 from app_private.games where manual_cover_asset_id = new.id for update;
+  perform 1 from app_private.external_game_identities where source_cover_asset_id = new.id for update;
+  perform 1 from app_private.media_derivatives where asset_id = new.id for update;
+  if new.authority_state is null or new.authority_state not in ('legacy_unverified', 'verified') then
+    raise exception 'media asset has invalid authority state';
+  end if;
   if new.superseded_at is not null and new.purpose is distinct from 'source_cover' then
     raise exception 'only source cover may be superseded';
   end if;
   if new.authority_state = 'verified' and (
-    new.kind is distinct from new.purpose or
+    new.kind is distinct from case when new.purpose = 'source_cover' then 'source_cover' else 'user_cover' end or
     new.object_key is distinct from new.original_object_path or
     new.mime_type is distinct from new.actual_mime_type
   ) then
@@ -236,6 +179,21 @@ begin
       and ingest.state = 'finalized'
   ) then
     raise exception 'media asset must match its finalized ingest ledger';
+  end if;
+  if new.authority_state = 'verified' and (
+    new.game_id is null or
+    new.purpose not in ('gallery_image', 'custom_cover', 'attachment', 'source_cover') or
+    new.original_object_path is null or new.original_file_name is null or new.actual_mime_type is null or
+    new.byte_size not between 1 and 52428800 or
+    (new.purpose = 'attachment' and (new.width is not null or new.height is not null)) or
+    (new.purpose <> 'attachment' and (new.width is null or new.height is null or new.width <= 0 or new.height <= 0 or new.width::bigint * new.height::bigint > 100000000)) or
+    ((new.removed_at is null) <> (new.removed_reason is null)) or
+    (new.removed_at is not null and new.purpose = 'source_cover') or
+    (new.purpose = 'gallery_image' and (new.display_name is not null or new.description is not null)) or
+    (new.purpose in ('custom_cover', 'source_cover') and (new.caption is not null or new.display_name is not null or new.description is not null)) or
+    (new.purpose = 'attachment' and new.caption is not null)
+  ) then
+    raise exception 'verified media asset violates ledger contract';
   end if;
   if exists (
     select 1 from app_private.games game
@@ -267,6 +225,10 @@ $$;
 create function app_private.assert_image_media_derivative()
 returns trigger language plpgsql as $$
 begin
+  perform 1 from app_private.media_assets where id = new.asset_id for update;
+  if new.authority_state is null or new.authority_state not in ('legacy_unverified', 'verified') then
+    raise exception 'media derivative has invalid authority state';
+  end if;
   if new.authority_state = 'verified' and new.spec is distinct from 'thumb_webp_v1' then
     raise exception 'verified media derivative must use thumb_webp_v1 spec';
   end if;
@@ -275,6 +237,15 @@ begin
     where asset.id = new.asset_id and asset.authority_state = 'verified' and asset.purpose <> 'attachment'
   ) then
     raise exception 'media attachment cannot have a derivative';
+  end if;
+  if new.authority_state = 'verified' and (
+    new.state not in ('pending', 'ready', 'failed') or
+    new.attempt_count is null or new.attempt_count < 0 or
+    new.object_key is null or
+    (new.state = 'ready' and (new.current_object_path is null or new.object_key is distinct from new.current_object_path or new.width is null or new.height is null or new.byte_size is null or new.width <= 0 or new.height <= 0 or new.byte_size <= 0 or new.completed_at is null)) or
+    (new.state <> 'ready' and (new.current_object_path is not null or new.width is not null or new.height is not null or new.byte_size is not null or new.completed_at is not null))
+  ) then
+    raise exception 'verified media derivative violates ledger contract';
   end if;
   return new;
 end;
@@ -285,6 +256,41 @@ returns trigger language plpgsql as $$
 declare
   asset app_private.media_assets%rowtype;
 begin
+  if new.channel is not null and (
+    new.idempotency_key is null or new.reserved_asset_id is null or new.game_id is null or
+    new.purpose is null or new.original_object_path is null or new.original_file_name is null or
+    new.declared_mime_type is null or new.state is null or new.stale_after is null or
+    new.channel not in ('browser_tus', 'source_fetch') or
+    new.purpose not in ('gallery_image', 'custom_cover', 'attachment', 'source_cover') or
+    not (
+      (new.purpose = 'source_cover' and new.channel = 'source_fetch' and new.external_game_identity_id is not null) or
+      (new.purpose in ('gallery_image', 'custom_cover', 'attachment') and new.channel = 'browser_tus' and new.external_game_identity_id is null)
+    ) or
+    (new.channel = 'source_fetch' and new.declared_byte_size is not null and new.declared_byte_size not between 1 and 52428800) or
+    (new.channel = 'browser_tus' and new.declared_byte_size not between 1 and 52428800) or
+    (new.actual_byte_size is not null and new.actual_byte_size not between 1 and 52428800) or
+    ((new.image_width is null) <> (new.image_height is null)) or
+    (new.image_width is not null and (new.image_width <= 0 or new.image_height <= 0 or new.image_width::bigint * new.image_height::bigint > 100000000)) or
+    new.state not in ('issued', 'finalizing', 'finalized', 'cleanup_pending', 'expired') or
+    (new.state = 'finalizing') <> (new.lease_token is not null and new.lease_until is not null) or
+    (new.state = 'finalized' and (new.finalized_at is null or new.actual_mime_type is null or new.actual_byte_size not between 1 and 52428800))
+  ) then
+    raise exception 'media ingest violates ledger contract';
+  end if;
+  if new.channel = 'browser_tus' and not exists (
+    select 1 from app_private.media_ingest_operations operation
+    where operation.idempotency_key = new.idempotency_key
+      and operation.ingest_id = new.id
+      and operation.reserved_asset_id = new.reserved_asset_id
+      and operation.game_id = new.game_id
+      and operation.purpose = new.purpose
+      and operation.original_object_path = new.original_object_path
+      and operation.original_file_name = new.original_file_name
+      and operation.declared_mime_type = new.declared_mime_type
+      and operation.declared_byte_size = new.declared_byte_size
+  ) then
+    raise exception 'browser media ingest must match its idempotency ledger';
+  end if;
   if new.purpose = 'source_cover' and not exists (
     select 1 from app_private.games game
     where game.id = new.game_id and game.external_game_identity_id = new.external_game_identity_id
@@ -467,15 +473,14 @@ create index media_assets_game_id_idx on app_private.media_assets (game_id) wher
 create index media_derivative_attempts_derivative_id_idx on app_private.media_derivative_attempts (derivative_id);
 
 alter table app_private.media_derivative_attempts enable row level security;
+alter table app_private.media_ingest_operations enable row level security;
 alter table app_private.source_refresh_operations enable row level security;
 create policy runtime_media_derivative_attempts on app_private.media_derivative_attempts for all to app_runtime using (true) with check (true);
+create policy runtime_media_ingest_operations_select on app_private.media_ingest_operations for select to app_runtime using (true);
+create policy runtime_media_ingest_operations_insert on app_private.media_ingest_operations for insert to app_runtime with check (true);
 create policy runtime_source_refresh_operations_select on app_private.source_refresh_operations for select to app_runtime using (true);
 create policy runtime_source_refresh_operations_insert on app_private.source_refresh_operations for insert to app_runtime with check (true);
 
-revoke all on app_private.media_derivative_attempts from public, anon, authenticated, service_role;
-grant select, insert, update, delete on app_private.media_derivative_attempts to app_runtime;
-revoke update, delete on app_private.source_refresh_operations from app_runtime;
-grant select, insert on app_private.source_refresh_operations to app_runtime;
 revoke execute on function app_private.assert_valid_media_cover_pointer() from public, anon, authenticated, service_role;
 revoke execute on function app_private.assert_valid_source_cover_pointer() from public, anon, authenticated, service_role;
 revoke execute on function app_private.assert_valid_media_asset_references() from public, anon, authenticated, service_role;
@@ -486,7 +491,6 @@ revoke execute on function app_private.prevent_finalized_media_ingest_delete() f
 revoke execute on function app_private.prevent_finalized_media_asset_delete() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_verified_media_derivative_identity_update() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_verified_media_derivative_delete() from public, anon, authenticated, service_role;
-revoke execute on function app_private.prevent_system_platform_mutation() from public;
 
 -- TODO(#media-ledger-contract): 完成 Storage 重驗與雙版本部署後，另以 contract migration
 -- 收緊新增欄位 NOT NULL、移除 legacy_unverified 相容路徑，並清理由舊程式建立的列。

@@ -1,8 +1,23 @@
-import { pgTable, type AnyPgColumn, pgSchema, index, foreignKey, pgPolicy, uuid, text, timestamp, jsonb, uniqueIndex, integer, numeric, boolean, bigint } from "drizzle-orm/pg-core"
+import { pgTable, type AnyPgColumn, pgSchema, uniqueIndex, foreignKey, pgPolicy, uuid, text, index, timestamp, jsonb, integer, boolean, numeric, bigint } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 export const appPrivate = pgSchema("app_private");
 
+
+export const gameNamesInAppPrivate = appPrivate.table("game_names", {
+	id: uuid().defaultRandom().notNull(),
+	gameId: uuid("game_id").notNull(),
+	name: text().notNull(),
+	nameKind: text("name_kind").notNull(),
+}, (table) => [
+	uniqueIndex("game_names_custom_unique").using("btree", table.gameId.asc().nullsLast().op("uuid_ops"), table.nameKind.asc().nullsLast().op("uuid_ops")).where(sql`(name_kind = 'custom'::text)`),
+	foreignKey({
+			columns: [table.gameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "game_names_game_id_fkey"
+		}).onDelete("cascade"),
+	pgPolicy("runtime_game_names", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
 
 export const gamesInAppPrivate = appPrivate.table("games", {
 	id: uuid().defaultRandom().notNull(),
@@ -12,7 +27,7 @@ export const gamesInAppPrivate = appPrivate.table("games", {
 	trashedAt: timestamp("trashed_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	playerCountNote: text("player_count_note"),
-	manualCoverAssetId: uuid("manual_cover_asset_id").references((): AnyPgColumn => mediaAssetsInAppPrivate.id, { onDelete: "restrict" }),
+	manualCoverAssetId: uuid("manual_cover_asset_id"),
 }, (table) => [
 	index("games_display_name_idx").using("btree", table.displayName.asc().nullsLast().op("text_ops")).where(sql`(trashed_at IS NULL)`),
 	foreignKey({
@@ -36,24 +51,9 @@ export const externalGameIdentitiesInAppPrivate = appPrivate.table("external_gam
 	snapshot: jsonb().notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	sourceCoverAssetId: uuid("source_cover_asset_id").references((): AnyPgColumn => mediaAssetsInAppPrivate.id, { onDelete: "restrict" }),
+	sourceCoverAssetId: uuid("source_cover_asset_id"),
 }, (table) => [
 	pgPolicy("runtime_external_identity", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
-]);
-
-export const gameNamesInAppPrivate = appPrivate.table("game_names", {
-	id: uuid().defaultRandom().notNull(),
-	gameId: uuid("game_id").notNull(),
-	name: text().notNull(),
-	nameKind: text("name_kind").notNull(),
-}, (table) => [
-	uniqueIndex("game_names_custom_unique").using("btree", table.gameId.asc().nullsLast().op("uuid_ops"), table.nameKind.asc().nullsLast().op("uuid_ops")).where(sql`(name_kind = 'custom'::text)`),
-	foreignKey({
-			columns: [table.gameId],
-			foreignColumns: [gamesInAppPrivate.id],
-			name: "game_names_game_id_fkey"
-		}).onDelete("cascade"),
-	pgPolicy("runtime_game_names", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
 export const sourceCategoriesInAppPrivate = appPrivate.table("source_categories", {
@@ -98,22 +98,6 @@ export const externalPlayerProfilesInAppPrivate = appPrivate.table("external_pla
 	pgPolicy("runtime_external_player_profiles", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
-export const bggCurrentMetricsInAppPrivate = appPrivate.table("bgg_current_metrics", {
-	identityId: uuid("identity_id").notNull(),
-	weight: numeric({ precision: 3, scale:  2 }),
-	strategyRank: integer("strategy_rank"),
-	lastSuccessfulSyncAt: timestamp("last_successful_sync_at", { withTimezone: true, mode: 'string' }),
-}, (table) => [
-	index("bgg_current_metrics_rank_idx").using("btree", table.strategyRank.asc().nullsLast().op("int4_ops")),
-	index("bgg_current_metrics_weight_idx").using("btree", table.weight.asc().nullsLast().op("numeric_ops")),
-	foreignKey({
-			columns: [table.identityId],
-			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
-			name: "bgg_current_metrics_identity_id_fkey"
-		}).onDelete("cascade"),
-	pgPolicy("runtime_bgg_current_metrics", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
-]);
-
 export const sourceContributionsInAppPrivate = appPrivate.table("source_contributions", {
 	id: uuid().defaultRandom().notNull(),
 	identityId: uuid("identity_id").notNull(),
@@ -135,6 +119,26 @@ export const sourceContributionsInAppPrivate = appPrivate.table("source_contribu
 			name: "source_contributions_contributor_id_fkey"
 		}).onDelete("restrict"),
 	pgPolicy("runtime_source_contributions", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
+export const manualContributionsInAppPrivate = appPrivate.table("manual_contributions", {
+	id: uuid().defaultRandom().notNull(),
+	gameId: uuid("game_id").notNull(),
+	contributorId: uuid("contributor_id").notNull(),
+	role: text().notNull(),
+}, (table) => [
+	index("manual_contributions_contributor_id_idx").using("btree", table.contributorId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.gameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "manual_contributions_game_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.contributorId],
+			foreignColumns: [contributorsInAppPrivate.id],
+			name: "manual_contributions_contributor_id_fkey"
+		}).onDelete("restrict"),
+	pgPolicy("runtime_manual_contributions", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
 export const platformsInAppPrivate = appPrivate.table("platforms", {
@@ -215,24 +219,20 @@ export const externalSupportedPlatformsInAppPrivate = appPrivate.table("external
 	pgPolicy("runtime_external_supported_platforms", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
-export const manualContributionsInAppPrivate = appPrivate.table("manual_contributions", {
-	id: uuid().defaultRandom().notNull(),
-	gameId: uuid("game_id").notNull(),
-	contributorId: uuid("contributor_id").notNull(),
-	role: text().notNull(),
+export const bggCurrentMetricsInAppPrivate = appPrivate.table("bgg_current_metrics", {
+	identityId: uuid("identity_id").notNull(),
+	weight: numeric({ precision: 3, scale:  2 }),
+	strategyRank: integer("strategy_rank"),
+	lastSuccessfulSyncAt: timestamp("last_successful_sync_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
-	index("manual_contributions_contributor_id_idx").using("btree", table.contributorId.asc().nullsLast().op("uuid_ops")),
+	index("bgg_current_metrics_rank_idx").using("btree", table.strategyRank.asc().nullsLast().op("int4_ops")),
+	index("bgg_current_metrics_weight_idx").using("btree", table.weight.asc().nullsLast().op("numeric_ops")),
 	foreignKey({
-			columns: [table.gameId],
-			foreignColumns: [gamesInAppPrivate.id],
-			name: "manual_contributions_game_id_fkey"
+			columns: [table.identityId],
+			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
+			name: "bgg_current_metrics_identity_id_fkey"
 		}).onDelete("cascade"),
-	foreignKey({
-			columns: [table.contributorId],
-			foreignColumns: [contributorsInAppPrivate.id],
-			name: "manual_contributions_contributor_id_fkey"
-		}).onDelete("restrict"),
-	pgPolicy("runtime_manual_contributions", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+	pgPolicy("runtime_bgg_current_metrics", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
 export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {
@@ -247,7 +247,7 @@ export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {
 	reservedAssetId: uuid("reserved_asset_id"),
 	channel: text(),
 	purpose: text(),
-	externalGameIdentityId: uuid("external_game_identity_id").references((): AnyPgColumn => externalGameIdentitiesInAppPrivate.id, { onDelete: "restrict" }),
+	externalGameIdentityId: uuid("external_game_identity_id"),
 	originalObjectPath: text("original_object_path"),
 	originalFileName: text("original_file_name"),
 	declaredMimeType: text("declared_mime_type"),
@@ -280,7 +280,7 @@ export const mediaAssetsInAppPrivate = appPrivate.table("media_assets", {
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	byteSize: bigint("byte_size", { mode: "number" }).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	gameId: uuid("game_id").references((): AnyPgColumn => gamesInAppPrivate.id, { onDelete: "cascade" }),
+	gameId: uuid("game_id"),
 	purpose: text(),
 	originalObjectPath: text("original_object_path"),
 	originalFileName: text("original_file_name"),
@@ -303,7 +303,7 @@ export const mediaDerivativesInAppPrivate = appPrivate.table("media_derivatives"
 	id: uuid().defaultRandom().notNull(),
 	assetId: uuid("asset_id").notNull(),
 	kind: text().notNull(),
-	objectKey: text("object_key"),
+	objectKey: text("object_key").notNull(),
 	state: text().notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	spec: text(),
@@ -314,14 +314,13 @@ export const mediaDerivativesInAppPrivate = appPrivate.table("media_derivatives"
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	byteSize: bigint("byte_size", { mode: "number" }),
 	completedAt: timestamp("completed_at", { withTimezone: true, mode: 'string' }),
-	attemptCount: integer("attempt_count").default(0).notNull(),
+	attemptCount: integer("attempt_count").default(0),
 	nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true, mode: 'string' }),
 	leaseToken: uuid("lease_token"),
 	leaseUntil: timestamp("lease_until", { withTimezone: true, mode: 'string' }),
 	lastErrorCode: text("last_error_code"),
 }, (table) => [
 	index("media_derivatives_asset_id_idx").using("btree", table.assetId.asc().nullsLast().op("uuid_ops")),
-	uniqueIndex("media_derivatives_current_object_path_key").using("btree", table.currentObjectPath.asc().nullsLast().op("text_ops")).where(sql`(current_object_path IS NOT NULL)`),
 	foreignKey({
 			columns: [table.assetId],
 			foreignColumns: [mediaAssetsInAppPrivate.id],
@@ -348,6 +347,33 @@ export const mediaDerivativeAttemptsInAppPrivate = appPrivate.table("media_deriv
 			name: "media_derivative_attempts_derivative_id_fkey"
 		}).onDelete("restrict"),
 	pgPolicy("runtime_media_derivative_attempts", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
+export const mediaIngestOperationsInAppPrivate = appPrivate.table("media_ingest_operations", {
+	idempotencyKey: text("idempotency_key").notNull(),
+	ingestId: uuid("ingest_id").notNull(),
+	reservedAssetId: uuid("reserved_asset_id").notNull(),
+	gameId: uuid("game_id").notNull(),
+	purpose: text().notNull(),
+	originalObjectPath: text("original_object_path").notNull(),
+	originalFileName: text("original_file_name").notNull(),
+	declaredMimeType: text("declared_mime_type").notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	declaredByteSize: bigint("declared_byte_size", { mode: "number" }).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.ingestId],
+			foreignColumns: [mediaIngestsInAppPrivate.id],
+			name: "media_ingest_operations_ingest_id_fkey"
+		}).onDelete("restrict"),
+	foreignKey({
+			columns: [table.gameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "media_ingest_operations_game_id_fkey"
+		}).onDelete("restrict"),
+	pgPolicy("runtime_media_ingest_operations_insert", { as: "permissive", for: "insert", to: ["app_runtime"], withCheck: sql`true`  }),
+	pgPolicy("runtime_media_ingest_operations_select", { as: "permissive", for: "select", to: ["app_runtime"] }),
 ]);
 
 export const sourceRefreshOperationsInAppPrivate = appPrivate.table("source_refresh_operations", {

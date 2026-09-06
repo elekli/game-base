@@ -24,28 +24,12 @@ export const appPrivate = pgSchema("app_private");
 
 const cyclicMediaReferences = [
   [
-    '\tsourceCoverAssetId: uuid("source_cover_asset_id"),',
-    '\tsourceCoverAssetId: uuid("source_cover_asset_id").references((): AnyPgColumn => mediaAssetsInAppPrivate.id, { onDelete: "restrict" }),',
-  ],
-  [
-    '\tmanualCoverAssetId: uuid("manual_cover_asset_id"),',
-    '\tmanualCoverAssetId: uuid("manual_cover_asset_id").references((): AnyPgColumn => mediaAssetsInAppPrivate.id, { onDelete: "restrict" }),',
-  ],
-  [
-    '\texternalGameIdentityId: uuid("external_game_identity_id"),\n\toriginalObjectPath:',
-    '\texternalGameIdentityId: uuid("external_game_identity_id").references((): AnyPgColumn => externalGameIdentitiesInAppPrivate.id, { onDelete: "restrict" }),\n\toriginalObjectPath:',
-  ],
-  [
     'export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {\n\tid: uuid().defaultRandom().notNull(),\n\tgameId: uuid("game_id").notNull(),',
     'export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {\n\tid: uuid().defaultRandom().notNull(),\n\tgameId: uuid("game_id").notNull().references((): AnyPgColumn => gamesInAppPrivate.id, { onDelete: "cascade" }),',
   ],
   [
     '\tingestId: uuid("ingest_id").notNull(),\n\tkind:',
     '\tingestId: uuid("ingest_id").notNull().references((): AnyPgColumn => mediaIngestsInAppPrivate.id, { onDelete: "cascade" }),\n\tkind:',
-  ],
-  [
-    '\tcreatedAt: timestamp("created_at", { withTimezone: true, mode: \'string\' }).defaultNow().notNull(),\n\tgameId: uuid("game_id"),\n\tpurpose:',
-    '\tcreatedAt: timestamp("created_at", { withTimezone: true, mode: \'string\' }).defaultNow().notNull(),\n\tgameId: uuid("game_id").references((): AnyPgColumn => gamesInAppPrivate.id, { onDelete: "cascade" }),\n\tpurpose:',
   ],
 ] as const;
 
@@ -61,21 +45,20 @@ for (const [column, reference] of [
   );
 }
 normalizedSchema = normalizedSchema.replace(
-  'index("media_ingests_finalize_candidates_idx").using("btree", table.state.asc().nullsLast().op("timestamptz_ops"), table.leaseUntil.asc().nullsLast().op("text_ops"))',
+  /index\("media_ingests_finalize_candidates_idx"\)\.using\("btree", table\.state\.asc\(\)\.nullsLast\(\)\.op\("[^"]+"\), table\.leaseUntil\.asc\(\)\.nullsLast\(\)\.op\("[^"]+"\)\)/,
   'index("media_ingests_finalize_candidates_idx").using("btree", table.state.asc().nullsLast().op("text_ops"), table.leaseUntil.asc().nullsLast().op("timestamptz_ops"))',
 );
 for (const constraintName of [
-  "external_game_identities_source_cover_asset_id_fkey",
-  "games_manual_cover_asset_id_fkey",
-  "media_ingests_external_game_identity_id_fkey",
   "media_ingests_game_id_fkey",
   "media_assets_ingest_id_fkey",
-  "media_assets_game_id_fkey",
 ]) {
   normalizedSchema = normalizedSchema.replace(
     new RegExp(`\\n\\tforeignKey\\(\\{\\n\\t\\t\\tcolumns: \\[[^\\n]+\\],\\n\\t\\t\\tforeignColumns: \\[[^\\n]+\\],\\n\\t\\t\\tname: "${constraintName}"\\n\\t\\t\\}\\)(?:\\.onDelete\\("[^"]+"\\))?,`),
     "",
   );
+}
+if (normalizedSchema.includes("AnyPgColumn") && !normalizedSchema.includes("type AnyPgColumn")) {
+  normalizedSchema = normalizedSchema.replace("import { pgTable,", "import { pgTable, type AnyPgColumn,");
 }
 if (normalizedSchema !== schema) writeFileSync(schemaPath, normalizedSchema);
 

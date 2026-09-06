@@ -134,6 +134,17 @@
       "withCheck": "true"
     },
     {
+      "table": "media_derivative_attempts",
+      "name": "runtime_media_derivative_attempts",
+      "validFrom": "0007",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
       "table": "media_derivatives",
       "name": "runtime_media_derivatives",
       "validFrom": "0003",
@@ -154,6 +165,28 @@
       "roles": ["app_runtime"],
       "using": "true",
       "withCheck": "true"
+    },
+    {
+      "table": "media_ingest_operations",
+      "name": "runtime_media_ingest_operations_insert",
+      "validFrom": "0007",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "INSERT",
+      "roles": ["app_runtime"],
+      "using": null,
+      "withCheck": "true"
+    },
+    {
+      "table": "media_ingest_operations",
+      "name": "runtime_media_ingest_operations_select",
+      "validFrom": "0007",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "SELECT",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": null
     },
     {
       "table": "platforms",
@@ -187,6 +220,28 @@
       "roles": ["app_runtime"],
       "using": "true",
       "withCheck": "true"
+    },
+    {
+      "table": "source_refresh_operations",
+      "name": "runtime_source_refresh_operations_insert",
+      "validFrom": "0007",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "INSERT",
+      "roles": ["app_runtime"],
+      "using": null,
+      "withCheck": "true"
+    },
+    {
+      "table": "source_refresh_operations",
+      "name": "runtime_source_refresh_operations_select",
+      "validFrom": "0007",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "SELECT",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": null
     },
     {
       "table": "tags",

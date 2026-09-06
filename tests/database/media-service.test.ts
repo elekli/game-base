@@ -5,6 +5,7 @@ import { PostgresMediaStore } from "@/adapters/postgres-media-store";
 import {
   MediaStoredObjectInvalidError,
   MediaFinalizeUnavailableError,
+  MediaGameUnavailableError,
   MediaUploadIdempotencyConflictError,
   createMediaService,
   type BeginMediaUploadResult,
@@ -26,6 +27,32 @@ function roleUrl(role: "app_runtime" | "app_migrator"): string {
   const url = new URL(directDatabaseUrl);
   url.searchParams.set("options", `-c role=${role}`);
   return url.toString();
+}
+
+function namedRoleUrl(role: "app_runtime", applicationName: string): string {
+  const url = new URL(roleUrl(role));
+  url.searchParams.set("application_name", applicationName);
+  return url.toString();
+}
+
+function deferred(): Readonly<{ promise: Promise<void>; resolve: () => void }> {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function waitForDatabaseLock(applicationName: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const rows = await control.unsafe<{ blocked: boolean }[]>(`
+      select exists (
+        select 1 from pg_stat_activity
+        where application_name = $1 and state = 'active' and wait_event_type = 'Lock'
+      ) as blocked
+    `, [applicationName]);
+    if (rows[0]?.blocked) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`database operation ${applicationName} did not block on the expected lock`);
 }
 
 function png(): Uint8Array {
@@ -76,6 +103,7 @@ async function clean(): Promise<void> {
     await control.unsafe("delete from app_private.media_derivative_attempts where derivative_id in (select id from app_private.media_derivatives where asset_id in (select id from app_private.media_assets where game_id = $1))", [gameId]);
     await control.unsafe("delete from app_private.media_derivatives where asset_id in (select id from app_private.media_assets where game_id = $1)", [gameId]);
     await control.unsafe("delete from app_private.media_assets where game_id = $1", [gameId]);
+    await control.unsafe("delete from app_private.media_ingest_operations where game_id = $1", [gameId]);
     await control.unsafe("delete from app_private.media_ingests where game_id = $1", [gameId]);
     await control.unsafe("delete from app_private.games where id = $1", [gameId]);
   } finally {
@@ -112,6 +140,124 @@ function beginCommand(overrides: Partial<Readonly<{ idempotencyKey: string; purp
 }
 
 describe("MediaService 與真 PostgreSQL", () => {
+  it("trash 先取得遊戲列鎖時，公開 begin 等待提交後拒絕且不留下 ingest", async () => {
+    const applicationName = "media_begin_trash_race";
+    const raceDatabase = createDatabase(namedRoleUrl("app_runtime", applicationName));
+    const raceService = createMediaService({ store: new PostgresMediaStore(raceDatabase.db), objects: objects() });
+    const trashed = deferred();
+    const releaseTrash = deferred();
+    const trash = runtime.begin(async (tx) => {
+      await tx.unsafe("update app_private.games set trashed_at = now() where id = $1", [gameId]);
+      trashed.resolve();
+      await releaseTrash.promise;
+    });
+
+    try {
+      await trashed.promise;
+      const beginOutcome = raceService.beginMediaUpload(owner, beginCommand()).then(
+        (value) => ({ status: "fulfilled" as const, value }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      );
+      await waitForDatabaseLock(applicationName);
+      releaseTrash.resolve();
+      await trash;
+
+      const outcome = await beginOutcome;
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") expect(outcome.reason).toBeInstanceOf(MediaGameUnavailableError);
+      const rows = await control.unsafe<{ ingest_count: number; operation_count: number }[]>(`
+        select
+          (select count(*)::int from app_private.media_ingests where idempotency_key = $1) as ingest_count,
+          (select count(*)::int from app_private.media_ingest_operations where idempotency_key = $1) as operation_count
+      `, [key]);
+      expect(rows[0]).toEqual({ ingest_count: 0, operation_count: 0 });
+    } finally {
+      releaseTrash.resolve();
+      await trash.catch(() => undefined);
+      await raceDatabase.close();
+    }
+  });
+
+  it("資產移除先鎖定時，人工封面指標等待後不得指向已移除資產", async () => {
+    const grant = grantFrom(await serviceFor().beginMediaUpload(owner, beginCommand({ purpose: "custom_cover" })));
+    await serviceFor().finalizeMediaUpload(owner, { idempotencyKey: key });
+    await runtime.unsafe("update app_private.games set manual_cover_asset_id = null where id = $1", [gameId]);
+    const pointerApplication = "media_pointer_after_remove";
+    const pointer = postgres(namedRoleUrl("app_runtime", pointerApplication), options);
+    const removed = deferred();
+    const releaseRemoval = deferred();
+    const removal = runtime.begin(async (tx) => {
+      await tx.unsafe("update app_private.media_assets set removed_at = now(), removed_reason = 'owner_removed' where id = $1", [grant.assetId]);
+      removed.resolve();
+      await releaseRemoval.promise;
+    });
+
+    try {
+      await removed.promise;
+      const pointerOutcome = pointer.unsafe("update app_private.games set manual_cover_asset_id = $1 where id = $2", [grant.assetId, gameId]).then(
+        () => ({ status: "fulfilled" as const }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      );
+      await waitForDatabaseLock(pointerApplication);
+      releaseRemoval.resolve();
+      await removal;
+
+      const outcome = await pointerOutcome;
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") expect(String(outcome.reason)).toContain("media manual cover must reference an active image from the same game");
+      const rows = await control.unsafe<{ manual_cover_asset_id: string | null; removed: boolean }[]>(`
+        select game.manual_cover_asset_id, asset.removed_at is not null as removed
+        from app_private.games game join app_private.media_assets asset on asset.id = $1
+        where game.id = $2
+      `, [grant.assetId, gameId]);
+      expect(rows[0]).toEqual({ manual_cover_asset_id: null, removed: true });
+    } finally {
+      releaseRemoval.resolve();
+      await removal.catch(() => undefined);
+      await pointer.end();
+    }
+  });
+
+  it("人工封面指標先鎖定資產時，反向移除等待後不得破壞指標", async () => {
+    const grant = grantFrom(await serviceFor().beginMediaUpload(owner, beginCommand({ purpose: "custom_cover" })));
+    await serviceFor().finalizeMediaUpload(owner, { idempotencyKey: key });
+    await runtime.unsafe("update app_private.games set manual_cover_asset_id = null where id = $1", [gameId]);
+    const removalApplication = "media_remove_after_pointer";
+    const removal = postgres(namedRoleUrl("app_runtime", removalApplication), options);
+    const pointed = deferred();
+    const releasePointer = deferred();
+    const pointer = runtime.begin(async (tx) => {
+      await tx.unsafe("update app_private.games set manual_cover_asset_id = $1 where id = $2", [grant.assetId, gameId]);
+      pointed.resolve();
+      await releasePointer.promise;
+    });
+
+    try {
+      await pointed.promise;
+      const removalOutcome = removal.unsafe("update app_private.media_assets set removed_at = now(), removed_reason = 'owner_removed' where id = $1", [grant.assetId]).then(
+        () => ({ status: "fulfilled" as const }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      );
+      await waitForDatabaseLock(removalApplication);
+      releasePointer.resolve();
+      await pointer;
+
+      const outcome = await removalOutcome;
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") expect(String(outcome.reason)).toContain("media manual cover must reference an active image from the same game");
+      const rows = await control.unsafe<{ manual_cover_asset_id: string | null; removed: boolean }[]>(`
+        select game.manual_cover_asset_id, asset.removed_at is not null as removed
+        from app_private.games game join app_private.media_assets asset on asset.id = $1
+        where game.id = $2
+      `, [grant.assetId, gameId]);
+      expect(rows[0]).toEqual({ manual_cover_asset_id: grant.assetId, removed: false });
+    } finally {
+      releasePointer.resolve();
+      await pointer.catch(() => undefined);
+      await removal.end();
+    }
+  });
+
   it("並行 begin 只保留同一 ingest、asset 與 object path，參數漂移具名失敗", async () => {
     const service = serviceFor();
     const [first, second] = await Promise.all([
@@ -213,7 +359,7 @@ describe("MediaService 與真 PostgreSQL", () => {
       insert into app_private.media_assets (
         id, ingest_id, game_id, purpose, original_object_path, original_file_name,
         actual_mime_type, byte_size, width, height, authority_state, kind, object_key, mime_type
-      ) values ($1, $2, $3, 'gallery_image', $4, 'photo.png', 'image/png', $5, 20, 30, 'verified', 'gallery_image', $4, 'image/png')
+      ) values ($1, $2, $3, 'gallery_image', $4, 'photo.png', 'image/png', $5, 20, 30, 'verified', 'user_cover', $4, 'image/png')
     `, [grant.assetId, grant.ingestId, gameId, grant.objectPath, png().byteLength])).rejects.toThrow("media asset must match its finalized ingest ledger");
     const rows = await runtime.unsafe<{ asset_count: number }[]>("select count(*)::int as asset_count from app_private.media_assets where ingest_id = $1", [grant.ingestId]);
     expect(rows[0].asset_count).toBe(0);

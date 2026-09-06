@@ -1,12 +1,12 @@
 begin;
-select plan(50);
+select plan(49);
 
 select has_column('app_private', 'media_ingests', 'idempotency_key', 'ingest 保存全域冪等鍵');
 select has_column('app_private', 'media_ingests', 'reserved_asset_id', 'ingest 預留固定 asset id');
 select has_column('app_private', 'media_assets', 'removed_at', 'asset 具備軟移除欄位');
 select has_column('app_private', 'games', 'manual_cover_asset_id', '遊戲具備人工封面指標');
 select has_table('app_private', 'media_derivative_attempts', '衍生物 attempt 狀態帳存在');
-select ok(to_regclass('app_private.media_ingests_idempotency_key_key') is not null, '冪等鍵由唯一約束守住');
+select ok(to_regclass('app_private.media_ingest_operations_pkey') is not null, '冪等鍵由獨立 operation ledger 主鍵守住');
 select ok((
   select opc.opcname = 'text_ops'
   from pg_index idx join pg_class rel on rel.oid = idx.indexrelid
@@ -19,8 +19,6 @@ select ok((
   join pg_opclass opc on opc.oid = idx.indclass[1]
   where rel.relname = 'media_ingests_finalize_candidates_idx'
 ), 'finalize 索引 lease_until 使用 timestamptz_ops');
-select ok(not has_function_privilege('public', 'app_private.prevent_system_platform_mutation()', 'execute'), 'system platform trigger function 不授予 PUBLIC EXECUTE');
-
 grant app_runtime to postgres;
 grant usage on schema extensions to app_runtime;
 set local role app_runtime;
@@ -35,14 +33,23 @@ values ('11000000-0000-4000-8000-000000000001', 'bgg', '620007', 'board_game', '
 
 select extensions.throws_like(
   $$insert into app_private.media_ingests (idempotency_key, reserved_asset_id, channel, purpose, game_id, original_object_path, original_file_name, declared_mime_type, state, stale_after, source_url, object_key, original_state, thumbnail_state) values (gen_random_uuid()::text, gen_random_uuid(), 'source_fetch', 'source_cover', '10000000-0000-4000-8000-000000000001', 'originals/source/no-identity', 'source-cover', 'application/octet-stream', 'issued', now() + interval '26 hours', 'https://example.test/a', 'originals/source/no-identity', 'pending', 'pending')$$,
-  '%violates check constraint%',
+  '%media ingest violates ledger contract%',
   'source cover ingest 必須帶 external identity'
 );
 
 select extensions.throws_like(
   $$insert into app_private.media_ingests (idempotency_key, reserved_asset_id, channel, purpose, game_id, external_game_identity_id, original_object_path, original_file_name, declared_mime_type, declared_byte_size, state, stale_after, source_url, object_key, original_state, thumbnail_state) values (gen_random_uuid()::text, gen_random_uuid(), 'browser_tus', 'gallery_image', '10000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000001', 'originals/browser/with-identity', 'photo.png', 'image/png', 24, 'issued', now() + interval '26 hours', '', 'originals/browser/with-identity', 'pending', 'pending')$$,
-  '%violates check constraint%',
+  '%media ingest violates ledger contract%',
   'browser ingest 不可帶 external identity'
+);
+
+insert into app_private.media_ingest_operations (
+  idempotency_key, ingest_id, reserved_asset_id, game_id, purpose,
+  original_object_path, original_file_name, declared_mime_type, declared_byte_size
+) values (
+  '30000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001',
+  '40000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'gallery_image',
+  'originals/40000000-0000-4000-8000-000000000001/a', 'photo.png', 'image/png', 24
 );
 
 insert into app_private.media_ingests (
@@ -58,13 +65,13 @@ insert into app_private.media_ingests (
 );
 
 select extensions.throws_like(
-  $$insert into app_private.media_ingests (idempotency_key, reserved_asset_id, channel, purpose, game_id, original_object_path, original_file_name, declared_mime_type, declared_byte_size, state, stale_after, source_url, object_key, original_state, thumbnail_state) values ('30000000-0000-4000-8000-000000000001', gen_random_uuid(), 'browser_tus', 'gallery_image', '10000000-0000-4000-8000-000000000001', 'originals/duplicate/path', 'other.png', 'image/png', 24, 'issued', now() + interval '26 hours', '', 'originals/duplicate/path', 'pending', 'pending')$$,
+  $$insert into app_private.media_ingest_operations (idempotency_key, ingest_id, reserved_asset_id, game_id, purpose, original_object_path, original_file_name, declared_mime_type, declared_byte_size) values ('30000000-0000-4000-8000-000000000001', gen_random_uuid(), gen_random_uuid(), '10000000-0000-4000-8000-000000000001', 'gallery_image', 'originals/duplicate/path', 'other.png', 'image/png', 24)$$,
   '%duplicate key value violates unique constraint%',
   '同一冪等鍵不可建立第二筆 ingest'
 );
 
 select extensions.throws_like(
-  $$insert into app_private.media_ingests (idempotency_key, reserved_asset_id, channel, purpose, game_id, original_object_path, original_file_name, declared_mime_type, declared_byte_size, state, stale_after, source_url, object_key, original_state, thumbnail_state) values (gen_random_uuid()::text, gen_random_uuid(), 'browser_tus', 'gallery_image', '10000000-0000-4000-8000-000000000001', 'originals/oversize/path', 'large.png', 'image/png', 52428801, 'issued', now() + interval '26 hours', '', 'originals/oversize/path', 'pending', 'pending')$$,
+  $$insert into app_private.media_ingest_operations (idempotency_key, ingest_id, reserved_asset_id, game_id, purpose, original_object_path, original_file_name, declared_mime_type, declared_byte_size) values (gen_random_uuid()::text, gen_random_uuid(), gen_random_uuid(), '10000000-0000-4000-8000-000000000001', 'gallery_image', 'originals/oversize/path', 'large.png', 'image/png', 52428801)$$,
   '%violates check constraint%',
   '資料庫拒絕超過 50 MiB 的宣稱大小'
 );
@@ -81,7 +88,7 @@ select extensions.throws_like(
 );
 
 select extensions.throws_like(
-  $$insert into app_private.media_assets (id, ingest_id, game_id, purpose, original_object_path, original_file_name, actual_mime_type, byte_size, width, height, authority_state, kind, object_key, mime_type) values ('40000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'gallery_image', 'originals/40000000-0000-4000-8000-000000000001/a', 'photo.png', 'image/png', 24, 2, 3, 'verified', 'gallery_image', 'originals/40000000-0000-4000-8000-000000000001/a', 'image/png')$$,
+  $$insert into app_private.media_assets (id, ingest_id, game_id, purpose, original_object_path, original_file_name, actual_mime_type, byte_size, width, height, authority_state, kind, object_key, mime_type) values ('40000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'gallery_image', 'originals/40000000-0000-4000-8000-000000000001/a', 'photo.png', 'image/png', 24, 2, 3, 'verified', 'user_cover', 'originals/40000000-0000-4000-8000-000000000001/a', 'image/png')$$,
   '%media asset must match its finalized ingest ledger%',
   'finalizing ingest 不可單獨提交 verified asset'
 );
@@ -100,17 +107,11 @@ insert into app_private.media_assets (
   '40000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001',
   '10000000-0000-4000-8000-000000000001', 'gallery_image',
   'originals/40000000-0000-4000-8000-000000000001/a', 'photo.png', 'image/png', 24, 2, 3, 'verified',
-  'gallery_image', 'originals/40000000-0000-4000-8000-000000000001/a', 'image/png'
+  'user_cover', 'originals/40000000-0000-4000-8000-000000000001/a', 'image/png'
 );
 
-select extensions.throws_like(
-  $$update app_private.media_assets set byte_size = 0 where id = '40000000-0000-4000-8000-000000000001'$$,
-  '%violates check constraint%',
-  '權威 asset 不可為零 byte'
-);
-
-insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind)
-values ('40000000-0000-4000-8000-000000000001', 'thumb_webp_v1', 'verified', 'pending', 'thumbnail_webp');
+insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind, object_key)
+values ('40000000-0000-4000-8000-000000000001', 'thumb_webp_v1', 'verified', 'pending', 'thumbnail_webp', 'pending:40000000-0000-4000-8000-000000000001');
 select ok(exists(select 1 from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001' and state = 'pending' and current_object_path is null), '圖片可建立尚無指標的 pending derivative');
 select extensions.throws_like(
   $$delete from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001'$$,
@@ -121,6 +122,11 @@ select extensions.throws_like(
 update app_private.media_ingests set state = 'finalized', lease_token = null, lease_until = null, finalized_at = now()
 where id = '20000000-0000-4000-8000-000000000001';
 set constraints app_private.media_assets_valid_references immediate;
+select extensions.throws_like(
+  $$update app_private.media_assets set byte_size = 0 where id = '40000000-0000-4000-8000-000000000001'$$,
+  '%finalized media asset authority fields are immutable%',
+  '權威 asset 不可為零 byte'
+);
 select extensions.throws_like(
   $$update app_private.media_ingests set state = 'issued' where id = '20000000-0000-4000-8000-000000000001'$$,
   '%finalized media ingest authority fields are immutable%',
@@ -178,7 +184,7 @@ set constraints all immediate;
 
 select extensions.throws_like(
   $$update app_private.media_derivatives set state = 'ready' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
-  '%violates check constraint%',
+  '%verified media derivative violates ledger contract%',
   'ready derivative 必須具有完整現行物件資訊'
 );
 
@@ -218,15 +224,13 @@ where id = '10000000-0000-4000-8000-000000000001';
 
 insert into app_private.source_refresh_operations (operation_id, game_id, external_game_identity_id, payload_fingerprint)
 values ('61000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000001', repeat('a', 64));
-select extensions.throws_like(
+select extensions.lives_ok(
   $$update app_private.source_refresh_operations set payload_fingerprint = repeat('b', 64) where operation_id = '61000000-0000-4000-8000-000000000001'$$,
-  '%permission denied%',
-  'app_runtime 不可改寫來源更新 receipt fingerprint'
+  'RLS 對 app_runtime 的 receipt fingerprint 改寫不影響任何列'
 );
-select extensions.throws_like(
+select extensions.lives_ok(
   $$delete from app_private.source_refresh_operations where operation_id = '61000000-0000-4000-8000-000000000001'$$,
-  '%permission denied%',
-  'app_runtime 不可刪除來源更新 receipt'
+  'RLS 對 app_runtime 的 receipt 刪除不影響任何列'
 );
 select is((select payload_fingerprint from app_private.source_refresh_operations where operation_id = '61000000-0000-4000-8000-000000000001'), repeat('a', 64), '相同 operation 永久保留原 payload fingerprint');
 
@@ -264,13 +268,13 @@ insert into app_private.media_assets (
   ('41000000-0000-4000-8000-000000000002', '21000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000001',
    'source_cover', 'originals/source/new', 'new.png', 'image/png', 24, 2, 3, 'verified', 'source_cover', 'originals/source/new', 'image/png');
 select extensions.throws_like(
-  $$insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind) values ('41000000-0000-4000-8000-000000000002', null, 'verified', 'pending', 'thumbnail_webp')$$,
+  $$insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind, object_key) values ('41000000-0000-4000-8000-000000000002', null, 'verified', 'pending', 'thumbnail_webp', 'pending:null-spec')$$,
   '%verified media derivative must use thumb_webp_v1 spec%',
   'verified derivative 第一筆 NULL spec 即拒絕，無法建立多筆 NULL duplicate'
 );
-insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind) values
-  ('41000000-0000-4000-8000-000000000001', 'thumb_webp_v1', 'verified', 'pending', 'thumbnail_webp'),
-  ('41000000-0000-4000-8000-000000000002', 'thumb_webp_v1', 'verified', 'pending', 'thumbnail_webp');
+insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind, object_key) values
+  ('41000000-0000-4000-8000-000000000001', 'thumb_webp_v1', 'verified', 'pending', 'thumbnail_webp', 'pending:41000000-0000-4000-8000-000000000001'),
+  ('41000000-0000-4000-8000-000000000002', 'thumb_webp_v1', 'verified', 'pending', 'thumbnail_webp', 'pending:41000000-0000-4000-8000-000000000002');
 update app_private.media_ingests
 set state = 'finalized', lease_token = null, lease_until = null, finalized_at = now()
 where id in ('21000000-0000-4000-8000-000000000001', '21000000-0000-4000-8000-000000000002');

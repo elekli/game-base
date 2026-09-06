@@ -286,11 +286,7 @@ export class PostgresGameStore implements GameStore {
       ${ingest.id}, ${ingest.idempotencyKey}, ${ingest.reservedAssetId}, 'source_fetch', 'source_cover', ${gameId}, ${ingest.externalGameIdentityId}, ${ingest.objectKey},
       'source-cover', 'application/octet-stream', 'issued', now() + interval '26 hours',
       ${ingest.sourceUrl}, ${ingest.objectKey}, ${ingest.originalState}, ${ingest.thumbnailState}
-    ) on conflict (idempotency_key) do update set
-      state = case when media_ingests.state = 'cleanup_pending' then 'issued' else media_ingests.state end,
-      stale_after = case when media_ingests.state in ('issued', 'cleanup_pending') then now() + interval '26 hours' else media_ingests.stale_after end,
-      original_state = case when media_ingests.original_state = 'failed' then 'pending' else media_ingests.original_state end,
-      thumbnail_state = case when media_ingests.thumbnail_state = 'failed' then 'pending' else media_ingests.thumbnail_state end`);
+    )`);
   }
 
   async createFromSource(ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<{ game: GameRecord; created: boolean }> {
@@ -367,6 +363,7 @@ export class PostgresGameStore implements GameStore {
       if (!receipt[0]) {
         const existing = await tx.execute(sql`select game_id, external_game_identity_id, payload_fingerprint from app_private.source_refresh_operations where operation_id = ${sourceCoverOperationId}`) as Row[];
         if (existing[0]?.payload_fingerprint !== payloadFingerprint || String(existing[0]?.game_id) !== gameId || String(existing[0]?.external_game_identity_id) !== identityId) throw new SourceRefreshIdempotencyConflictError();
+        return;
       }
       await tx.execute(sql`update app_private.external_game_identities set snapshot = ${JSON.stringify(snapshot)}::jsonb, updated_at = now() where id = ${identityId}`);
       await tx.execute(sql`delete from app_private.external_game_categories where identity_id = ${identityId}`);

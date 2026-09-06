@@ -107,6 +107,7 @@ function checked(mimeType: ImageHeader["mimeType"], width: number, height: numbe
 function vp8lDimensions(data: Uint8Array): ImageHeader {
   if (data[0] !== 0x2f) throw new MediaStoredObjectInvalidError();
   const bits = u32le(data, 1);
+  if ((bits >>> 29) !== 0) throw new MediaStoredObjectInvalidError();
   return checked("image/webp", 1 + (bits & 0x3fff), 1 + ((bits >>> 14) & 0x3fff));
 }
 
@@ -240,7 +241,12 @@ async function gif(reader: StreamReader, expectedSize: number): Promise<ImageHea
     }
     if (block !== 0x2c) throw new MediaStoredObjectInvalidError();
     const descriptor = await reader.exact(9);
-    if (u16le(descriptor, 4) <= 0 || u16le(descriptor, 6) <= 0) throw new MediaStoredObjectInvalidError();
+    const left = u16le(descriptor);
+    const top = u16le(descriptor, 2);
+    const frameWidth = u16le(descriptor, 4);
+    const frameHeight = u16le(descriptor, 6);
+    checked("image/gif", frameWidth, frameHeight);
+    if (left + frameWidth > dimensions.width || top + frameHeight > dimensions.height) throw new MediaStoredObjectInvalidError();
     if ((descriptor[8] & 0x80) !== 0) await reader.skip(3 * (2 ** ((descriptor[8] & 0x07) + 1)));
     const codeSize = await reader.byte();
     if (codeSize === null || codeSize < 2 || codeSize > 12) throw new MediaStoredObjectInvalidError();
@@ -253,20 +259,30 @@ async function webp(reader: StreamReader, expectedSize: number): Promise<ImageHe
   const header = await reader.exact(12);
   if (ascii(header.subarray(0, 4)) !== "RIFF" || ascii(header.subarray(8, 12)) !== "WEBP" || u32le(header, 4) + 8 !== expectedSize) throw new MediaStoredObjectInvalidError();
   let dimensions: ImageHeader | null = null;
-  let sawImageData = false;
+  let imageDataCount = 0;
   let animated = false;
+  let sawExtendedHeader = false;
+  let sawAnimationControl = false;
+  let frameCount = 0;
+  let chunkCount = 0;
   while (reader.consumed < expectedSize) {
     const chunkHeader = await reader.exact(8);
     const kind = ascii(chunkHeader.subarray(0, 4));
     const length = u32le(chunkHeader, 4);
     if (length > expectedSize - reader.consumed) throw new MediaStoredObjectInvalidError();
     if (kind === "VP8X") {
-      if (length !== 10) throw new MediaStoredObjectInvalidError();
+      if (chunkCount !== 0 || sawExtendedHeader || length !== 10) throw new MediaStoredObjectInvalidError();
       const data = await reader.exact(10);
+      if ((data[0] & 0xc1) !== 0 || data[1] !== 0 || data[2] !== 0 || data[3] !== 0) throw new MediaStoredObjectInvalidError();
+      sawExtendedHeader = true;
       animated = (data[0] & 0x02) !== 0;
       dimensions = checked("image/webp", 1 + u24le(data, 4), 1 + u24le(data, 7));
+    } else if (kind === "ANIM") {
+      if (!animated || !sawExtendedHeader || sawAnimationControl || frameCount > 0 || imageDataCount > 0 || length !== 6) throw new MediaStoredObjectInvalidError();
+      await reader.skip(6);
+      sawAnimationControl = true;
     } else if (kind === "ANMF") {
-      if (!animated || !dimensions || length < 30) throw new MediaStoredObjectInvalidError();
+      if (!animated || !sawAnimationControl || !dimensions || length < 30) throw new MediaStoredObjectInvalidError();
       const frame = await reader.exact(16);
       const frameWidth = 1 + u24le(frame, 6);
       const frameHeight = 1 + u24le(frame, 9);
@@ -301,25 +317,30 @@ async function webp(reader: StreamReader, expectedSize: number): Promise<ImageHe
         remaining -= 8 + padded;
       }
       if (frameImageDataCount !== 1) throw new MediaStoredObjectInvalidError();
-      sawImageData = true;
+      frameCount += 1;
     } else if (kind === "VP8L") {
-      if (length < 5) throw new MediaStoredObjectInvalidError();
+      if (animated || imageDataCount > 0 || length < 5) throw new MediaStoredObjectInvalidError();
       const data = await reader.exact(5);
-      dimensions = vp8lDimensions(data);
-      sawImageData = true;
+      const imageDimensions = vp8lDimensions(data);
+      if (dimensions && (dimensions.width !== imageDimensions.width || dimensions.height !== imageDimensions.height)) throw new MediaStoredObjectInvalidError();
+      dimensions = imageDimensions;
+      imageDataCount += 1;
       await reader.skip(length - 5);
     } else if (kind === "VP8 ") {
-      if (length < 10) throw new MediaStoredObjectInvalidError();
+      if (animated || imageDataCount > 0 || length < 10) throw new MediaStoredObjectInvalidError();
       const data = await reader.exact(10);
-      dimensions = vp8Dimensions(data);
-      sawImageData = true;
+      const imageDimensions = vp8Dimensions(data);
+      if (dimensions && (dimensions.width !== imageDimensions.width || dimensions.height !== imageDimensions.height)) throw new MediaStoredObjectInvalidError();
+      dimensions = imageDimensions;
+      imageDataCount += 1;
       await reader.skip(length - 10);
     } else {
       await reader.skip(length);
     }
     if (length % 2 === 1) await reader.skip(1);
+    chunkCount += 1;
   }
-  if (!dimensions || !sawImageData) throw new MediaStoredObjectInvalidError();
+  if (!dimensions || (animated ? !sawAnimationControl || frameCount === 0 || imageDataCount !== 0 : imageDataCount !== 1 || frameCount !== 0)) throw new MediaStoredObjectInvalidError();
   await reader.end(expectedSize);
   return dimensions;
 }
