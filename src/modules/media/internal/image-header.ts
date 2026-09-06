@@ -104,6 +104,17 @@ function checked(mimeType: ImageHeader["mimeType"], width: number, height: numbe
   return { mimeType, width, height };
 }
 
+function vp8lDimensions(data: Uint8Array): ImageHeader {
+  if (data[0] !== 0x2f) throw new MediaStoredObjectInvalidError();
+  const bits = u32le(data, 1);
+  return checked("image/webp", 1 + (bits & 0x3fff), 1 + ((bits >>> 14) & 0x3fff));
+}
+
+function vp8Dimensions(data: Uint8Array): ImageHeader {
+  if (data[3] !== 0x9d || data[4] !== 0x01 || data[5] !== 0x2a) throw new MediaStoredObjectInvalidError();
+  return checked("image/webp", u16le(data, 6) & 0x3fff, u16le(data, 8) & 0x3fff);
+}
+
 const crcTable = new Uint32Array(256).map((_, index) => {
   let value = index;
   for (let bit = 0; bit < 8; bit += 1) value = (value >>> 1) ^ (0xedb88320 & -(value & 1));
@@ -261,6 +272,7 @@ async function webp(reader: StreamReader, expectedSize: number): Promise<ImageHe
       const frameHeight = 1 + u24le(frame, 9);
       if (2 * u24le(frame) + frameWidth > dimensions.width || 2 * u24le(frame, 3) + frameHeight > dimensions.height || (frame[15] & 0xfc) !== 0) throw new MediaStoredObjectInvalidError();
       let remaining = length - 16;
+      let frameImageDataCount = 0;
       while (remaining > 0) {
         if (remaining < 8) throw new MediaStoredObjectInvalidError();
         const nested = await reader.exact(8);
@@ -271,34 +283,35 @@ async function webp(reader: StreamReader, expectedSize: number): Promise<ImageHe
         if (nestedKind === "VP8L") {
           if (nestedLength < 5) throw new MediaStoredObjectInvalidError();
           const data = await reader.exact(5);
-          if (data[0] !== 0x2f) throw new MediaStoredObjectInvalidError();
+          const nestedDimensions = vp8lDimensions(data);
+          if (nestedDimensions.width !== frameWidth || nestedDimensions.height !== frameHeight) throw new MediaStoredObjectInvalidError();
           await reader.skip(nestedLength - 5);
-          sawImageData = true;
+          frameImageDataCount += 1;
         } else if (nestedKind === "VP8 ") {
           if (nestedLength < 10) throw new MediaStoredObjectInvalidError();
           const data = await reader.exact(10);
-          if (data[3] !== 0x9d || data[4] !== 0x01 || data[5] !== 0x2a) throw new MediaStoredObjectInvalidError();
+          const nestedDimensions = vp8Dimensions(data);
+          if (nestedDimensions.width !== frameWidth || nestedDimensions.height !== frameHeight) throw new MediaStoredObjectInvalidError();
           await reader.skip(nestedLength - 10);
-          sawImageData = true;
+          frameImageDataCount += 1;
         } else {
           await reader.skip(nestedLength);
         }
         if (nestedLength % 2 === 1) await reader.skip(1);
         remaining -= 8 + padded;
       }
+      if (frameImageDataCount !== 1) throw new MediaStoredObjectInvalidError();
+      sawImageData = true;
     } else if (kind === "VP8L") {
       if (length < 5) throw new MediaStoredObjectInvalidError();
       const data = await reader.exact(5);
-      if (data[0] !== 0x2f) throw new MediaStoredObjectInvalidError();
-      const bits = u32le(data, 1);
-      dimensions = checked("image/webp", 1 + (bits & 0x3fff), 1 + ((bits >>> 14) & 0x3fff));
+      dimensions = vp8lDimensions(data);
       sawImageData = true;
       await reader.skip(length - 5);
     } else if (kind === "VP8 ") {
       if (length < 10) throw new MediaStoredObjectInvalidError();
       const data = await reader.exact(10);
-      if (data[3] !== 0x9d || data[4] !== 0x01 || data[5] !== 0x2a) throw new MediaStoredObjectInvalidError();
-      dimensions = checked("image/webp", u16le(data, 6) & 0x3fff, u16le(data, 8) & 0x3fff);
+      dimensions = vp8Dimensions(data);
       sawImageData = true;
       await reader.skip(length - 10);
     } else {

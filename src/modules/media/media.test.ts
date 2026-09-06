@@ -79,12 +79,33 @@ function webp(width = 2, height = 3): Uint8Array {
   return result;
 }
 
-function animatedWebp(malformed = false): Uint8Array {
-  const framePayload = malformed ? new Uint8Array(16) : Uint8Array.from([
-    ...new Uint8Array(16), ...new TextEncoder().encode("VP8L"), 5, 0, 0, 0, 0x2f, 1, 0, 0, 0, 0,
+function animatedWebp(input: Readonly<{
+  frameWidth?: number;
+  frameHeight?: number;
+  bitstreamWidth?: number;
+  bitstreamHeight?: number;
+  bitstreamCount?: number;
+  codec?: "VP8L" | "VP8 ";
+}> = {}): Uint8Array {
+  const frameWidth = input.frameWidth ?? 2;
+  const frameHeight = input.frameHeight ?? 3;
+  const bitstreamWidth = input.bitstreamWidth ?? frameWidth;
+  const bitstreamHeight = input.bitstreamHeight ?? frameHeight;
+  const codec = input.codec ?? "VP8L";
+  const losslessHeader = new Uint8Array(5);
+  losslessHeader[0] = 0x2f;
+  new DataView(losslessHeader.buffer).setUint32(1, (bitstreamWidth - 1) | ((bitstreamHeight - 1) << 14), true);
+  const bitstream = codec === "VP8L"
+    ? losslessHeader
+    : Uint8Array.from([0, 0, 0, 0x9d, 0x01, 0x2a, bitstreamWidth & 0xff, bitstreamWidth >> 8, bitstreamHeight & 0xff, bitstreamHeight >> 8]);
+  const nested = Uint8Array.from([
+    ...new TextEncoder().encode(codec), bitstream.byteLength, 0, 0, 0, ...bitstream,
+    ...(bitstream.byteLength % 2 === 1 ? [0] : []),
   ]);
-  framePayload[6] = 1;
-  framePayload[9] = 2;
+  const framePayload = new Uint8Array(16 + nested.byteLength * (input.bitstreamCount ?? 1));
+  framePayload[6] = frameWidth - 1;
+  framePayload[9] = frameHeight - 1;
+  for (let index = 0; index < (input.bitstreamCount ?? 1); index += 1) framePayload.set(nested, 16 + nested.byteLength * index);
   const result = new Uint8Array(12 + 18 + 8 + framePayload.byteLength);
   result.set(new TextEncoder().encode("RIFF"));
   new DataView(result.buffer).setUint32(4, result.byteLength - 8, true);
@@ -313,13 +334,28 @@ describe("媒體公開介面", () => {
   });
 
   it("animated WebP 由 ANMF 第一幀驗證，缺少幀資料則拒絕", async () => {
-    for (const [bytes, succeeds] of [[animatedWebp(), true], [animatedWebp(true), false]] as const) {
+    for (const [bytes, succeeds] of [[animatedWebp(), true], [animatedWebp({ codec: "VP8 " }), true], [animatedWebp({ bitstreamCount: 0 }), false]] as const) {
       const key = `${idempotencyKey}-${succeeds}`;
       const service = createMediaService({ store: createInMemoryMediaStore({ activeGameIds: [gameId] }), objects: objectStore({ bytes, mimeType: "image/webp" }) });
       await service.beginMediaUpload(owner, { ...command({ declaredMimeType: "image/webp", declaredByteSize: bytes.byteLength, originalFileName: "animated.webp" }), idempotencyKey: key });
       const finalize = service.finalizeMediaUpload(owner, { idempotencyKey: key });
       if (succeeds) await expect(finalize).resolves.toMatchObject({ asset: { actualMimeType: "image/webp", width: 2, height: 3 } });
       else await expect(finalize).rejects.toBeInstanceOf(MediaStoredObjectInvalidError);
+    }
+  });
+
+  it("animated WebP 拒絕超過像素上限、尺寸不符或多重 image bitstream 的 ANMF", async () => {
+    const invalid = [
+      animatedWebp({ bitstreamWidth: 16_384, bitstreamHeight: 16_384 }),
+      animatedWebp({ bitstreamWidth: 2, bitstreamHeight: 1 }),
+      animatedWebp({ bitstreamCount: 2 }),
+      animatedWebp({ codec: "VP8 ", bitstreamWidth: 1, bitstreamHeight: 3 }),
+    ];
+    for (const [index, bytes] of invalid.entries()) {
+      const key = `${idempotencyKey}-invalid-anmf-${index}`;
+      const service = createMediaService({ store: createInMemoryMediaStore({ activeGameIds: [gameId] }), objects: objectStore({ bytes, mimeType: "image/webp" }) });
+      await service.beginMediaUpload(owner, { ...command({ declaredMimeType: "image/webp", declaredByteSize: bytes.byteLength, originalFileName: "animated.webp" }), idempotencyKey: key });
+      await expect(service.finalizeMediaUpload(owner, { idempotencyKey: key })).rejects.toBeInstanceOf(MediaStoredObjectInvalidError);
     }
   });
 
