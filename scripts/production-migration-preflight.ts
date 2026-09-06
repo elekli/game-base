@@ -45,9 +45,10 @@ export type ProductionDatabaseSnapshot = {
   appRuntimeExists: boolean;
   appRuntimeIsRestricted: boolean;
   appRuntimeReachableRoles: ReachableRole[];
+  expectedCreatorAdminMembershipCount: number;
   appPrivateOwnedByMigrator: boolean;
   appPrivateObjects: AppPrivateObject[];
-  dangerousInboundRoleCount: number;
+  unexpectedInboundMembershipCount: number;
   unexpectedAclCount: number;
   defaultPrivilegeDriftCount: number;
   unsafeGrantCount: number;
@@ -263,24 +264,45 @@ select json_build_object(
         and object_type.typelem = 0
     ) object
   ), '[]'::json),
-  'dangerousInboundRoleCount', (
-    with recursive inbound_role(role_oid) as (
-      select membership.member
+  'expectedCreatorAdminMembershipCount', (
+    select count(*)
+    from pg_auth_members membership
+    join pg_roles target on target.oid = membership.roleid
+    join pg_roles member on member.oid = membership.member
+    where target.rolname in ('app_runtime', 'app_migrator')
+      and member.rolname = 'postgres'
+      and not membership.inherit_option
+      and not membership.set_option
+      and membership.admin_option
+  ),
+  'unexpectedInboundMembershipCount', (
+    with recursive inbound_membership(member_oid, target_name, path) as (
+      select membership.member, target.rolname, array[target.oid, membership.member]
       from pg_auth_members membership
       join pg_roles target on target.oid = membership.roleid
       where target.rolname in ('app_runtime', 'app_migrator')
-        and (membership.inherit_option or membership.set_option or membership.admin_option)
       union
-      select membership.member
+      select membership.member, inbound.target_name, inbound.path || membership.member
       from pg_auth_members membership
-      join inbound_role inbound on inbound.role_oid = membership.roleid
-      where membership.inherit_option or membership.set_option or membership.admin_option
+      join inbound_membership inbound on inbound.member_oid = membership.roleid
+      where not membership.member = any(inbound.path)
     )
-    select count(*) from inbound_role inbound
-    join pg_roles role on role.oid = inbound.role_oid
-    where role.rolcanlogin or role.rolsuper or role.rolbypassrls
-      or role.rolcreaterole or role.rolcreatedb or role.rolreplication
-      or role.rolname in ('anon', 'authenticated', 'service_role')
+    select count(*) from inbound_membership inbound
+    join pg_roles role on role.oid = inbound.member_oid
+    where not (
+      cardinality(inbound.path) = 2
+      and inbound.target_name in ('app_runtime', 'app_migrator')
+      and role.rolname = 'postgres'
+      and exists (
+        select 1
+        from pg_auth_members expected
+        where expected.roleid = (select oid from pg_roles where rolname = inbound.target_name)
+          and expected.member = role.oid
+          and not expected.inherit_option
+          and not expected.set_option
+          and expected.admin_option
+      )
+    )
   ),
   'unexpectedAclCount', (
     select count(*) from (
@@ -1151,7 +1173,8 @@ function assertSnapshot(
     snapshot.appRuntimeExists &&
     snapshot.appRuntimeIsRestricted &&
     snapshot.appPrivateOwnedByMigrator &&
-    snapshot.dangerousInboundRoleCount === 0 &&
+    snapshot.expectedCreatorAdminMembershipCount === 2 &&
+    snapshot.unexpectedInboundMembershipCount === 0 &&
     reachableRolesPass;
   const objectOwnershipPass =
     Array.isArray(snapshot.appPrivateObjects) &&
