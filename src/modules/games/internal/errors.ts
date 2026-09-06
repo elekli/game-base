@@ -12,6 +12,7 @@ export type SourceErrorCode =
   | "source_identity_conflict"
   | "source_medium_mismatch"
   | "source_not_linked"
+  | "source_game_unavailable"
   | "source_refresh_idempotency_conflict"
   | "source_persistence_failed";
 
@@ -66,6 +67,9 @@ export class SourceMediumMismatchError extends SourceOperationError {
 }
 export class SourceNotLinkedError extends SourceOperationError {
   constructor() { super("source_not_linked", "此遊戲尚未連結外部來源。", null); this.name = "SourceNotLinkedError"; }
+}
+export class SourceGameUnavailableError extends SourceOperationError {
+  constructor() { super("source_game_unavailable", "此遊戲位於資源回收區，請先還原。", null); this.name = "SourceGameUnavailableError"; }
 }
 export class SourcePersistenceFailedError extends SourceOperationError {
   constructor() { super("source_persistence_failed", "來源資料無法儲存，請稍後再試。", null); this.name = "SourcePersistenceFailedError"; }

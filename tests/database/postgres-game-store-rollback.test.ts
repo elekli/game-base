@@ -2,7 +2,7 @@ import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDatabase } from "@/adapters/database";
 import { PostgresGameStore } from "@/adapters/database-game-store";
-import { SourceRefreshIdempotencyConflictError, type GameRecord, type SourceSnapshot } from "@/modules/games";
+import { SourceGameUnavailableError, SourceRefreshIdempotencyConflictError, type GameRecord, type SourceSnapshot } from "@/modules/games";
 
 const SOURCE_FAILURE_TRIGGER = "rollback_integration_source_failure";
 const SOURCE_FAILURE_FUNCTION = "app_private.rollback_integration_source_failure";
@@ -74,7 +74,7 @@ async function cleanTestData(): Promise<void> {
   await runtimeDatabase.unsafe("delete from app_private.media_ingests where game_id in (select id from app_private.games where display_name like '交易回滾測試：%')");
   await migrationDatabase.unsafe("delete from app_private.source_refresh_operations where game_id in (select id from app_private.games where display_name like '交易回滾測試：%')");
   await runtimeDatabase.unsafe("delete from app_private.games where display_name like '交易回滾測試：%'");
-  await runtimeDatabase.unsafe("delete from app_private.external_game_identities where provider = 'bgg' and source_id in ('980001', '980002', '980003', '980004')");
+  await runtimeDatabase.unsafe("delete from app_private.external_game_identities where provider = 'bgg' and source_id in ('980001', '980002', '980003', '980004', '980005', '980006')");
   await runtimeDatabase.unsafe("delete from app_private.source_categories where source_category_id like 'rollback-integration-%'");
   await runtimeDatabase.unsafe("delete from app_private.contributors where source_provider = 'bgg' and source_contributor_id like 'rollback-integration-%'");
   await runtimeDatabase.unsafe("delete from app_private.platforms where is_system = false and normalized_name like '交易回滾測試平台%'");
@@ -210,6 +210,40 @@ afterAll(async () => {
 });
 
 describe("PostgresGameStore 真實交易回滾", () => {
+  it("回收區手動條目拒絕首次連結，且不留下來源或封面攝取資料", async () => {
+    const game = await store.createManual("交易回滾測試：回收區手動連結", "board_game");
+    const snapshot = snapshotFor("980005", "交易回滾測試：不應連結的來源", "rollback-integration-trashed-link-category", "rollback-integration-trashed-link-contributor", "rollback-trashed-link-cover", 3.2);
+    await store.trash(game.id);
+    const before = await store.get(game.id);
+
+    await expect(store.linkFromSource(game.id, snapshot.ref, snapshot)).rejects.toBeInstanceOf(SourceGameUnavailableError);
+
+    expect(await store.get(game.id)).toEqual(before);
+    expect(await readRollbackCounts(game.id, snapshot.ref.sourceId, "rollback-integration-trashed-link-category", "rollback-integration-trashed-link-contributor")).toEqual({
+      identity_count: 0,
+      source_name_count: 0,
+      source_category_count: 0,
+      source_contribution_count: 0,
+      cover_ingest_count: 0,
+    });
+  });
+
+  it("回收區來源條目拒絕重新整理，且不改動來源資料或新增封面攝取", async () => {
+    const oldSnapshot = snapshotFor("980006", "交易回滾測試：回收區舊來源", "rollback-integration-trashed-refresh-old-category", "rollback-integration-trashed-refresh-old-contributor", "rollback-trashed-refresh-old-cover", 3.2);
+    const newSnapshot = snapshotFor("980006", "交易回滾測試：回收區新來源", "rollback-integration-trashed-refresh-new-category", "rollback-integration-trashed-refresh-new-contributor", "rollback-trashed-refresh-new-cover", 4.1);
+    const created = await store.createFromSource(oldSnapshot.ref, oldSnapshot);
+    const identityId = created.game.externalIdentityId;
+    if (!identityId) throw new Error("trashed refresh fixture did not create an external identity");
+    await store.trash(created.game.id);
+    const before = await readRefreshState(created.game.id, identityId);
+
+    await expect(store.refreshSource(created.game.id, newSnapshot, "75000000-0000-4000-8000-000000000001")).rejects.toBeInstanceOf(SourceGameUnavailableError);
+
+    expect(await readRefreshState(created.game.id, identityId)).toEqual(before);
+    const receipts = await migrationDatabase.unsafe<DatabaseRow[]>("select count(*)::int as count from app_private.source_refresh_operations where operation_id = '75000000-0000-4000-8000-000000000001'");
+    expect(receipts[0]?.count).toBe(0);
+  });
+
   it("coverIngestState 以最新 ingest 決定，不被舊 ready 遮蔽", async () => {
     const snapshot = snapshotFor("980004", "交易回滾測試：封面狀態", "rollback-integration-state-category", "rollback-integration-state-contributor", "rollback-state-cover", 3.2);
     const created = await store.createFromSource(snapshot.ref, snapshot);

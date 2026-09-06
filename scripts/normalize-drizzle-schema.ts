@@ -37,20 +37,29 @@ const cyclicMediaReferences = [
   ],
   [
     'export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {\n\tid: uuid().defaultRandom().notNull(),\n\tgameId: uuid("game_id").notNull(),',
-    'export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {\n\tid: uuid().defaultRandom().notNull(),\n\tgameId: uuid("game_id").notNull().references((): AnyPgColumn => gamesInAppPrivate.id, { onDelete: "restrict" }),',
+    'export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {\n\tid: uuid().defaultRandom().notNull(),\n\tgameId: uuid("game_id").notNull().references((): AnyPgColumn => gamesInAppPrivate.id, { onDelete: "cascade" }),',
   ],
   [
     '\tingestId: uuid("ingest_id").notNull(),\n\tkind:',
-    '\tingestId: uuid("ingest_id").notNull().references((): AnyPgColumn => mediaIngestsInAppPrivate.id, { onDelete: "restrict" }),\n\tkind:',
+    '\tingestId: uuid("ingest_id").notNull().references((): AnyPgColumn => mediaIngestsInAppPrivate.id, { onDelete: "cascade" }),\n\tkind:',
   ],
   [
-    '\tcreatedAt: timestamp("created_at", { withTimezone: true, mode: \'string\' }).defaultNow().notNull(),\n\tgameId: uuid("game_id").notNull(),\n\tpurpose:',
-    '\tcreatedAt: timestamp("created_at", { withTimezone: true, mode: \'string\' }).defaultNow().notNull(),\n\tgameId: uuid("game_id").notNull().references((): AnyPgColumn => gamesInAppPrivate.id, { onDelete: "restrict" }),\n\tpurpose:',
+    '\tcreatedAt: timestamp("created_at", { withTimezone: true, mode: \'string\' }).defaultNow().notNull(),\n\tgameId: uuid("game_id"),\n\tpurpose:',
+    '\tcreatedAt: timestamp("created_at", { withTimezone: true, mode: \'string\' }).defaultNow().notNull(),\n\tgameId: uuid("game_id").references((): AnyPgColumn => gamesInAppPrivate.id, { onDelete: "cascade" }),\n\tpurpose:',
   ],
 ] as const;
 
 let normalizedSchema = schema;
 for (const [before, after] of cyclicMediaReferences) normalizedSchema = normalizedSchema.replace(before, after);
+for (const [column, reference] of [
+  ['gameId: uuid("game_id").notNull()', "gamesInAppPrivate.id"],
+  ['ingestId: uuid("ingest_id").notNull()', "mediaIngestsInAppPrivate.id"],
+] as const) {
+  normalizedSchema = normalizedSchema.replace(
+    `${column}.references((): AnyPgColumn => ${reference}, { onDelete: "restrict" })`,
+    `${column}.references((): AnyPgColumn => ${reference}, { onDelete: "cascade" })`,
+  );
+}
 normalizedSchema = normalizedSchema.replace(
   'index("media_ingests_finalize_candidates_idx").using("btree", table.state.asc().nullsLast().op("timestamptz_ops"), table.leaseUntil.asc().nullsLast().op("text_ops"))',
   'index("media_ingests_finalize_candidates_idx").using("btree", table.state.asc().nullsLast().op("text_ops"), table.leaseUntil.asc().nullsLast().op("timestamptz_ops"))',
@@ -64,7 +73,7 @@ for (const constraintName of [
   "media_assets_game_id_fkey",
 ]) {
   normalizedSchema = normalizedSchema.replace(
-    new RegExp(`\\n\\tforeignKey\\(\\{\\n\\t\\t\\tcolumns: \\[[^\\n]+\\],\\n\\t\\t\\tforeignColumns: \\[[^\\n]+\\],\\n\\t\\t\\tname: "${constraintName}"\\n\\t\\t\\}\\)\\.onDelete\\("restrict"\\),`),
+    new RegExp(`\\n\\tforeignKey\\(\\{\\n\\t\\t\\tcolumns: \\[[^\\n]+\\],\\n\\t\\t\\tforeignColumns: \\[[^\\n]+\\],\\n\\t\\t\\tname: "${constraintName}"\\n\\t\\t\\}\\)(?:\\.onDelete\\("[^"]+"\\))?,`),
     "",
   );
 }

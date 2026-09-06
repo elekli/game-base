@@ -1,6 +1,7 @@
 import {
   SourceContentChangedError,
   isSourceIdentityConflictError,
+  SourceGameUnavailableError,
   SourceNotLinkedError,
   SourceQueryInvalidError,
 } from "./internal/errors";
@@ -74,6 +75,8 @@ export function createGamesService(catalogs: Readonly<Record<Provider, SourceCat
       }
     },
     async linkExternalSource({ gameId, ref, confirmationFingerprint: expected }) {
+      const game = await store.get(gameId);
+      if (game?.trashedAt) throw new SourceGameUnavailableError();
       const snapshot = await catalogs[ref.provider].fetchSnapshot(ref, "fresh");
       const actual = confirmationFingerprint(snapshot);
       if (actual !== expected) throw new SourceContentChangedError({ candidate: { ref, title: snapshot.title, releaseYear: snapshot.releaseYear, coverPreviewUrl: snapshot.coverUrl }, snapshot, fingerprint: actual });
@@ -82,6 +85,7 @@ export function createGamesService(catalogs: Readonly<Record<Provider, SourceCat
     async refreshExternalMetadata({ gameId, operationId }) {
       const game = await store.get(gameId);
       if (!game?.snapshot) throw new SourceNotLinkedError();
+      if (game.trashedAt) throw new SourceGameUnavailableError();
       const snapshot = await catalogs[game.snapshot.ref.provider].fetchSnapshot(game.snapshot.ref, "fresh");
       return store.refreshSource(gameId, snapshot, operationId);
     },

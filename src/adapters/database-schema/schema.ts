@@ -237,7 +237,7 @@ export const manualContributionsInAppPrivate = appPrivate.table("manual_contribu
 
 export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {
 	id: uuid().defaultRandom().notNull(),
-	gameId: uuid("game_id").notNull().references((): AnyPgColumn => gamesInAppPrivate.id, { onDelete: "restrict" }),
+	gameId: uuid("game_id").notNull().references((): AnyPgColumn => gamesInAppPrivate.id, { onDelete: "cascade" }),
 	sourceUrl: text("source_url").notNull(),
 	objectKey: text("object_key").notNull(),
 	originalState: text("original_state").notNull(),
@@ -268,24 +268,19 @@ export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {
 	index("media_ingests_cleanup_candidates_idx").using("btree", table.state.asc().nullsLast().op("text_ops"), table.staleAfter.asc().nullsLast().op("timestamptz_ops")),
 	index("media_ingests_finalize_candidates_idx").using("btree", table.state.asc().nullsLast().op("text_ops"), table.leaseUntil.asc().nullsLast().op("timestamptz_ops")),
 	index("media_ingests_game_id_idx").using("btree", table.gameId.asc().nullsLast().op("uuid_ops")),
-	foreignKey({
-			columns: [table.gameId],
-			foreignColumns: [gamesInAppPrivate.id],
-			name: "media_ingests_game_id_fkey"
-		}).onDelete("cascade"),
 	pgPolicy("runtime_media_ingests", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
 export const mediaAssetsInAppPrivate = appPrivate.table("media_assets", {
 	id: uuid().defaultRandom().notNull(),
-	ingestId: uuid("ingest_id").notNull().references((): AnyPgColumn => mediaIngestsInAppPrivate.id, { onDelete: "restrict" }),
+	ingestId: uuid("ingest_id").notNull().references((): AnyPgColumn => mediaIngestsInAppPrivate.id, { onDelete: "cascade" }),
 	kind: text().notNull(),
 	objectKey: text("object_key").notNull(),
 	mimeType: text("mime_type").notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	byteSize: bigint("byte_size", { mode: "number" }).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	gameId: uuid("game_id"),
+	gameId: uuid("game_id").references((): AnyPgColumn => gamesInAppPrivate.id, { onDelete: "cascade" }),
 	purpose: text(),
 	originalObjectPath: text("original_object_path"),
 	originalFileName: text("original_file_name"),
@@ -301,16 +296,6 @@ export const mediaAssetsInAppPrivate = appPrivate.table("media_assets", {
 	authorityState: text("authority_state").default('legacy_unverified'),
 }, (table) => [
 	index("media_assets_game_id_idx").using("btree", table.gameId.asc().nullsLast().op("uuid_ops")).where(sql`((removed_at IS NULL) AND (superseded_at IS NULL))`),
-	foreignKey({
-			columns: [table.ingestId],
-			foreignColumns: [mediaIngestsInAppPrivate.id],
-			name: "media_assets_ingest_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
-			columns: [table.gameId],
-			foreignColumns: [gamesInAppPrivate.id],
-			name: "media_assets_game_id_fkey"
-		}).onDelete("cascade"),
 	pgPolicy("runtime_media_assets", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 

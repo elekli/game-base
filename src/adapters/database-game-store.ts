@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
 import type { ContributorFacet, ContributorMatch, GameStore, GameEditInput, LegacyManualContributionInput, LibraryGameQuery, ManualContributionInput, ManualContributionResult, SharedLibraryItem } from "@/modules/games";
 import type { ExternalGameRef, GameContribution, GameRecord, Medium, SourceCategory, SourceSnapshot } from "@/modules/games";
-import { SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError, SourceRefreshIdempotencyConflictError } from "@/modules/games";
+import { SourceGameUnavailableError, SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError, SourceRefreshIdempotencyConflictError } from "@/modules/games";
 import { beginSourceCoverIngest, isAllowedSourceCoverUrl } from "@/modules/media/internal/source-cover-ingest";
 import { LibraryConflictError } from "@/modules/library/internal/errors";
 
@@ -325,6 +325,7 @@ export class PostgresGameStore implements GameStore {
     const run = async (tx: QueryExecutor) => {
       const gameRows = await tx.execute(sql`select id, medium, external_game_identity_id, trashed_at from app_private.games where id = ${gameId} for update`) as Row[];
       if (!gameRows[0]) throw new SourcePersistenceFailedError();
+      if (gameRows[0].trashed_at) throw new SourceGameUnavailableError();
       if (gameRows[0].external_game_identity_id) throw new SourcePersistenceFailedError();
       if (gameRows[0].medium !== ref.medium) throw new SourceMediumMismatchError();
       const existing = await tx.execute(sql`select g.id, g.trashed_at from app_private.external_game_identities i join app_private.games g on g.external_game_identity_id = i.id where i.provider = ${ref.provider} and i.source_id = ${ref.sourceId} for update`) as Row[];
@@ -338,7 +339,7 @@ export class PostgresGameStore implements GameStore {
     };
     try { await this.db.transaction(run); }
     catch (error) {
-      if (error instanceof SourceIdentityConflictError || error instanceof SourceMediumMismatchError) throw error;
+      if (error instanceof SourceGameUnavailableError || error instanceof SourceIdentityConflictError || error instanceof SourceMediumMismatchError) throw error;
       if (sqlState(error) === "23505") {
         const conflict = await this.db.execute(sql`select g.id, g.trashed_at from app_private.external_game_identities i join app_private.games g on g.external_game_identity_id = i.id where i.provider = ${ref.provider} and i.source_id = ${ref.sourceId} limit 1`) as Row[];
         if (conflict[0]) throw new SourceIdentityConflictError(String(conflict[0].id), Boolean(conflict[0].trashed_at));
@@ -353,8 +354,9 @@ export class PostgresGameStore implements GameStore {
   async refreshSource(gameId: string, snapshot: SourceSnapshot, sourceCoverOperationId: string): Promise<GameRecord> {
     const payloadFingerprint = createHash("sha256").update(JSON.stringify({ gameId, snapshot, coverUrl: snapshot.coverUrl })).digest("hex");
     const run = async (tx: QueryExecutor) => {
-      const rows = await tx.execute(sql`select g.external_game_identity_id from app_private.games g where g.id = ${gameId} and g.external_game_identity_id is not null for update`) as Row[];
+      const rows = await tx.execute(sql`select g.external_game_identity_id, g.trashed_at from app_private.games g where g.id = ${gameId} and g.external_game_identity_id is not null for update`) as Row[];
       if (!rows[0]) throw new SourcePersistenceFailedError();
+      if (rows[0].trashed_at) throw new SourceGameUnavailableError();
       const identityId = String(rows[0].external_game_identity_id);
       const receipt = await tx.execute(sql`
         insert into app_private.source_refresh_operations (operation_id, game_id, external_game_identity_id, payload_fingerprint)

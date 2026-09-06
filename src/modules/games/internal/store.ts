@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError } from "./errors";
+import { SourceGameUnavailableError, SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError } from "./errors";
 import { LibraryConflictError } from "@/modules/library/internal/errors";
 import type { ContributionRole, ExternalGameRef, GameContribution, GameRecord, LibraryGameQuery, Medium, SourceCategory, SourceSnapshot } from "./types";
 import { filterAndSortLibraryGames, sourceCategoryFacets } from "./library-query";
@@ -214,6 +214,7 @@ export class InMemoryGameStore implements GameStore {
   async linkFromSource(gameId: string, ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<GameRecord> {
     const game = this.games.get(gameId);
     if (!game) throw new Error("找不到遊戲條目。");
+    if (game.trashedAt) throw new SourceGameUnavailableError();
     if (game.externalIdentityId) throw new Error("遊戲已連結來源。");
     if (game.medium !== ref.medium) throw new SourceMediumMismatchError();
     const existingId = this.identities.get(`${ref.provider}:${ref.sourceId}`);
@@ -231,6 +232,7 @@ export class InMemoryGameStore implements GameStore {
     void operationId;
     const game = this.games.get(gameId);
     if (!game || !game.externalIdentityId) throw new Error("遊戲尚未連結來源。");
+    if (game.trashedAt) throw new SourceGameUnavailableError();
     const refreshed = {
       ...game,
       displayName: game.customDisplayName ?? snapshot.title,

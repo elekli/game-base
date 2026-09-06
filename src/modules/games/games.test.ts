@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createGamesService } from ".";
-import { SourceContentChangedError } from "./internal/errors";
+import { SourceContentChangedError, SourceGameUnavailableError } from "./internal/errors";
 import { InMemoryGameStore } from "./internal/store";
 import { TestCatalogAdapter, sampleFixture } from "@/adapters/sources/test-catalog-adapter";
 
@@ -105,6 +105,33 @@ describe("games service", () => {
     const again = await service.createGameFromExternalSource({ ref, confirmationFingerprint: confirmation.fingerprint });
     expect(again.created).toBe(false);
     expect(again.identityConflict).toBe("trashed");
+  });
+
+  it("回收區手動條目不可首次連結來源，且不改動條目", async () => {
+    const { service, store } = setup();
+    const manual = await service.createManualGame({ displayName: "回收區手動條目", medium: "board_game" });
+    const ref = { provider: "bgg" as const, medium: "board_game" as const, sourceId: "1" };
+    const confirmation = await service.getExternalGameConfirmation({ ref });
+    await store.trash(manual.id);
+    const before = await store.get(manual.id);
+
+    await expect(service.linkExternalSource({ gameId: manual.id, ref, confirmationFingerprint: confirmation.fingerprint })).rejects.toBeInstanceOf(SourceGameUnavailableError);
+
+    expect(await store.get(manual.id)).toEqual(before);
+  });
+
+  it("回收區來源條目不可重新整理，且不改動來源快照", async () => {
+    const { service, bgg, store } = setup();
+    const ref = { provider: "bgg" as const, medium: "board_game" as const, sourceId: "1" };
+    const confirmation = await service.getExternalGameConfirmation({ ref });
+    const created = await service.createGameFromExternalSource({ ref, confirmationFingerprint: confirmation.fingerprint });
+    await store.trash(created.game.id);
+    const before = await store.get(created.game.id);
+    bgg.setSnapshot({ ...confirmation.snapshot, title: "不應寫入的來源更新" });
+
+    await expect(service.refreshExternalMetadata({ gameId: created.game.id, operationId: "77777777-7777-4777-8777-777777777777" })).rejects.toBeInstanceOf(SourceGameUnavailableError);
+
+    expect(await store.get(created.game.id)).toEqual(before);
   });
 
   it("手動條目首次連結保留自訂資料與手動貢獻", async () => {
