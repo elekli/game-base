@@ -127,7 +127,7 @@ export async function checkProductionReleaseContract(root: string) {
     "migration preflight must receive its CA certificate from the Production Environment secret",
   );
   assertContract(
-    ciWorkflow.includes("pnpm release:migrations:lint -- --baseline-ref origin/main") &&
+    ciWorkflow.includes("pnpm release:migrations:lint --baseline-ref origin/main") &&
       /fetch-depth:\s*0/.test(ciWorkflow),
     "CI must compare the destructive-migration baseline with trusted main history",
   );
@@ -158,10 +158,11 @@ export async function checkProductionReleaseContract(root: string) {
     "ledger-recovery",
     "git merge-base --is-ancestor",
     "artifact identity mismatch",
-    "pnpm release:migration:run -- authorize",
-    "pnpm release:migration:run -- apply",
-    "inputs.mode == 'apply' && 'record' || 'recovery'",
-    "pnpm release:migration:run -- publish-ledger",
+    "pnpm release:migration:plan plan-from-input",
+    "pnpm release:migration:run authorize",
+    "pnpm release:migration:run apply",
+    "pnpm release:migration:run ${{ inputs.mode == 'apply' && 'record' || 'recovery' }}",
+    "pnpm release:migration:run publish-ledger",
     'echo "RELEASE_PLAN_PATH=$RUNNER_TEMP/preflight.json" >> "$GITHUB_ENV"',
     'echo "RELEASE_EVIDENCE_PATH=$RUNNER_TEMP/evidence/migration-release.json" >> "$GITHUB_ENV"',
     'echo "RELEASE_STATE_PATH=$RUNNER_TEMP/release-state.json" >> "$GITHUB_ENV"',
@@ -169,6 +170,10 @@ export async function checkProductionReleaseContract(root: string) {
     assertContract(workflow.includes(required), `workflow is missing ${required}`);
   }
   assertContract(!workflow.includes("> \"$RUNNER_TEMP/preflight"), "machine preflight JSON must not be captured from pnpm stdout");
+  assertContract(
+    !/pnpm release:(?:migration:(?:plan|run)|migrations:lint) --(?:\s|$)/.test(`${workflow}\n${ciWorkflow}`),
+    "workflow package scripts must not forward a literal argument separator",
+  );
   assertContract(
     mutationSteps > mutationJob && !workflow.slice(mutationJob, mutationSteps).includes("runner.temp"),
     "job-level mutation env must not use the unavailable runner context",
@@ -192,7 +197,7 @@ export async function checkProductionReleaseContract(root: string) {
   assertContract((workflow.match(/- name: Authorize exact migration attempt/g)?.length ?? 0) === 1, "mutation job must have one uniquely named authorization step");
   assertContract(
     !workflow.slice(authorizationStep, applyOrchestratorStep).includes("PRODUCTION_MIGRATION_DATABASE_URL") &&
-      workflow.slice(authorizationStep, applyOrchestratorStep).includes("pnpm release:migration:run -- authorize"),
+      workflow.slice(authorizationStep, applyOrchestratorStep).includes("pnpm release:migration:run authorize"),
     "authorization step must validate the persisted identity without database access",
   );
   assertContract(

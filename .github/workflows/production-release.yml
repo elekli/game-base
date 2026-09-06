@@ -95,7 +95,7 @@ jobs:
       - name: Validate pending input syntax without Production access
         env:
           PENDING_INPUT: ${{ inputs.pending_migrations_json }}
-        run: pnpm release:migration:plan -- plan-from-input "$PENDING_INPUT" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/expected-plan.json"
+        run: pnpm release:migration:plan plan-from-input "$PENDING_INPUT" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/expected-plan.json"
 
   mutate-production:
     name: Apply migration and preserve commit-bound ledger
@@ -171,7 +171,7 @@ jobs:
         if: inputs.mode == 'apply'
         env:
           PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
-        run: pnpm release:migration:run -- preflight
+        run: pnpm release:migration:run preflight
       - uses: actions/upload-artifact@v4
         if: inputs.mode == 'apply'
         with:
@@ -181,12 +181,12 @@ jobs:
           if-no-files-found: error
       - name: Authorize exact migration attempt
         if: inputs.mode == 'apply'
-        run: pnpm release:migration:run -- authorize
+        run: pnpm release:migration:run authorize
       - name: Apply and strict-verify exact migration suffix
         if: inputs.mode == 'apply'
         env:
           PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
-        run: pnpm release:migration:run -- apply
+        run: pnpm release:migration:run apply
       - name: Create sanitized evidence and ledger
         env:
           PRODUCTION_MIGRATION_DATABASE_URL: ${{ inputs.mode == 'ledger-recovery' && secrets.PRODUCTION_MIGRATION_DATABASE_URL || '' }}
@@ -195,7 +195,7 @@ jobs:
           SOURCE_ARTIFACT_PATH: ${{ runner.temp }}/source-artifact.json
           SOURCE_ARTIFACT_ZIP_PATH: ${{ runner.temp }}/source-plan.zip
           SOURCE_PLAN_PATH: ${{ runner.temp }}/source-plan/preflight.json
-        run: pnpm release:migration:run -- ${{ inputs.mode == 'apply' && 'record' || 'recovery' }}
+        run: pnpm release:migration:run ${{ inputs.mode == 'apply' && 'record' || 'recovery' }}
       - uses: actions/upload-artifact@v4
         with:
           name: production-migration-evidence-${{ github.run_id }}-${{ github.run_attempt }}
@@ -205,4 +205,4 @@ jobs:
       - name: Open ledger pull request
         env:
           GH_TOKEN: ${{ github.token }}
-        run: pnpm release:migration:run -- publish-ledger
+        run: pnpm release:migration:run publish-ledger
