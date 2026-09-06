@@ -6,7 +6,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  formatProductionMigrationFailure,
   lintProductionMigrations,
+  ProductionMigrationError,
   runProductionMigrationPreflight,
   validateProductionMigrationConnection,
   type ProductionDatabaseSnapshot,
@@ -1380,5 +1382,35 @@ describe("production migration preflight", () => {
         connect: async () => session,
       }),
     ).rejects.toThrow("ProductionMigrationPreflightError");
+  });
+});
+
+describe("production migration failure diagnostics", () => {
+  it("emits a finite safe error name and actionable controlled detail", () => {
+    const diagnostic = formatProductionMigrationFailure(
+      new ProductionMigrationError(
+        "ProductionMigrationPreflightError",
+        "Production database failed checks: grants(unsafe=1,missing=0)",
+      ),
+    );
+
+    expect(diagnostic).toEqual({
+      event: "production_migration_preflight_failed",
+      errorName: "ProductionMigrationPreflightError",
+      detail: "Production database failed checks: grants(unsafe=1,missing=0)",
+    });
+  });
+
+  it("does not expose unexpected driver messages", () => {
+    const diagnostic = formatProductionMigrationFailure(
+      new Error("postgres://owner:secret@example.test/postgres"),
+    );
+
+    expect(diagnostic).toEqual({
+      event: "production_migration_preflight_failed",
+      errorName: "ProductionMigrationUnexpectedError",
+      detail: "unexpected preflight failure; inspect protected runner diagnostics",
+    });
+    expect(JSON.stringify(diagnostic)).not.toContain("secret");
   });
 });
