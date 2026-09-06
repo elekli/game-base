@@ -48,7 +48,20 @@ main + GitHub preview Environment
 
 Production Supabase project 的 Vercel integration 必須維持只注入 Production。不得在該 integration 開啟 Preview 或 Development credential sync：Supabase Branching 是每個 Git branch 對應一個獨立、預設短命的 Preview branch，且官方文件明載 PR 建立、branch provisioning、Vercel 變數同步與部署之間存在競速；在正確 branch credentials 尚未就緒時同步 Production credentials，會破壞本專案「Preview 永不取得 Production secret 或資料庫密碼」的不變式。
 
-本專案不採每個 PR 一個 Supabase Preview branch。所有 Vercel Preview deployment 使用另一個固定、可重設、只含假資料的 Supabase project；其 runtime variables 由 Vercel Preview scope 明確配置，不從 Production integration 複製。若未來要改採 Supabase Branching，必須先另行修訂環境模型、repository binding、資料重設語意與部署競速處理，不能直接切換 integration scope。
+本專案不採每個 PR 一個 Supabase Preview branch。原定方案是讓所有 Vercel Preview deployment 使用另一個固定、可重設、只含假資料的 Supabase project；其 runtime variables 由 Vercel Preview scope 明確配置，不從 Production integration 複製。若未來要改採 Supabase Branching，必須先另行修訂環境模型、repository binding、資料重設語意與部署競速處理，不能直接切換 integration scope。
+
+### 免費方案容量閘
+
+Supabase 免費方案最多只能同時有兩個 active project，且不含 Branching。當帳號已占滿兩個 project 時，本流程沒有安全的 Hosted Preview 目標，因此必須維持未啟用狀態：不得設定 GitHub `preview` Environment 的真實連線、不得執行 Hosted reset，也不得讓 Vercel Preview 共用 Production project、schema、Storage 或憑證。額外 schema 或不同資料庫角色無法提供獨立的 Storage 與 project-level API key 邊界，不能視為等價替代。
+
+解除容量阻塞只能走下列其中一條路，且都需要另行明確決策：
+
+1. 暫停、刪除或重新指派現有 project，騰出一個免費方案名額，再依下方步驟建立固定 Preview project。
+2. 升級至含 Branching 的付費方案，另開架構修訂票，先解決 branch lifecycle、repository binding、reset 語意與 Vercel 部署競速，再啟用 per-PR branch。
+
+在上述任一路徑完成前，本 PR 只能證明 repository 端的 fail-closed workflow contract；不能宣稱 Hosted Preview 已建立、schema 已重播或 #48 已完成。本機 Supabase replay 與 CI fixture 仍可繼續驗證 migration，但不能冒充 Hosted 證據。
+
+容量閘解除後：
 
 1. 建立只供 Preview 使用的 Supabase project，確認不放 Production 資料；取得實際 project ref。
 2. 在 `src/shared/config/deployment-bindings.ts` 填入實際 Preview 的 project ref、Supabase hostname、Supavisor runtime binding 與兩個 key fingerprint；確認不與 Production binding 重疊。不要提交任何 key 原文或角色密碼。
