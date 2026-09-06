@@ -1,10 +1,11 @@
 import { clearIncompatibleSourceCategories, type LibraryFilters } from "./internal/filters";
-import type { ContributorMatch, GameRecord, Medium, SourceCategory } from "@/modules/games";
+import type { ContributorFacet, ContributorMatch, GameRecord, Medium, SourceCategory } from "@/modules/games";
 import type { GameEditInput, GameStore, LegacyManualContributionInput, ManualContributionInput, ManualContributionResult, SharedLibraryItem } from "@/modules/games";
 
 export type LibraryService = Readonly<{
   listGames(filters?: LibraryFilters): Promise<readonly GameRecord[]>;
   listSourceCategoryFacets(media: readonly Medium[]): Promise<readonly SourceCategory[]>;
+  listContributorFacets(): Promise<readonly ContributorFacet[]>;
   editGame(gameId: string, input: GameEditInput): Promise<GameRecord>;
   findContributorMatches(gameId: string, name: string): Promise<readonly ContributorMatch[]>;
   addManualContribution(input: ManualContributionInput | LegacyManualContributionInput): Promise<ManualContributionResult>;
@@ -36,6 +37,7 @@ export function createLibraryService(store: GameStore): LibraryService {
     listSourceCategoryFacets(media) {
       return media.length === 1 ? store.listSourceCategoryFacets(media[0]) : Promise.resolve([]);
     },
+    listContributorFacets() { return store.listContributorFacets(); },
     editGame(gameId, input) { return store.edit(gameId, input); },
     findContributorMatches(gameId, name) { return store.findContributorMatches(gameId, name); },
     addManualContribution(input) { return store.addManualContribution(input); },

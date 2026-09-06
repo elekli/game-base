@@ -25,7 +25,7 @@ describe("收藏庫篩選參數", () => {
 
   it("多媒介解析時清除分類、重度與 BGG 排序", () => {
     expect(parseLibrarySearchParams({ medium: ["board_game", "video_game"], category: "category:1", weightMin: "2", sort: "strategy_rank" })).toEqual({
-      search: undefined, media: ["board_game", "video_game"], actualPlatforms: [], tags: [], contributorIds: [], sourceCategories: [], weightMin: undefined, weightMax: undefined, sort: "name",
+      search: undefined, media: ["board_game", "video_game"], actualPlatforms: [], tags: [], contributorIds: [], contributorRoles: [], sourceCategories: [], weightMin: undefined, weightMax: undefined, sort: "name",
     });
   });
 
@@ -55,5 +55,25 @@ describe("收藏庫篩選參數", () => {
 
     expect(buildLibrarySearchParams(form).toString()).toBe("contributor=11111111-1111-4111-8111-111111111111&sort=name");
     expect(parseLibrarySearchParams({ contributor: ["11111111-1111-4111-8111-111111111111", "not-a-local-id"] }).contributorIds).toEqual(["11111111-1111-4111-8111-111111111111"]);
+  });
+
+  it("完整保存三種貢獻分類，同分類去重且空分類不增加條件", () => {
+    const form = new FormData();
+    form.append("contributor-design", "11111111-1111-4111-8111-111111111111");
+    form.append("contributor-design", "22222222-2222-4222-8222-222222222222");
+    form.append("contributor-design", "11111111-1111-4111-8111-111111111111");
+    form.append("contributor-art", "33333333-3333-4333-8333-333333333333");
+    form.append("contributor-publisher", "not-a-local-id");
+    form.set("sort", "recent");
+
+    const params = buildLibrarySearchParams(form);
+    expect(params.toString()).toBe("contributor-design=11111111-1111-4111-8111-111111111111&contributor-design=22222222-2222-4222-8222-222222222222&contributor-art=33333333-3333-4333-8333-333333333333&sort=recent");
+    expect(parseLibraryUrlSearchParams(params)).toMatchObject({
+      contributorRoles: [
+        { role: "design", contributorIds: ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"] },
+        { role: "art", contributorIds: ["33333333-3333-4333-8333-333333333333"] },
+      ],
+    });
+    expect(parseLibrarySearchParams({ "contributor-design": [], "contributor-art": [] }).contributorRoles).toEqual([]);
   });
 });

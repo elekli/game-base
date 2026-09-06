@@ -54,6 +54,6 @@ describe("GameEditClient contributor navigation", () => {
   it("可對應本地 UUID 時產生 UUID 收藏庫連結", () => {
     const html = renderToStaticMarkup(createElement(GameEditClient, { game: sourceGame("33333333-3333-4333-8333-333333333333") }));
 
-    expect(html).toContain("/?contributor=33333333-3333-4333-8333-333333333333");
+    expect(html).toContain("/?contributor-design=33333333-3333-4333-8333-333333333333");
   });
 });

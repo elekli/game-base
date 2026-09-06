@@ -1,6 +1,6 @@
 import "server-only";
 import { sql, type SQL } from "drizzle-orm";
-import type { ContributorMatch, GameStore, GameEditInput, LegacyManualContributionInput, LibraryGameQuery, ManualContributionInput, ManualContributionResult, SharedLibraryItem } from "@/modules/games";
+import type { ContributorFacet, ContributorMatch, GameStore, GameEditInput, LegacyManualContributionInput, LibraryGameQuery, ManualContributionInput, ManualContributionResult, SharedLibraryItem } from "@/modules/games";
 import type { ExternalGameRef, GameContribution, GameRecord, Medium, SourceCategory, SourceSnapshot } from "@/modules/games";
 import { SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError } from "@/modules/games";
 import { beginSourceCoverIngest, isAllowedSourceCoverUrl } from "@/modules/media/internal/source-cover-ingest";
@@ -139,6 +139,21 @@ export class PostgresGameStore implements GameStore {
       or exists (select 1 from app_private.manual_contributions mc where mc.game_id = g.id and mc.contributor_id in (${sql.join(contributorIds.map((id) => sql`${id}`), sql`, `)}))
       or exists (select 1 from app_private.contributors c where c.id in (${sql.join(contributorIds.map((id) => sql`${id}`), sql`, `)}) and c.source_provider = i.provider and exists (select 1 from jsonb_array_elements(coalesce(i.snapshot -> 'contributors', '[]'::jsonb)) contributor where contributor ->> 'sourceContributorId' = c.source_contributor_id))
     )`);
+    const contributorsByRole = new Map<string, Set<string>>();
+    for (const { role, contributorIds: selectedIds } of query.contributorRoles ?? []) {
+      const ids = contributorsByRole.get(role) ?? new Set<string>();
+      for (const id of selectedIds) ids.add(id);
+      contributorsByRole.set(role, ids);
+    }
+    for (const [role, selectedIds] of contributorsByRole) {
+      const ids = [...selectedIds];
+      if (ids.length === 0) continue;
+      clauses.push(sql`(
+        exists (select 1 from app_private.source_contributions sc where sc.identity_id = i.id and sc.role = ${role} and sc.contributor_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)}))
+        or exists (select 1 from app_private.manual_contributions mc where mc.game_id = g.id and mc.role = ${role} and mc.contributor_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)}))
+        or exists (select 1 from app_private.contributors c where c.id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)}) and c.source_provider = i.provider and exists (select 1 from jsonb_array_elements(coalesce(i.snapshot -> 'contributors', '[]'::jsonb)) contributor where contributor ->> 'sourceContributorId' = c.source_contributor_id and contributor ->> 'role' = ${role}))
+      )`);
+    }
     const selectedByKind = new Map<string, string[]>();
     for (const category of query.sourceCategories ?? []) {
       const ids = selectedByKind.get(category.kind) ?? [];
@@ -178,6 +193,34 @@ export class PostgresGameStore implements GameStore {
       order by sc.name asc, sc.category_kind asc, sc.source_category_id asc
     `) as Row[];
     return rows.map((row) => ({ kind: String(row.kind), sourceCategoryId: String(row.source_category_id), name: String(row.name) }));
+  }
+
+  async listContributorFacets(): Promise<readonly ContributorFacet[]> {
+    const rows = await this.db.execute(sql`
+      select distinct contributor_id, name, entity_kind, role from (
+        select c.id as contributor_id, c.name, c.entity_kind, sc.role
+        from app_private.games g
+        join app_private.source_contributions sc on sc.identity_id = g.external_game_identity_id
+        join app_private.contributors c on c.id = sc.contributor_id
+        where g.trashed_at is null
+        union
+        select c.id as contributor_id, c.name, c.entity_kind, mc.role
+        from app_private.games g
+        join app_private.manual_contributions mc on mc.game_id = g.id
+        join app_private.contributors c on c.id = mc.contributor_id
+        where g.trashed_at is null
+        union
+        select c.id as contributor_id, c.name, c.entity_kind, contributor ->> 'role' as role
+        from app_private.games g
+        join app_private.external_game_identities i on i.id = g.external_game_identity_id
+        cross join lateral jsonb_array_elements(coalesce(i.snapshot -> 'contributors', '[]'::jsonb)) contributor
+        join app_private.contributors c on c.source_provider = i.provider and c.source_contributor_id = contributor ->> 'sourceContributorId'
+        where g.trashed_at is null
+          and not exists (select 1 from app_private.source_contributions sc where sc.identity_id = i.id)
+      ) facets
+      order by role asc, name asc, contributor_id asc
+    `) as Row[];
+    return rows.map((row) => ({ contributorId: String(row.contributor_id), name: String(row.name), entityKind: row.entity_kind as ContributorFacet["entityKind"], role: row.role as ContributorFacet["role"] }));
   }
 
   private async readGame(executor: QueryExecutor, id: string): Promise<GameRecord | null> {

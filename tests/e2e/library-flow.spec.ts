@@ -355,8 +355,8 @@ test("#59 owner opens a contributor-scoped local library and combines another fi
   await page.getByText("貢獻關係").click();
   await page.getByRole("link", { name: `查看 ${contributorName} 的收藏庫遊戲` }).click();
 
-  await expect(page).toHaveURL(/\?contributor=/);
-  const contributorId = new URL(page.url()).searchParams.get("contributor");
+  await expect(page).toHaveURL(/\?contributor-design=/);
+  const contributorId = new URL(page.url()).searchParams.get("contributor-design");
   expect(contributorId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
   expect(page.url()).not.toContain(encodeURIComponent(contributorName));
   await expect(page.getByText("已依貢獻者篩選收藏庫；可繼續組合其他條件。")).toBeVisible();
@@ -364,8 +364,87 @@ test("#59 owner opens a contributor-scoped local library and combines another fi
   await expect(page.getByRole("heading", { name: secondGame })).toHaveCount(0);
   await page.getByRole("search").getByLabel("#59 組合條件").check();
   await page.getByRole("search").getByRole("button", { name: "套用篩選" }).click();
-  expect(new URL(page.url()).searchParams.get("contributor")).toBe(contributorId);
+  expect(new URL(page.url()).searchParams.get("contributor-design")).toBe(contributorId);
   await expect(page.getByRole("heading", { name: firstGame })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.screenshot({ path: testInfo.outputPath("contributor-library-filter-390.png"), fullPage: true });
+});
+
+test("#60 owner combines contributor roles with every compatible local filter on mobile", async ({ page }, testInfo) => {
+  const designerA = "#60 設計者甲";
+  const designerB = "#60 設計者乙";
+  const artist = "#60 美術者";
+  const publisher = "#60 發行者";
+  const fixtures = [
+    { name: "#60 組合一", designer: designerA, withArtist: true, withPublisher: true },
+    { name: "#60 組合二", designer: designerB, withArtist: true, withPublisher: true },
+    { name: "#60 僅設計", designer: designerA, withArtist: false, withPublisher: false },
+  ] as const;
+
+  async function addContributor(name: string, role: "design" | "art" | "publisher", reuseExisting: boolean) {
+    await page.getByText("貢獻關係").click();
+    const form = page.getByRole("heading", { name: "手動貢獻" }).locator("..");
+    await form.getByPlaceholder("人物或組織名稱").fill(name);
+    await form.locator('select[name="role"]').selectOption(role);
+    const add = form.getByRole("button", { name: "新增手動貢獻" });
+    if (!reuseExisting) {
+      await Promise.all([page.waitForEvent("load"), add.click()]);
+      return;
+    }
+    await add.click();
+    const reuse = page.getByRole("button", { name: "重用此貢獻者" });
+    await expect(reuse).toBeVisible();
+    await Promise.all([page.waitForEvent("load"), reuse.click()]);
+  }
+
+  for (const fixture of fixtures) {
+    await page.goto("/games/new");
+    await page.getByText("找不到？建立手動條目").click();
+    await page.getByRole("textbox", { name: "遊戲名稱" }).fill(fixture.name);
+    await page.locator('select[name="medium"]').selectOption("video_game");
+    await page.getByRole("button", { name: "建立手動條目" }).click();
+    await page.getByRole("link", { name: fixture.name }).last().click();
+    await page.getByText("編輯擁有者資料").click();
+    await page.locator('input[name="actualPlatforms"][value="Steam"]').check();
+    await page.getByLabel("自由標籤（以逗號分隔）").fill("#60 組合標籤");
+    await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "儲存資料" }).click()]);
+    await addContributor(fixture.designer, "design", fixture.designer === designerA && fixture.name !== "#60 組合一");
+    if (fixture.withArtist) await addContributor(artist, "art", fixture.name !== "#60 組合一");
+    if (fixture.withPublisher) await addContributor(publisher, "publisher", fixture.name !== "#60 組合一");
+  }
+
+  await page.goto("/");
+  const filters = page.getByRole("search");
+  await filters.getByLabel(`${designerA}（設計／開發）`).check();
+  await filters.getByLabel(`${designerB}（設計／開發）`).check();
+  await filters.getByLabel(`${artist}（美術）`).check();
+  await filters.getByLabel(`${publisher}（發行）`).check();
+  await filters.getByLabel("電子遊戲").check();
+  await filters.getByLabel("Steam").check();
+  await filters.getByLabel("#60 組合標籤").check();
+  await filters.getByLabel("搜尋收藏庫").fill("#60 組合");
+  await filters.getByRole("button", { name: "套用篩選" }).click();
+
+  const url = new URL(page.url());
+  expect(url.searchParams.getAll("contributor-design")).toHaveLength(2);
+  expect(url.searchParams.getAll("contributor-art")).toHaveLength(1);
+  expect(url.searchParams.getAll("contributor-publisher")).toHaveLength(1);
+  expect(url.searchParams.get("medium")).toBe("video_game");
+  expect(url.searchParams.get("platform")).toBe("Steam");
+  expect(url.searchParams.get("tag")).toBe("#60 組合標籤");
+  await expect(page.getByRole("heading", { name: "#60 組合一" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "#60 組合二" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "#60 僅設計" })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: testInfo.outputPath("contributor-role-filters-390.png"), fullPage: true });
+
+  await page.getByRole("link", { name: "清除全部條件" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await page.goBack();
+  await expect(filters.getByLabel(`${designerA}（設計／開發）`)).toBeChecked();
+  await expect(filters.getByLabel(`${designerB}（設計／開發）`)).toBeChecked();
+  await expect(filters.getByLabel(`${artist}（美術）`)).toBeChecked();
+  await expect(filters.getByLabel(`${publisher}（發行）`)).toBeChecked();
+  await page.goForward();
+  await expect(page.getByRole("search").locator('input[type="checkbox"]:checked')).toHaveCount(0);
 });

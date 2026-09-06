@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError } from "./errors";
 import { LibraryConflictError } from "@/modules/library/internal/errors";
-import type { ExternalGameRef, GameContribution, GameRecord, LibraryGameQuery, Medium, SourceCategory, SourceSnapshot } from "./types";
+import type { ContributionRole, ExternalGameRef, GameContribution, GameRecord, LibraryGameQuery, Medium, SourceCategory, SourceSnapshot } from "./types";
 import { filterAndSortLibraryGames, sourceCategoryFacets } from "./library-query";
 
 export type GameEditInput = Readonly<{
@@ -10,8 +10,6 @@ export type GameEditInput = Readonly<{
   tags?: readonly string[];
   playerCountNote?: string | null;
 }>;
-
-type ContributionRole = Extract<GameContribution["role"], "design" | "art" | "publisher">;
 
 export type ContributorMatch = Readonly<{
   contributorId: string;
@@ -52,11 +50,13 @@ export type ManualContributionResult =
   | Readonly<{ status: "created"; game: GameRecord; possibleDuplicate: false }>
   | Readonly<{ status: "confirmation_required"; matches: readonly ContributorMatch[]; possibleDuplicate: true }>;
 export type SharedLibraryItem = Readonly<{ name: string; usageCount: number; isSystem: boolean }>;
+export type ContributorFacet = Readonly<{ contributorId: string; name: string; entityKind: "person" | "company"; role: ContributionRole }>;
 
 export type GameStore = {
   list(query?: string): Promise<readonly GameRecord[]>;
   listLibraryGames(query?: LibraryGameQuery): Promise<readonly GameRecord[]>;
   listSourceCategoryFacets(medium: Medium): Promise<readonly SourceCategory[]>;
+  listContributorFacets(): Promise<readonly ContributorFacet[]>;
   get(id: string): Promise<GameRecord | null>;
   createManual(displayName: string, medium: Medium): Promise<GameRecord>;
   createFromSource(ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<{ game: GameRecord; created: boolean }>;
@@ -156,6 +156,23 @@ export class InMemoryGameStore implements GameStore {
 
   async listSourceCategoryFacets(medium: Medium): Promise<readonly SourceCategory[]> {
     return sourceCategoryFacets([...this.games.values()].filter((game) => game.trashedAt === null), medium);
+  }
+
+  async listContributorFacets(): Promise<readonly ContributorFacet[]> {
+    const facets = new Map<string, ContributorFacet>();
+    for (const game of this.games.values()) {
+      if (game.trashedAt !== null) continue;
+      for (const contribution of game.contributors) {
+        if (contribution.contributorId === null) continue;
+        facets.set(`${contribution.role}:${contribution.contributorId}`, {
+          contributorId: contribution.contributorId,
+          name: contribution.name,
+          entityKind: contribution.entityKind,
+          role: contribution.role,
+        });
+      }
+    }
+    return [...facets.values()].sort((left, right) => left.role.localeCompare(right.role) || left.name.localeCompare(right.name, "zh-Hant") || left.contributorId.localeCompare(right.contributorId));
   }
 
   async get(id: string) { return this.games.get(id) ?? null; }
@@ -329,6 +346,7 @@ export class UnavailableGameStore implements GameStore {
   async list(): Promise<readonly GameRecord[]> { return this.fail(); }
   async listLibraryGames(): Promise<readonly GameRecord[]> { return this.fail(); }
   async listSourceCategoryFacets(): Promise<readonly SourceCategory[]> { return this.fail(); }
+  async listContributorFacets(): Promise<readonly ContributorFacet[]> { return this.fail(); }
   async get(): Promise<GameRecord | null> { return this.fail(); }
   async createManual(): Promise<GameRecord> { return this.fail(); }
   async createFromSource(): Promise<{ game: GameRecord; created: boolean }> { return this.fail(); }
