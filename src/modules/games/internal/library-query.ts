@@ -38,6 +38,20 @@ function sameDimensionMatches(values: readonly string[], selected: readonly stri
   return selected.some((value) => available.has(normalized(value)));
 }
 
+function contributorRolesMatch(game: GameRecord, selected: LibraryGameQuery["contributorRoles"]): boolean {
+  if (!selected || selected.length === 0) return true;
+  const selectedByRole = new Map<string, Set<string>>();
+  for (const { role, contributorIds } of selected) {
+    const ids = selectedByRole.get(role) ?? new Set<string>();
+    for (const contributorId of contributorIds) ids.add(contributorId);
+    selectedByRole.set(role, ids);
+  }
+  return [...selectedByRole].every(([role, ids]) => {
+    if (ids.size === 0) return true;
+    return game.contributors.some((contributor) => contributor.role === role && contributor.contributorId !== null && ids.has(contributor.contributorId));
+  });
+}
+
 export function filterAndSortLibraryGames(games: readonly GameRecord[], query: LibraryGameQuery = {}): readonly GameRecord[] {
   const filtered = games.filter((game) => {
     const search = normalized(query.search ?? "");
@@ -45,6 +59,7 @@ export function filterAndSortLibraryGames(games: readonly GameRecord[], query: L
     if (query.media?.length && !query.media.includes(game.medium)) return false;
     if (!sameDimensionMatches(game.actualPlatforms, query.actualPlatforms)) return false;
     if (!sameDimensionMatches(game.tags, query.tags)) return false;
+    if (!contributorRolesMatch(game, query.contributorRoles)) return false;
     if (query.contributorIds?.length && !game.contributors.some((contributor) => contributor.contributorId !== null && query.contributorIds?.includes(contributor.contributorId))) return false;
     if (!sourceCategoriesMatch(game, query.sourceCategories)) return false;
     const weight = game.snapshot?.weight ?? null;

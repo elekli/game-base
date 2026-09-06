@@ -1,7 +1,8 @@
-import type { Medium } from "@/modules/games";
+import type { ContributionRole, Medium } from "@/modules/games";
 import { cleanSharedNames, clearIncompatibleSourceCategories, type LibraryFilters, type LibrarySort } from "@/modules/library";
 
 const localContributorId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const contributorRoles = ["design", "art", "publisher"] as const satisfies readonly ContributionRole[];
 
 function cleanContributorIds(values: readonly FormDataEntryValue[]): string[] {
   const ids = new Set<string>();
@@ -19,6 +20,9 @@ export function buildLibrarySearchParams(form: FormData): URLSearchParams {
   for (const platform of cleanSharedNames(form.getAll("platform").filter((value): value is string => typeof value === "string"))) params.append("platform", platform);
   for (const tag of cleanSharedNames(form.getAll("tag").filter((value): value is string => typeof value === "string"))) params.append("tag", tag);
   for (const contributorId of cleanContributorIds(form.getAll("contributor"))) params.append("contributor", contributorId);
+  for (const role of contributorRoles) {
+    for (const contributorId of cleanContributorIds(form.getAll(`contributor-${role}`))) params.append(`contributor-${role}`, contributorId);
+  }
   if (media.length === 1) {
     for (const category of form.getAll("category")) if (typeof category === "string") params.append("category", category);
   }
@@ -57,12 +61,17 @@ export function parseLibrarySearchParams(
   const sort = many("sort")[0];
   const isBoardOnly = media.length === 1 && media[0] === "board_game";
   const search = many("search")[0]?.trim() || undefined;
+  const selectedContributorRoles = contributorRoles.flatMap((role) => {
+    const contributorIds = cleanContributorIds(many(`contributor-${role}`));
+    return contributorIds.length > 0 ? [{ role, contributorIds }] : [];
+  });
   return {
     search,
     media,
     actualPlatforms: cleanSharedNames(many("platform")),
     tags: cleanSharedNames(many("tag")),
     contributorIds: cleanContributorIds(many("contributor")),
+    contributorRoles: selectedContributorRoles,
     sourceCategories: clearIncompatibleSourceCategories(media, sourceCategories),
     weightMin: isBoardOnly ? number("weightMin") : undefined,
     weightMax: isBoardOnly ? number("weightMax") : undefined,

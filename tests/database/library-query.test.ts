@@ -166,6 +166,7 @@ describe("Postgres 收藏庫 SQL 查詢", () => {
       localizedTitle: "SQL 篩選測試：薩爾達傳說",
       aliases: ["Breath of the Wild"],
       supportedPlatforms: ["來源 PC"],
+      contributors: [{ sourceContributorId: "sql-query-contributor-video", name: "SQL 篩選測試：電子設計者", entityKind: "company", role: "design" }],
     };
     const zelda = await store.createFromSource(snapshot.ref, snapshot);
     const hades = await store.createManual("SQL 篩選測試：Hades", "video_game");
@@ -181,38 +182,77 @@ describe("Postgres 收藏庫 SQL 查詢", () => {
     await expect(library.listGames({ actualPlatforms: ["sql 篩選測試：steam"], tags: ["SQL 篩選測試：派對", "SQL 篩選測試：動作"] })).resolves.toMatchObject([{ id: hades.id }]);
     await expect(library.listGames({ actualPlatforms: ["來源 PC"] })).resolves.toEqual([]);
     await expect(library.listGames({ actualPlatforms: [], tags: [] })).resolves.toHaveLength(3);
+    const videoContributorId = (await store.get(zelda.game.id))?.contributors[0]?.contributorId;
+    await expect(library.listGames({
+      search: "zelDA",
+      media: ["video_game"],
+      actualPlatforms: ["SQL 篩選測試：Switch"],
+      tags: ["SQL 篩選測試：劇情向"],
+      sourceCategories: [{ kind: "genre", sourceCategoryId: "sql-query-genre" }],
+      contributorRoles: [{ role: "design", contributorIds: [videoContributorId ?? "missing"] }],
+      sort: "recent",
+    })).resolves.toMatchObject([{ id: zelda.game.id }]);
   });
 
   it("以本地 contributor UUID 組合收藏庫條件，同名不同實體不合併且排除回收區", async () => {
-    const sharedContributor = { sourceContributorId: "sql-query-contributor-shared", name: "SQL 篩選測試：同名作者", entityKind: "person" as const, role: "design" as const };
-    const distinctContributor = { ...sharedContributor, sourceContributorId: "sql-query-contributor-distinct" };
-    const firstSnapshot = bggSnapshot("981021", "SQL 篩選測試：貢獻者一", [], null, null, [sharedContributor]);
-    const secondSnapshot = bggSnapshot("981022", "SQL 篩選測試：貢獻者二", [], null, null, [sharedContributor]);
+    const designA = { sourceContributorId: "sql-query-contributor-design-a", name: "SQL 篩選測試：同名作者", entityKind: "person" as const, role: "design" as const };
+    const designB = { ...designA, sourceContributorId: "sql-query-contributor-design-b" };
+    const distinctContributor = { ...designA, sourceContributorId: "sql-query-contributor-distinct" };
+    const art = { sourceContributorId: "sql-query-contributor-art", name: "SQL 篩選測試：共同美術", entityKind: "person" as const, role: "art" as const };
+    const publisher = { sourceContributorId: "sql-query-contributor-publisher", name: "SQL 篩選測試：共同發行", entityKind: "company" as const, role: "publisher" as const };
+    const categories = [{ kind: "category", sourceCategoryId: "sql-query-contributor-category", name: "SQL 篩選測試：貢獻分類" }];
+    const firstSnapshot = bggSnapshot("981021", "SQL 篩選測試：貢獻者一", categories, 2.5, 20, [designA, art, publisher]);
+    const secondSnapshot = bggSnapshot("981022", "SQL 篩選測試：貢獻者二", categories, 3.5, 10, [designB, art, publisher]);
     const sameNameSnapshot = bggSnapshot("981023", "SQL 篩選測試：同名不同人", [], null, null, [distinctContributor]);
-    const trashedSnapshot = bggSnapshot("981024", "SQL 篩選測試：回收貢獻者", [], null, null, [sharedContributor]);
+    const trashedSnapshot = bggSnapshot("981024", "SQL 篩選測試：回收貢獻者", [], null, null, [designA, art, publisher]);
     const first = await store.createFromSource(firstSnapshot.ref, firstSnapshot);
     const second = await store.createFromSource(secondSnapshot.ref, secondSnapshot);
     const sameName = await store.createFromSource(sameNameSnapshot.ref, sameNameSnapshot);
     const trashed = await store.createFromSource(trashedSnapshot.ref, trashedSnapshot);
     const manual = await store.createManual("SQL 篩選測試：同名手動貢獻者", "board_game");
-    const manualResult = await store.addManualContribution({ kind: "new", gameId: manual.id, name: sharedContributor.name, entityKind: "person", role: "design", allowDuplicate: true });
+    const manualResult = await store.addManualContribution({ kind: "new", gameId: manual.id, name: designA.name, entityKind: "person", role: "design", allowDuplicate: true });
     if (manualResult.status !== "created") throw new Error("expected manual contributor fixture");
     await store.edit(first.game.id, { tags: ["SQL 篩選測試：貢獻者交集"] });
-    await store.edit(second.game.id, { tags: ["SQL 篩選測試：其他標籤"] });
+    await store.edit(second.game.id, { tags: ["SQL 篩選測試：貢獻者交集", "SQL 篩選測試：其他標籤"] });
     await store.trash(trashed.game.id);
 
-    const contributorId = (await store.get(first.game.id))?.contributors[0]?.contributorId;
+    const firstContributions = (await store.get(first.game.id))?.contributors ?? [];
+    const secondContributions = (await store.get(second.game.id))?.contributors ?? [];
+    const contributorId = firstContributions.find((item) => item.role === "design")?.contributorId;
+    const secondContributorId = secondContributions.find((item) => item.role === "design")?.contributorId;
+    const artContributorId = firstContributions.find((item) => item.role === "art")?.contributorId;
+    const publisherContributorId = firstContributions.find((item) => item.role === "publisher")?.contributorId;
     const distinctContributorId = (await store.get(sameName.game.id))?.contributors[0]?.contributorId;
     const manualContributorId = manualResult.game.contributors[0]?.contributorId;
     expect(contributorId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(secondContributorId).not.toBe(contributorId);
     expect(distinctContributorId).not.toBe(contributorId);
     expect(manualContributorId).not.toBe(contributorId);
     await expect(runtimeDatabase.unsafe("select source_provider, source_contributor_id from app_private.contributors where id = $1", [manualContributorId])).resolves.toEqual([{ source_provider: null, source_contributor_id: null }]);
-    expect((await store.get(second.game.id))?.contributors[0]?.contributorId).toBe(contributorId);
-    await expect(library.listGames({ contributorIds: [contributorId ?? "missing"] })).resolves.toMatchObject([{ id: first.game.id }, { id: second.game.id }]);
+    await expect(library.listGames({ contributorIds: [contributorId ?? "missing"] })).resolves.toMatchObject([{ id: first.game.id }]);
     await expect(library.listGames({ contributorIds: [contributorId ?? "missing"], tags: ["SQL 篩選測試：貢獻者交集"] })).resolves.toMatchObject([{ id: first.game.id }]);
     await expect(library.listGames({ contributorIds: [distinctContributorId ?? "missing"] })).resolves.toMatchObject([{ id: sameName.game.id }]);
     await expect(library.listGames({ contributorIds: [manualContributorId ?? "missing"] })).resolves.toMatchObject([{ id: manual.id }]);
+    await expect(library.listGames({
+      search: "貢獻者",
+      media: ["board_game"],
+      tags: ["SQL 篩選測試：貢獻者交集"],
+      sourceCategories: [{ kind: "category", sourceCategoryId: "sql-query-contributor-category" }],
+      contributorRoles: [
+        { role: "design", contributorIds: [contributorId ?? "missing", secondContributorId ?? "missing"] },
+        { role: "art", contributorIds: [artContributorId ?? "missing"] },
+        { role: "publisher", contributorIds: [publisherContributorId ?? "missing"] },
+      ],
+      weightMin: 2,
+      weightMax: 4,
+      sort: "strategy_rank",
+    })).resolves.toMatchObject([{ id: second.game.id }, { id: first.game.id }]);
+    await expect(library.listContributorFacets()).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ contributorId, role: "design", name: designA.name }),
+      expect.objectContaining({ contributorId: secondContributorId, role: "design", name: designB.name }),
+      expect.objectContaining({ contributorId: artContributorId, role: "art", name: art.name }),
+      expect.objectContaining({ contributorId: publisherContributorId, role: "publisher", name: publisher.name }),
+    ]));
   });
 
   it("legacy snapshot 缺少來源關係時只在本地 contributor 身分可對應時提供可用篩選", async () => {

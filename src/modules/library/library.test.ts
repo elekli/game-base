@@ -34,6 +34,32 @@ describe("library names", () => {
 });
 
 describe("library filters", () => {
+  it("同分類多位 contributor 取聯集，跨分類取交集，且身分不以同名合併", () => {
+    const contribution = (contributorId: string, role: "design" | "art" | "publisher", name = "同名貢獻者") => ({
+      id: `${role}-${contributorId}`,
+      contributorId,
+      name,
+      entityKind: "person" as const,
+      role,
+      origin: "manual" as const,
+      provider: null,
+      sourceContributorId: null,
+    });
+    const games = [
+      game({ id: "design-a-art", contributors: [contribution("design-a", "design"), contribution("art-a", "art")] }),
+      game({ id: "design-b-art", contributors: [contribution("design-b", "design"), contribution("art-a", "art")] }),
+      game({ id: "design-a-only", contributors: [contribution("design-a", "design")] }),
+      game({ id: "same-name-wrong-id", contributors: [contribution("design-other", "design")] }),
+    ];
+
+    expect(filterAndSortGames(games, { contributorRoles: [
+      { role: "design", contributorIds: ["design-a"] },
+      { role: "design", contributorIds: ["design-b"] },
+      { role: "art", contributorIds: ["art-a"] },
+    ] }).map((item) => item.id)).toEqual(["design-a-art", "design-b-art"]);
+    expect(filterAndSortGames(games, { contributorRoles: [] })).toHaveLength(4);
+  });
+
   it("只以本地 contributor UUID 篩選，同名實體不會互相命中", () => {
     const contribution = (contributorId: string) => ({
       id: `contribution-${contributorId}`,
@@ -89,6 +115,70 @@ describe("library filters", () => {
 });
 
 describe("library service", () => {
+  it("列出非回收遊戲使用中的分類化 contributor facet，並保留同名不同身分", async () => {
+    const store = new InMemoryGameStore();
+    const service = createLibraryService(store);
+    const source = (sourceId: string, contributorId: string): SourceSnapshot => ({
+      ref: { provider: "bgg", medium: "board_game", sourceId },
+      canonicalUrl: `https://example.test/${sourceId}`,
+      title: `facet ${sourceId}`,
+      localizedTitle: null,
+      aliases: [],
+      description: null,
+      releaseYear: null,
+      coverUrl: null,
+      categories: [],
+      contributors: [{ sourceContributorId: contributorId, name: "同名作者", entityKind: "person", role: "design" }],
+      minPlayers: null,
+      maxPlayers: null,
+      supportsSolo: "unknown",
+      playtimeMinutes: null,
+      weight: null,
+      strategyRank: null,
+      supportedPlatforms: [],
+    });
+    const active = await store.createFromSource(source("facet-active", "facet-author-a").ref, source("facet-active", "facet-author-a"));
+    const trashed = await store.createFromSource(source("facet-trashed", "facet-author-b").ref, source("facet-trashed", "facet-author-b"));
+    await store.trash(trashed.game.id);
+
+    await expect(service.listContributorFacets()).resolves.toEqual([{ contributorId: active.game.contributors[0].contributorId, name: "同名作者", entityKind: "person", provider: "bgg", role: "design" }]);
+  });
+
+  it("共享 contributor 部分 refresh 後，facet 使用 canonical entity 的新名稱", async () => {
+    const store = new InMemoryGameStore();
+    const service = createLibraryService(store);
+    const snapshot = (sourceId: string, contributorName: string): SourceSnapshot => ({
+      ref: { provider: "bgg", medium: "board_game", sourceId },
+      canonicalUrl: `https://example.test/${sourceId}`,
+      title: `canonical ${sourceId}`,
+      localizedTitle: null,
+      aliases: [],
+      description: null,
+      releaseYear: null,
+      coverUrl: null,
+      categories: [],
+      contributors: [{ sourceContributorId: "canonical-shared", name: contributorName, entityKind: "company", role: "publisher" }],
+      minPlayers: null,
+      maxPlayers: null,
+      supportsSolo: "unknown",
+      playtimeMinutes: null,
+      weight: null,
+      strategyRank: null,
+      supportedPlatforms: [],
+    });
+    const first = await store.createFromSource(snapshot("canonical-first", "舊名稱").ref, snapshot("canonical-first", "舊名稱"));
+    await store.createFromSource(snapshot("canonical-second", "舊名稱").ref, snapshot("canonical-second", "舊名稱"));
+    await store.refreshSource(first.game.id, snapshot("canonical-first", "新名稱"));
+
+    await expect(service.listContributorFacets()).resolves.toEqual([{
+      contributorId: first.game.contributors[0].contributorId,
+      name: "新名稱",
+      entityKind: "company",
+      provider: "bgg",
+      role: "publisher",
+    }]);
+  });
+
   it("以名稱部分搜尋並將實際平台與自由標籤依同維度 OR、跨維度 AND 篩選", async () => {
     const store = new InMemoryGameStore();
     const service = createLibraryService(store);

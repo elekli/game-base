@@ -25,12 +25,20 @@ export type SourceCategory = Readonly<{
 }>;
 
 export type LibrarySort = "name" | "recent" | "weight_asc" | "weight_desc" | "strategy_rank";
+export type ContributionRole = "design" | "art" | "publisher";
+
+export type ContributorRoleFilter = Readonly<{
+  role: ContributionRole;
+  contributorIds: readonly string[];
+}>;
 
 export type LibraryGameQuery = Readonly<{
   search?: string;
   media?: readonly Medium[];
   actualPlatforms?: readonly string[];
   tags?: readonly string[];
+  contributorRoles?: readonly ContributorRoleFilter[];
+  /** @deprecated 舊版貢獻者網址相容；新的篩選使用 contributorRoles。 */
   contributorIds?: readonly string[];
   sourceCategories?: readonly Pick<SourceCategory, "kind" | "sourceCategoryId">[];
   weightMin?: number | null;
@@ -42,7 +50,7 @@ export type SourceContributor = Readonly<{
   sourceContributorId: string;
   name: string;
   entityKind: "person" | "company";
-  role: "design" | "art" | "publisher";
+  role: ContributionRole;
 }>;
 
 export type SourceSnapshot = Readonly<{
