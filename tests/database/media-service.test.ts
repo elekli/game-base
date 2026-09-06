@@ -145,6 +145,10 @@ describe("MediaService 與真 PostgreSQL", () => {
       from app_private.games where id = $3
     `, [grant.ingestId, grant.assetId, gameId]);
     expect(rows[0]).toEqual({ asset_count: 1, derivative_count: 1, manual_cover_asset_id: grant.assetId });
+    await expect(runtime.unsafe("update app_private.media_derivatives set spec = null where asset_id = $1", [grant.assetId]))
+      .rejects.toThrow("verified media derivative identity fields are immutable");
+    await expect(runtime.unsafe("update app_private.media_derivatives set authority_state = 'legacy_unverified' where asset_id = $1", [grant.assetId]))
+      .rejects.toThrow("verified media derivative identity fields are immutable");
   });
 
   it("PostgreSQL 時鐘判定 lease 過期後拒絕舊 token 完成", async () => {

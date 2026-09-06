@@ -68,9 +68,11 @@ async function readResult(executor: QueryExecutor, ingestId: string): Promise<Me
     from app_private.media_assets asset
     join app_private.media_ingests authoritative_ingest
       on authoritative_ingest.id = asset.ingest_id and authoritative_ingest.state = 'finalized'
-    left join app_private.media_derivatives derivative on derivative.asset_id = asset.id
+    left join app_private.media_derivatives derivative
+      on derivative.asset_id = asset.id
+      and derivative.authority_state = 'verified'
+      and derivative.spec = ${MEDIA_THUMBNAIL_SPEC}
     where asset.ingest_id = ${ingestId} and asset.authority_state = 'verified'
-    limit 1
   `) as Row[];
   if (!rows[0]) return null;
   const thumbnail: MediaDerivative | null = rows[0].spec === null || rows[0].spec === undefined ? null : {

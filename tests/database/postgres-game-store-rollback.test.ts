@@ -72,7 +72,7 @@ async function cleanTestData(): Promise<void> {
   await runtimeDatabase.unsafe("delete from app_private.media_derivatives where asset_id in (select asset.id from app_private.media_assets asset join app_private.games game on game.id = asset.game_id where game.display_name like '交易回滾測試：%')");
   await runtimeDatabase.unsafe("delete from app_private.media_assets where game_id in (select id from app_private.games where display_name like '交易回滾測試：%')");
   await runtimeDatabase.unsafe("delete from app_private.media_ingests where game_id in (select id from app_private.games where display_name like '交易回滾測試：%')");
-  await runtimeDatabase.unsafe("delete from app_private.source_refresh_operations where game_id in (select id from app_private.games where display_name like '交易回滾測試：%')");
+  await migrationDatabase.unsafe("delete from app_private.source_refresh_operations where game_id in (select id from app_private.games where display_name like '交易回滾測試：%')");
   await runtimeDatabase.unsafe("delete from app_private.games where display_name like '交易回滾測試：%'");
   await runtimeDatabase.unsafe("delete from app_private.external_game_identities where provider = 'bgg' and source_id in ('980001', '980002', '980003', '980004')");
   await runtimeDatabase.unsafe("delete from app_private.source_categories where source_category_id like 'rollback-integration-%'");

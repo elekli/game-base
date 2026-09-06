@@ -1,5 +1,5 @@
 begin;
-select plan(38);
+select plan(48);
 
 select has_column('app_private', 'media_ingests', 'idempotency_key', 'ingest 保存全域冪等鍵');
 select has_column('app_private', 'media_ingests', 'reserved_asset_id', 'ingest 預留固定 asset id');
@@ -206,6 +206,28 @@ update app_private.games
 set external_game_identity_id = '11000000-0000-4000-8000-000000000001'
 where id = '10000000-0000-4000-8000-000000000001';
 
+insert into app_private.source_refresh_operations (operation_id, game_id, external_game_identity_id, payload_fingerprint)
+values ('61000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000001', repeat('a', 64));
+select extensions.throws_like(
+  $$update app_private.source_refresh_operations set payload_fingerprint = repeat('b', 64) where operation_id = '61000000-0000-4000-8000-000000000001'$$,
+  '%permission denied%',
+  'app_runtime 不可改寫來源更新 receipt fingerprint'
+);
+select extensions.throws_like(
+  $$delete from app_private.source_refresh_operations where operation_id = '61000000-0000-4000-8000-000000000001'$$,
+  '%permission denied%',
+  'app_runtime 不可刪除來源更新 receipt'
+);
+select is((select payload_fingerprint from app_private.source_refresh_operations where operation_id = '61000000-0000-4000-8000-000000000001'), repeat('a', 64), '相同 operation 永久保留原 payload fingerprint');
+
+insert into app_private.external_game_identities (id, provider, source_id, medium, snapshot)
+values ('11000000-0000-4000-8000-000000000002', 'bgg', '620008', 'board_game', '{}'::jsonb);
+select extensions.throws_like(
+  $$insert into app_private.media_ingests (idempotency_key, reserved_asset_id, channel, purpose, game_id, external_game_identity_id, original_object_path, original_file_name, declared_mime_type, declared_byte_size, state, stale_after, source_url, object_key, original_state, thumbnail_state) values (gen_random_uuid()::text, gen_random_uuid(), 'source_fetch', 'source_cover', '10000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000002', 'originals/source/wrong-identity', 'wrong.png', 'image/png', 24, 'issued', now() + interval '26 hours', 'https://example.test/wrong', 'originals/source/wrong-identity', 'pending', 'pending')$$,
+  '%source cover ingest must match its game external identity%',
+  'source cover ingest 不可使用另一個 external identity'
+);
+
 insert into app_private.media_ingests (
   id, idempotency_key, reserved_asset_id, channel, purpose, game_id, external_game_identity_id,
   original_object_path, original_file_name, declared_mime_type, declared_byte_size,
@@ -240,6 +262,35 @@ set source_cover_asset_id = '41000000-0000-4000-8000-000000000001'
 where id = '11000000-0000-4000-8000-000000000001';
 
 select extensions.throws_like(
+  $$update app_private.games set external_game_identity_id = null where id = '10000000-0000-4000-8000-000000000001'$$,
+  '%game external identity must preserve its current source cover relationship%',
+  '不可單獨 unlink 仍有 current source cover 的 game identity'
+);
+update app_private.games set external_game_identity_id = '11000000-0000-4000-8000-000000000001' where id = '10000000-0000-4000-8000-000000000001';
+select extensions.lives_ok(
+  $sql$do $unlink$
+  begin
+    set constraints all deferred;
+    update app_private.external_game_identities set source_cover_asset_id = null where id = '11000000-0000-4000-8000-000000000001';
+    update app_private.games set external_game_identity_id = null where id = '10000000-0000-4000-8000-000000000001';
+    set constraints all immediate;
+  end
+  $unlink$$sql$,
+  '同交易清除來源封面指標後可 unlink identity'
+);
+select extensions.lives_ok(
+  $sql$do $relink$
+  begin
+    set constraints all deferred;
+    update app_private.games set external_game_identity_id = '11000000-0000-4000-8000-000000000001' where id = '10000000-0000-4000-8000-000000000001';
+    update app_private.external_game_identities set source_cover_asset_id = '41000000-0000-4000-8000-000000000001' where id = '11000000-0000-4000-8000-000000000001';
+    set constraints all immediate;
+  end
+  $relink$$sql$,
+  '同交易 relink identity 並恢復其 current source cover 可行'
+);
+
+select extensions.throws_like(
   $$update app_private.media_assets set superseded_at = now() where id = '41000000-0000-4000-8000-000000000001'$$,
   '%current source cover cannot be superseded%',
   '目前來源封面不可單獨標成 superseded'
@@ -269,6 +320,25 @@ select ok(
   (select superseded_at is not null from app_private.media_assets where id = '41000000-0000-4000-8000-000000000001'),
   '切換後新來源封面是 current，舊來源封面保留為 superseded'
 );
+
+select extensions.throws_like(
+  $$insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind) values ('41000000-0000-4000-8000-000000000002', null, 'verified', 'pending', 'thumbnail_webp')$$,
+  '%verified media derivative must use thumb_webp_v1 spec%',
+  'verified derivative 第一筆 NULL spec 即拒絕，無法建立多筆 NULL duplicate'
+);
+delete from app_private.media_derivatives where asset_id = '41000000-0000-4000-8000-000000000002' and spec is null;
+select extensions.throws_like(
+  $$update app_private.media_derivatives set asset_id = '41000000-0000-4000-8000-000000000002' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%verified media derivative identity fields are immutable%',
+  'verified derivative 不可跨 asset 重接'
+);
+update app_private.media_derivatives set asset_id = '40000000-0000-4000-8000-000000000001' where spec = 'thumb_webp_v1' and asset_id = '41000000-0000-4000-8000-000000000002';
+select extensions.throws_like(
+  $$update app_private.media_derivatives set authority_state = 'legacy_unverified' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%verified media derivative identity fields are immutable%',
+  'verified derivative 不可降級 authority'
+);
+update app_private.media_derivatives set authority_state = 'verified' where asset_id = '40000000-0000-4000-8000-000000000001';
 
 insert into app_private.media_ingests (id, game_id, source_url, object_key, original_state, thumbnail_state)
 values ('22000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000002', 'https://legacy.example/cover', 'legacy/source/cover', 'ready', 'ready');

@@ -174,6 +174,15 @@ begin
   ) then
     raise exception 'media manual cover must reference an active image from the same game';
   end if;
+  if exists (
+    select 1
+    from app_private.external_game_identities identity
+    join app_private.media_assets asset on asset.id = identity.source_cover_asset_id
+    where (asset.game_id = new.id or identity.id = new.external_game_identity_id)
+      and (asset.game_id is distinct from new.id or identity.id is distinct from new.external_game_identity_id)
+  ) then
+    raise exception 'game external identity must preserve its current source cover relationship';
+  end if;
 
   return new;
 end;
@@ -245,6 +254,9 @@ $$;
 create function app_private.assert_image_media_derivative()
 returns trigger language plpgsql as $$
 begin
+  if new.authority_state = 'verified' and new.spec is distinct from 'thumb_webp_v1' then
+    raise exception 'verified media derivative must use thumb_webp_v1 spec';
+  end if;
   if new.authority_state = 'verified' and not exists (
     select 1 from app_private.media_assets asset
     where asset.id = new.asset_id and asset.authority_state = 'verified' and asset.purpose <> 'attachment'
@@ -260,6 +272,12 @@ returns trigger language plpgsql as $$
 declare
   asset app_private.media_assets%rowtype;
 begin
+  if new.purpose = 'source_cover' and not exists (
+    select 1 from app_private.games game
+    where game.id = new.game_id and game.external_game_identity_id = new.external_game_identity_id
+  ) then
+    raise exception 'source cover ingest must match its game external identity';
+  end if;
   select * into asset from app_private.media_assets where ingest_id = new.id and authority_state = 'verified';
   if found and (
     new.state <> 'finalized' or
@@ -356,6 +374,23 @@ begin
 end;
 $$;
 
+create function app_private.prevent_verified_media_derivative_identity_update()
+returns trigger language plpgsql as $$
+begin
+  if old.authority_state = 'verified' and (
+    new.id is distinct from old.id or
+    new.asset_id is distinct from old.asset_id or
+    new.spec is distinct from old.spec or
+    new.authority_state is distinct from old.authority_state or
+    new.kind is distinct from old.kind or
+    new.created_at is distinct from old.created_at
+  ) then
+    raise exception 'verified media derivative identity fields are immutable';
+  end if;
+  return new;
+end;
+$$;
+
 create constraint trigger games_valid_manual_cover
 after insert or update on app_private.games
 deferrable initially immediate for each row execute function app_private.assert_valid_media_cover_pointer();
@@ -392,6 +427,10 @@ create trigger media_ingests_prevent_finalized_delete
 before delete on app_private.media_ingests
 for each row execute function app_private.prevent_finalized_media_ingest_delete();
 
+create trigger media_derivatives_prevent_verified_identity_update
+before update on app_private.media_derivatives
+for each row execute function app_private.prevent_verified_media_derivative_identity_update();
+
 create index media_ingests_finalize_candidates_idx on app_private.media_ingests (state, lease_until);
 create index media_ingests_cleanup_candidates_idx on app_private.media_ingests (state, stale_after);
 create index media_assets_game_id_idx on app_private.media_assets (game_id) where removed_at is null and superseded_at is null;
@@ -400,11 +439,13 @@ create index media_derivative_attempts_derivative_id_idx on app_private.media_de
 alter table app_private.media_derivative_attempts enable row level security;
 alter table app_private.source_refresh_operations enable row level security;
 create policy runtime_media_derivative_attempts on app_private.media_derivative_attempts for all to app_runtime using (true) with check (true);
-create policy runtime_source_refresh_operations on app_private.source_refresh_operations for all to app_runtime using (true) with check (true);
+create policy runtime_source_refresh_operations_select on app_private.source_refresh_operations for select to app_runtime using (true);
+create policy runtime_source_refresh_operations_insert on app_private.source_refresh_operations for insert to app_runtime with check (true);
 
 revoke all on app_private.media_derivative_attempts from public, anon, authenticated, service_role;
 grant select, insert, update, delete on app_private.media_derivative_attempts to app_runtime;
-grant select, insert, update, delete on app_private.source_refresh_operations to app_runtime;
+revoke update, delete on app_private.source_refresh_operations from app_runtime;
+grant select, insert on app_private.source_refresh_operations to app_runtime;
 revoke execute on function app_private.assert_valid_media_cover_pointer() from public, anon, authenticated, service_role;
 revoke execute on function app_private.assert_valid_source_cover_pointer() from public, anon, authenticated, service_role;
 revoke execute on function app_private.assert_valid_media_asset_references() from public, anon, authenticated, service_role;
@@ -413,6 +454,7 @@ revoke execute on function app_private.protect_finalized_media_ingest() from pub
 revoke execute on function app_private.prevent_finalized_media_ingest_authority_update() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_finalized_media_ingest_delete() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_finalized_media_asset_delete() from public, anon, authenticated, service_role;
+revoke execute on function app_private.prevent_verified_media_derivative_identity_update() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_system_platform_mutation() from public;
 
 -- TODO(#media-ledger-contract): 完成 Storage 重驗與雙版本部署後，另以 contract migration
