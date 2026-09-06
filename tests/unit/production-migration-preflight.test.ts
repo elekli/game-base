@@ -150,6 +150,7 @@ describe("production migration safety lint", () => {
     "drop role app_runtime",
     "drop database postgres",
     "drop owned by app_runtime",
+    "reassign owned by app_runtime to app_migrator",
     "drop policy runtime_games on app_private.games",
     "alter table app_private.games drop column title",
     "alter table app_private.games add constraint title_unique unique (title)",
@@ -190,8 +191,10 @@ describe("production migration safety lint", () => {
       "0001_safe_strings.sql": `
         -- drop table app_private.games;
         -- alter table app_private.games rename to archived_games;
+        -- reassign owned by app_runtime to app_migrator;
         select 'it''s not -- a comment: drop table app_private.games';
         select 'alter view app_private.game_summary rename to archived_summary';
+        select 'reassign owned by app_runtime to app_migrator';
         select E'escaped\\' quote /* still text */ drop table app_private.games';
         select $$drop table app_private.games;$$;
         create function app_private.example() returns text language sql as
@@ -202,6 +205,22 @@ describe("production migration safety lint", () => {
     await expect(lintProductionMigrations(root)).resolves.toEqual({
       migrationCount: 1,
     });
+  });
+
+  it("rejects executable REASSIGN OWNED inside a routine body", async () => {
+    const root = await migrationFixture({
+      "0001_dynamic.sql": `
+        create procedure app_private.reassign_objects() language plpgsql as $body$
+        begin
+          reassign owned by app_runtime to app_migrator;
+        end
+        $body$;
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
   });
 
   it("rejects procedural DO with dynamic EXECUTE", async () => {

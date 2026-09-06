@@ -106,7 +106,7 @@ const FORBIDDEN_DDL = [
   /\bcreate\s+unique\s+index\b/i,
 ] as const;
 
-const SNAPSHOT_QUERY = `
+export const PRODUCTION_MIGRATION_SNAPSHOT_QUERY = `
 select json_build_object(
   'migrations', coalesce((
     select json_agg(json_build_object('version', version, 'name', name) order by version)
@@ -248,33 +248,31 @@ select json_build_object(
   ),
   'unexpectedAclCount', (
     select count(*) from (
-      select grantee.rolname, privilege.privilege_type
+      select privilege.grantee, privilege.privilege_type
       from pg_namespace n
       cross join lateral aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) privilege
-      left join pg_roles grantee on grantee.oid = privilege.grantee
       where n.nspname = 'app_private'
         and not (
-          grantee.rolname = 'app_migrator'
+          privilege.grantee = n.nspowner
           or (
-            grantee.rolname = 'app_runtime'
+            privilege.grantee = (select oid from pg_roles where rolname = 'app_runtime')
             and privilege.privilege_type = 'USAGE'
             and not privilege.is_grantable
           )
         )
       union all
-      select grantee.rolname, privilege.privilege_type
+      select privilege.grantee, privilege.privilege_type
       from pg_class c
       join pg_namespace n on n.oid = c.relnamespace
       cross join lateral aclexplode(coalesce(c.relacl, acldefault(
         case when c.relkind = 'S' then 'S'::"char" else 'r'::"char" end,
         c.relowner
       ))) privilege
-      left join pg_roles grantee on grantee.oid = privilege.grantee
       where n.nspname = 'app_private' and c.relkind in ('r', 'p', 'S', 'v', 'm', 'f')
         and not (
-          grantee.rolname = 'app_migrator'
+          privilege.grantee = c.relowner
           or (
-            grantee.rolname = 'app_runtime'
+            privilege.grantee = (select oid from pg_roles where rolname = 'app_runtime')
             and not privilege.is_grantable
             and (
               (c.relkind = 'S' and privilege.privilege_type in ('USAGE', 'SELECT'))
@@ -283,14 +281,13 @@ select json_build_object(
           )
         )
       union all
-      select grantee.rolname, privilege.privilege_type
+      select privilege.grantee, privilege.privilege_type
       from pg_proc procedure
       join pg_namespace n on n.oid = procedure.pronamespace
       cross join lateral aclexplode(coalesce(procedure.proacl, acldefault('f', procedure.proowner))) privilege
-      left join pg_roles grantee on grantee.oid = privilege.grantee
       where n.nspname = 'app_private'
         and not (
-          grantee.rolname = 'app_migrator'
+          privilege.grantee = procedure.proowner
           or (
             privilege.grantee = 0
             and procedure.proname = 'prevent_system_platform_mutation'
@@ -300,62 +297,77 @@ select json_build_object(
           )
         )
       union all
-      select grantee.rolname, privilege.privilege_type
+      select privilege.grantee, privilege.privilege_type
       from pg_type object_type
       join pg_namespace n on n.oid = object_type.typnamespace
       left join pg_class type_relation on type_relation.oid = object_type.typrelid
       cross join lateral aclexplode(coalesce(object_type.typacl, acldefault('T', object_type.typowner))) privilege
-      left join pg_roles grantee on grantee.oid = privilege.grantee
       where n.nspname = 'app_private'
         and (object_type.typrelid = 0 or type_relation.relkind = 'c')
         and object_type.typelem = 0
-        and grantee.rolname <> 'app_migrator'
+        and not (
+          privilege.grantee = object_type.typowner
+          or (
+            privilege.grantee = (select oid from pg_roles where rolname = 'app_runtime')
+            and privilege.privilege_type = 'USAGE'
+            and not privilege.is_grantable
+          )
+        )
       union all
-      select grantee.rolname, privilege.privilege_type
+      select privilege.grantee, privilege.privilege_type
       from pg_attribute attribute
       join pg_class c on c.oid = attribute.attrelid
       join pg_namespace n on n.oid = c.relnamespace
       cross join lateral aclexplode(attribute.attacl) privilege
-      left join pg_roles grantee on grantee.oid = privilege.grantee
       where n.nspname = 'app_private' and attribute.attacl is not null
+        and not (
+          privilege.grantee = c.relowner
+          or (
+            privilege.grantee = (select oid from pg_roles where rolname = 'app_runtime')
+            and privilege.privilege_type in ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES')
+            and not privilege.is_grantable
+          )
+        )
     ) unexpected_acl
   ),
   'defaultPrivilegeDriftCount', (
-    select count(*) from (
-      select default_acl.defaclobjtype, grantee.rolname, privilege.privilege_type
+    with role_oid as (
+      select
+        (select oid from pg_roles where rolname = 'app_migrator') as owner_oid,
+        (select oid from pg_roles where rolname = 'app_runtime') as runtime_oid
+    ),
+    actual_default_acl as (
+      select object_type, privilege.grantee, privilege.privilege_type, privilege.is_grantable
+      from role_oid
+      cross join (values ('r'::"char"), ('S'::"char")) expected_type(object_type)
+      cross join lateral aclexplode(acldefault(expected_type.object_type, role_oid.owner_oid)) privilege
+      union all
+      select default_acl.defaclobjtype, privilege.grantee, privilege.privilege_type, privilege.is_grantable
       from pg_default_acl default_acl
-      join pg_roles owner on owner.oid = default_acl.defaclrole
+      join role_oid on default_acl.defaclrole = role_oid.owner_oid
       join pg_namespace n on n.oid = default_acl.defaclnamespace
       cross join lateral aclexplode(default_acl.defaclacl) privilege
-      left join pg_roles grantee on grantee.oid = privilege.grantee
-      where owner.rolname = 'app_migrator' and n.nspname = 'app_private'
-        and not (
-          grantee.rolname = 'app_runtime'
-          and not privilege.is_grantable
-          and (
-            (default_acl.defaclobjtype = 'r' and privilege.privilege_type in ('SELECT', 'INSERT', 'UPDATE', 'DELETE'))
-            or (default_acl.defaclobjtype = 'S' and privilege.privilege_type in ('USAGE', 'SELECT'))
-          )
-        )
-    ) unexpected_default_acl
-  ) + (
-    select count(*) from (values
-      ('r'::"char", 'SELECT'), ('r'::"char", 'INSERT'),
-      ('r'::"char", 'UPDATE'), ('r'::"char", 'DELETE'),
-      ('S'::"char", 'USAGE'), ('S'::"char", 'SELECT')
-    ) expected_default_acl(object_type, privilege_type)
-    where not exists (
-      select 1
-      from pg_default_acl default_acl
-      join pg_roles owner on owner.oid = default_acl.defaclrole
-      join pg_namespace n on n.oid = default_acl.defaclnamespace
-      cross join lateral aclexplode(default_acl.defaclacl) privilege
-      join pg_roles grantee on grantee.oid = privilege.grantee
-      where owner.rolname = 'app_migrator' and n.nspname = 'app_private'
-        and default_acl.defaclobjtype = expected_default_acl.object_type
-        and grantee.rolname = 'app_runtime'
-        and privilege.privilege_type = expected_default_acl.privilege_type
+      where n.nspname = 'app_private'
+    ),
+    expected_default_acl as (
+      select object_type, privilege.grantee, privilege.privilege_type, privilege.is_grantable
+      from role_oid
+      cross join (values ('r'::"char"), ('S'::"char")) expected_type(object_type)
+      cross join lateral aclexplode(acldefault(expected_type.object_type, role_oid.owner_oid)) privilege
+      union all
+      select expected.object_type, role_oid.runtime_oid, expected.privilege_type, false
+      from role_oid
+      cross join (values
+        ('r'::"char", 'SELECT'), ('r'::"char", 'INSERT'),
+        ('r'::"char", 'UPDATE'), ('r'::"char", 'DELETE'),
+        ('S'::"char", 'USAGE'), ('S'::"char", 'SELECT')
+      ) expected(object_type, privilege_type)
     )
+    select count(*) from (
+      (select * from actual_default_acl except all select * from expected_default_acl)
+      union all
+      (select * from expected_default_acl except all select * from actual_default_acl)
+    ) default_acl_difference
   ),
   'unsafeGrantCount', (
     select count(*) from (
@@ -365,7 +377,7 @@ select json_build_object(
       cross join lateral aclexplode(coalesce(c.relacl, acldefault(case when c.relkind = 'S' then 'S'::\"char\" else 'r'::\"char\" end, c.relowner))) privilege
       left join pg_roles granted_role on granted_role.oid = privilege.grantee
       where n.nspname = 'app_private'
-        and c.relkind in ('r', 'p', 'S')
+        and c.relkind in ('r', 'p', 'S', 'v', 'm', 'f')
         and (privilege.grantee = 0 or granted_role.rolname in ('anon', 'authenticated', 'service_role'))
       union all
       select privilege.grantee
@@ -381,6 +393,27 @@ select json_build_object(
       cross join lateral aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) privilege
       left join pg_roles granted_role on granted_role.oid = privilege.grantee
       where n.nspname = 'app_private'
+        and (privilege.grantee = 0 or granted_role.rolname in ('anon', 'authenticated', 'service_role'))
+      union all
+      select privilege.grantee
+      from pg_type object_type
+      join pg_namespace n on n.oid = object_type.typnamespace
+      left join pg_class type_relation on type_relation.oid = object_type.typrelid
+      cross join lateral aclexplode(coalesce(object_type.typacl, acldefault('T', object_type.typowner))) privilege
+      left join pg_roles granted_role on granted_role.oid = privilege.grantee
+      where n.nspname = 'app_private'
+        and (object_type.typrelid = 0 or type_relation.relkind = 'c')
+        and object_type.typelem = 0
+        and (privilege.grantee = 0 or granted_role.rolname in ('anon', 'authenticated', 'service_role'))
+      union all
+      select privilege.grantee
+      from pg_attribute attribute
+      join pg_class c on c.oid = attribute.attrelid
+      join pg_namespace n on n.oid = c.relnamespace
+      cross join lateral aclexplode(attribute.attacl) privilege
+      left join pg_roles granted_role on granted_role.oid = privilege.grantee
+      where n.nspname = 'app_private'
+        and attribute.attacl is not null
         and (privilege.grantee = 0 or granted_role.rolname in ('anon', 'authenticated', 'service_role'))
     ) unsafe_grant
   ),
@@ -643,6 +676,13 @@ function containsForbiddenMigrationSql(sql: string) {
     if (
       (words[0] === "create" || words[0] === "alter") &&
       (words[1] === "role" || words[1] === "user" || words[1] === "group")
+    ) {
+      return true;
+    }
+    if (
+      words.some(
+        (word, wordIndex) => word === "reassign" && words[wordIndex + 1] === "owned",
+      )
     ) {
       return true;
     }
@@ -1202,7 +1242,9 @@ export async function runProductionMigrationPreflight(options: {
     await session.unsafe("begin transaction read only");
     transactionStarted = true;
     await session.unsafe("set local statement_timeout = '15s'");
-    const rows = await session.unsafe<{ snapshot: ProductionDatabaseSnapshot }>(SNAPSHOT_QUERY);
+    const rows = await session.unsafe<{ snapshot: ProductionDatabaseSnapshot }>(
+      PRODUCTION_MIGRATION_SNAPSHOT_QUERY,
+    );
     const snapshot = rows[0]?.snapshot;
     if (!snapshot) {
       throw new ProductionMigrationError(
