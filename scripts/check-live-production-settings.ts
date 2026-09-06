@@ -6,6 +6,7 @@ import { deploymentBindings } from "../src/shared/config/deployment-bindings";
 
 type LiveProductionSettings = Readonly<{
   githubDeploymentBranchPolicies: Array<{ name?: string }>;
+  githubEnvironmentSecretNames: string[];
   supabaseApiKeyFingerprints: {
     publishable: string;
     secret: string;
@@ -78,6 +79,15 @@ export function checkLiveProductionSettings(settings: LiveProductionSettings) {
     settings.githubDeploymentBranchPolicies.length === 1 &&
       settings.githubDeploymentBranchPolicies[0]?.name === "main",
     "Production must allow only the main branch",
+  );
+  assertSetting(
+    settings.githubEnvironmentSecretNames.includes(
+      "PRODUCTION_MIGRATION_DATABASE_URL",
+    ) &&
+      settings.githubEnvironmentSecretNames.includes(
+        "PRODUCTION_MIGRATION_CA_CERT",
+      ),
+    "Production migration TLS secrets are missing",
   );
   assertSetting(vercelProject.id === "prj_iTlWeDkcKItHTKYIayoNjQQ0vHec", "unexpected Vercel project ID");
   assertSetting(vercelProject.name === "game-base", "unexpected Vercel project name");
@@ -167,6 +177,7 @@ export function checkLiveProductionSettings(settings: LiveProductionSettings) {
 
   return {
     githubEnvironment: githubEnvironment.name,
+    productionMigrationTlsSecretsPresent: true,
     requiredCheck: "verify",
     vercelEnvironmentVariableCount: vercelEnvironmentVariables.length,
     vercelGitConnected: false,
@@ -255,6 +266,12 @@ function readLiveSettings(): LiveProductionSettings {
         "repos/elekli/game-base/environments/Production/deployment-branch-policies",
       ]) as { branch_policies?: Array<{ name?: string }> }
     ).branch_policies ?? [],
+    githubEnvironmentSecretNames: (
+      readJsonSafely("gh", [
+        "api",
+        "repos/elekli/game-base/environments/Production/secrets",
+      ]) as { secrets?: Array<{ name?: string }> }
+    ).secrets?.flatMap((secret) => (secret.name ? [secret.name] : [])) ?? [],
     supabaseApiKeyFingerprints: {
       publishable: fingerprintSupabaseKey("sb_publishable_"),
       secret: fingerprintSupabaseKey("sb_secret_"),

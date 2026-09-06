@@ -14,6 +14,10 @@ const encrypted = (key: string, value: string) => ({
 
 const validSettings = {
   githubDeploymentBranchPolicies: [{ name: "main" }],
+  githubEnvironmentSecretNames: [
+    "PRODUCTION_MIGRATION_CA_CERT",
+    "PRODUCTION_MIGRATION_DATABASE_URL",
+  ],
   supabaseApiKeyFingerprints: {
     publishable:
       "4462e410b46df06f21744e9cafcfc75e7eb8975cab8629ce6360be06d08fe557",
@@ -81,6 +85,7 @@ describe("live production settings", () => {
   it("accepts PR-only GitHub protection and a disconnected Vercel project", () => {
     expect(checkLiveProductionSettings(validSettings)).toEqual({
       githubEnvironment: "Production",
+      productionMigrationTlsSecretsPresent: true,
       requiredCheck: "verify",
       vercelEnvironmentVariableCount: 12,
       vercelGitConnected: false,
@@ -100,6 +105,15 @@ describe("live production settings", () => {
         ],
       }),
     ).toThrow("Vercel variables must not target Preview or Development");
+  });
+
+  it("rejects a missing Production migration connection secret", () => {
+    expect(() =>
+      checkLiveProductionSettings({
+        ...validSettings,
+        githubEnvironmentSecretNames: [],
+      }),
+    ).toThrow("Production migration TLS secrets are missing");
   });
 
   it("rejects verify checks owned by the wrong GitHub app", () => {

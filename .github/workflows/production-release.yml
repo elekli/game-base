@@ -64,6 +64,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm release:contract:check
-      - name: Stop before deployment until T02A–T03 are implemented
+      - name: Run read-only Production migration preflight
+        env:
+          PRODUCTION_MIGRATION_CA_CERT: ${{ secrets.PRODUCTION_MIGRATION_CA_CERT }}
+          PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
+        run: pnpm release:migration:preflight -- --baseline-ref origin/main
+      - name: Stop before deployment until T02B–T03 are implemented
         run: |
-          echo 'Release candidate verified; production deployment remains intentionally disabled.'
+          echo 'Release candidate and migration preflight verified; production deployment remains intentionally disabled.'

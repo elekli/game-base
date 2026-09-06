@@ -8,7 +8,9 @@ feature branch → PR → required CI／verify → main
                                              ▼
                                protected Production environment
                                              │
-                         T02A／T02B／T03 完成前停止於唯讀 release gate
+                                  唯讀 production migration preflight
+                                             │
+                                  T02B／T03 完成前停止，不部署
                                              │
                          指定同一 commit 的 Vercel CLI deployment
 ```
@@ -18,14 +20,14 @@ feature branch → PR → required CI／verify → main
 - `.github/workflows/production-release.yml` 是 repository 支援的唯一 production 發布入口。它要求完整 commit SHA、確認該 commit 屬於 `main`，且 `.github/workflows/ci.yml` 對同一 SHA 的 `main` push run 成功，並進入受保護的 `Production` Environment。
 - Production job 必須先 checkout trusted `main` workflow 版本，再驗證指定 SHA 存在、屬於 `origin/main` 且 exact CI run 成功；只有全部成立後才可 `git checkout --detach` 該 SHA，之後才能執行其 `package.json`／repository scripts。不可把 candidate checkout 提前，否則未合併 commit 會在未來具 secrets 的 Production Environment 取得不必要執行面。
 - GitHub `Production` Environment 使用 custom deployment branch policy，server-side allowlist 唯一項目是 `main`；job 的 `github.ref == 'refs/heads/main'` 只是縱深防禦，不能取代 Environment policy。這確保未來即使新增其他 protected branch，其修改過的 workflow 也不能進入 Production Environment。
-- T02A、T02B、T03 尚未完成，因此 workflow 現在只做唯讀 gate 後明確停止，不呼叫 Vercel deploy、不套 migration。不得以手動 Dashboard deployment 繞過這個停發狀態。
+- T02A 已接入受保護的唯讀 production migration preflight；T02B、T03 尚未完成，因此 workflow 在 preflight 後明確停止，不呼叫 Vercel deploy、不套 migration。現有 `PRODUCTION_MIGRATION_DATABASE_URL` 建立時使用 `sslmode=require`，只能加密而不驗證伺服器憑證；在換成 `sslmode=verify-full` 並新增 Supabase Dashboard 下載的 `PRODUCTION_MIGRATION_CA_CERT` 前，preflight 會 fail closed。不得以手動 Dashboard deployment 繞過這個停發狀態。
 - Production credentials 只可存在 GitHub `Production` Environment secrets 或 Vercel Production scope。Vercel Preview／Development、repository variables、workflow log 與 artifact 都不得包含這些值。
 
 Vercel Hobby project 的 owner 仍可直接從 Dashboard 或本機 CLI 建立 production deployment；repository 無法在 Vercel 帳號層絕對撤銷這項 owner 能力。這是殘餘風險，不是第二條支援路徑：owner 不得手動部署，操作證據以 Vercel activity log 稽核。若未來 Vercel 提供適用方案的細緻 deployment policy，應把這項人工禁令改為平台強制。
 
 Repository 內可公開核對的 binding 是 `.github/production-release-contract.json` 與 `src/shared/config/deployment-bindings.ts`：repository、branch、CI workflow／check、GitHub Environment、Vercel project ID／name、Supabase project ref／region／hostname、Supavisor host／username，以及 Hosted Preview 與 Git deployment 均為停用。publishable／secret key 只保存 SHA-256 fingerprint，不保存原值。
 
-T01 只要求 Vercel Production scope 已有 `SUPABASE_PUBLISHABLE_KEY`（encrypted）與 `SUPABASE_SECRET_KEY`（sensitive），並以 `EXPECTED_SUPABASE_*_SHA256` 綁定 fingerprint。Vercel API 可安全讀回 publishable key並核對 fingerprint，但 sensitive secret 不允許解密讀回；T01 已用 Supabase CLI 當前 secret 覆寫該 Vercel variable，之後由 runtime `environment:check` 比對實值與 fingerprint。GitHub `Production` Environment 的 migration database URL、Vercel token 等 secrets 屬 T02A／T02B／T03，現在刻意不假裝已配置。
+T01 只要求 Vercel Production scope 已有 `SUPABASE_PUBLISHABLE_KEY`（encrypted）與 `SUPABASE_SECRET_KEY`（sensitive），並以 `EXPECTED_SUPABASE_*_SHA256` 綁定 fingerprint。Vercel API 可安全讀回 publishable key並核對 fingerprint，但 sensitive secret 不允許解密讀回；T01 已用 Supabase CLI 當前 secret 覆寫該 Vercel variable，之後由 runtime `environment:check` 比對實值與 fingerprint。T02A 使用 GitHub `Production` Environment 的 `PRODUCTION_MIGRATION_DATABASE_URL` 與 `PRODUCTION_MIGRATION_CA_CERT` secrets；連線只能指向正式專案的 direct endpoint 或 port 5432 session pooler，不能指向 port 6543 transaction pooler，且必須以 `verify-full` 同時驗證 CA 與 hostname。Vercel token 等 secrets 仍屬 T02B／T03。憑證設定依 [Supabase SSL enforcement](https://supabase.com/docs/guides/platform/ssl-enforcement)；憑證本身不提交 repository 或 artifact。
 
 ## 每次發布前
 
@@ -33,7 +35,28 @@ T01 只要求 Vercel Production scope 已有 `SUPABASE_PUBLISHABLE_KEY`（encryp
 2. `gh api repos/elekli/game-base/environments/Production`：確認 required reviewer、禁止管理員 bypass，以及只允許 protected branch。
 3. `vercel project inspect game-base` 與 Vercel project API：確認 project ID 符合契約、Git integration 未連接；再執行 `pnpm release:settings:check` 核對 Production-only key scope、type 與可安全核對的 fingerprint。
 4. 只列 Vercel environment variable 的 key、target 與 type；若任何 credential target 包含 Preview 或 Development，立即停止發布並移除錯誤 scope。禁止要求 API 回傳解密值。
-5. 執行 `pnpm release:contract:check`。T02A 完成後再接 production preflight；在此之前任何 production release 都必須停止。
+5. 執行 `pnpm release:contract:check` 與 `pnpm release:migration:preflight`。後者先以 `BEGIN TRANSACTION READ ONLY` 鎖定唯讀交易，再核對 repository migration history、角色、grants、RLS、private bucket 與正式專案 binding；無論成功或失敗都 rollback。RLS 必須與 `.github/production-rls-policy-manifest.json` 對 `app_private` 聲明的 policy name、permissiveness、command、roles、`USING`、`WITH CHECK` 完全相同；缺少、額外或條件漂移都停止發布。每個政策 revision 以 `validFrom` 與 `validUntilExclusive` 表示生效區間：新增政策時建立末端為 `null` 的 revision；替換既有政策時，在同一支 migration 把舊 revision 的末端與新 revision 的起點設成該版本。相同 table／name 的 revision 不得重疊或留空檔。套用前只比對 production 已套用 tail 當時有效的 revision，strict verification 則比對目標 commit 最新 tail，避免 pending 政策變更卡死套用流程。`storage` schema 不納入應用政策固定清單，僅由獨立的 bucket 與 `storage.objects` RLS 檢查覆蓋，避免把 Supabase 管理的系統政策誤判成應用漂移。T02B／T03 完成前任何 production release 都必須在此停止。
+
+`app_runtime` 可經 membership-level `INHERIT`、`SET ROLE` 或 `ADMIN OPTION` 遞迴到達的角色，必須與 `.github/production-runtime-role-reachability-allowlist.json` 的 `appRuntimeReachableRoles` 完全相同；目前固定清單為空。PostgreSQL 17 的 membership-level `INHERIT TRUE` 即使搭配 role-level `NOINHERIT`，仍視為權限可達；任何未核准角色都必須停止發布。固定清單將來若因平台必要條件新增角色，仍不得容許 `app_migrator`、superuser、`BYPASSRLS`、`CREATEROLE` 或 `CREATEDB`；應只提交角色名稱，不記錄密碼或其他秘密。
+
+Membership graph 也必須反向檢查：`anon`、`authenticated`、`service_role`，以及任何 LOGIN、superuser、`BYPASSRLS`、`CREATEROLE`、`CREATEDB` 或 replication role，都不得直接或遞迴到達 `app_runtime`／`app_migrator`。`app_migrator` 本身固定為 `NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`。
+
+`app_private` schema 內的 tables、partitioned tables、sequences、views、materialized views、foreign tables、composite types、standalone types 與 routines，都必須由 `app_migrator` 擁有。preflight 也辨識 extension-owned objects；目前不允許 extension 在 `app_private` 建立例外物件，發現時一律停止發布。這項檢查只讀 schema metadata，不讀取資料列或 routine body；目前 repository 的正常基線為 18 張 table 與 `app_private.prevent_system_platform_mutation()`，未建立 sequence、view 或 standalone type。
+
+Schema、relation、sequence、routine、type 與 column ACL 採精確 grantee／privilege allowlist；runtime grant 不得帶 grant option。每張 runtime table 的 `SELECT`、`INSERT`、`UPDATE`、`DELETE` 與每條 sequence 的 `USAGE`、`SELECT` 都逐項檢查，不使用 PostgreSQL 逗號 privilege 查詢的 ANY 語意。`app_migrator` 在 `app_private` 的 default privileges 也必須精確維持 table CRUD 與 sequence USAGE／SELECT 六項 runtime grant，不能出現其他 grantee 或 privilege。
+
+### 已知 grant 漂移的一次性修復
+
+T02A 首次唯讀檢查確認：`app_private.prevent_system_platform_mutation()` 尚有一項授予 `PUBLIC` 的 `EXECUTE`。這不是允許忽略的永久基線。一般 preflight 只在下列條件全部成立時回報 `known-drift-remediation-required`，讓後續 T02B apply 流程得以前進：
+
+1. 唯一的不安全 grant 正是上述 function 對 `PUBLIC` 的一項 `EXECUTE`，沒有其他 grant 漂移。
+2. `app_runtime` 沒有直接 `EXECUTE`；它不需要建立或直接呼叫 trigger function，既有 table trigger 仍負責阻止 system platform mutation。PostgreSQL 的 [`CREATE TRIGGER`](https://www.postgresql.org/docs/current/sql-createtrigger.html) 權限檢查發生在建立 trigger 時，不是要求每個修改資料列的 runtime role 都保有 function 的直接呼叫權。
+3. 精確 repository migration suffix 內存在具名 migration `*_revoke_public_platform_trigger_execute.sql`，且檔案內容逐 byte 只能是 `revoke execute on function app_private.prevent_system_platform_mutation() from public;` 加最後換行。
+4. 執行的是已通過 exact-main-commit CI 且取得 `Production` Environment 人工核准的 release job；不得接受 workflow input、手動貼上的 SQL 或其他 function／grantee。
+
+T02B 套用 repository 的 versioned pending migrations 後，必須在 deploy 前執行 `pnpm release:migration:verify`。Strict verification 要求 migration history 與該 commit 完全相同、上述 `PUBLIC` 與 `app_runtime` 的直接 `EXECUTE` 都不存在，且其餘 role／grant／RLS／bucket 全部通過。未通過時留在舊 deployment，以新的 forward migration 修復；不可 reset、改舊 migration 或放寬 allowlist。
+
+CI 另執行 `pnpm release:migrations:lint -- --baseline-ref origin/main`，拒絕把 drop、truncate、欄位型別變更、constraint／domain 收緊、收緊 `NOT NULL` 或 rename 混入一般 migration，也拒絕未具名核准的 `CREATE／ALTER ROLE`、`CREATE／ALTER USER`、`GRANT`、`REVOKE`，以及同一 PR 新增或修改 legacy hash baseline。唯一現有例外是具名且逐 byte 相同的 PUBLIC trigger EXECUTE 修復。任何可執行 SQL 的 `RENAME` action 都一律拒絕，不依 table、view、sequence、index、type 或其他物件種類列舉；comment、string literal 內的文字仍由 lexer 排除。首次建立的 baseline 只能等於程式內固定的 `0001`–`0006` 精確 hash；合併後一律以 trusted `origin/main` 為準。除此之外，trusted main 已追蹤的每一支 migration 都必須逐 byte 保持不變且不得刪除；CI 與 production preflight 都在開啟 DB 連線前檢查。baseline 真的需要變更時，必須先有獨立受控流程與人工裁決，不能與被豁免的 DDL 同一 PR。新 `CREATE FUNCTION／PROCEDURE` 的 `AS` body 只接受單一 dollar-quoted literal；standard、`E''`、`U&''`、bit／hex 或相鄰 literal 一律拒絕，dollar body 仍遞迴拒絕 dynamic `EXECUTE`。作者應改寫為單一具名 dollar quote，不由 linter 猜測 PostgreSQL 的 escape／串接語意。這些相容性破壞必須先規劃 expand／migrate／contract 發布，不得以註解、`DO`／dynamic `EXECUTE` 或直接在 Production 執行 SQL 繞過。
 
 證據只能記錄 commit SHA、check 名稱／結論、environment 名稱、project ID、非秘密 variable key／scope、配額百分比、時間與具名結果。禁止記錄 JWT、key、token、database URL、密碼、私有 payload 或 production dump。
 

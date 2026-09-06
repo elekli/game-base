@@ -2,6 +2,11 @@ import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 
+import {
+  validateProductionRlsPolicyManifest,
+  validateProductionRuntimeRoleReachabilityAllowlist,
+} from "./production-migration-preflight";
+
 type ProductionReleaseContract = Readonly<{
   ciCheck: string;
   ciWorkflow: string;
@@ -17,6 +22,7 @@ type ProductionReleaseContract = Readonly<{
 }>;
 
 const CONTRACT_PATH = ".github/production-release-contract.json";
+const RLS_POLICY_MANIFEST_PATH = ".github/production-rls-policy-manifest.json";
 const WORKFLOW_PATH = ".github/workflows/production-release.yml";
 
 function assertContract(condition: unknown, message: string): asserts condition {
@@ -33,7 +39,13 @@ export async function checkProductionReleaseContract(root: string) {
     await readFile(path.join(root, "vercel.json"), "utf8"),
   ) as { git?: { deploymentEnabled?: boolean } };
   const workflow = await readFile(path.join(root, WORKFLOW_PATH), "utf8");
+  const rlsPolicyManifest = JSON.parse(
+    await readFile(path.join(root, RLS_POLICY_MANIFEST_PATH), "utf8"),
+  ) as { schema?: unknown; policies?: unknown };
+  const ciWorkflow = await readFile(path.join(root, contract.ciWorkflow), "utf8");
   const ciWorkflowFilename = path.basename(contract.ciWorkflow);
+  await validateProductionRlsPolicyManifest(root);
+  await validateProductionRuntimeRoleReachabilityAllowlist(root);
 
   assertContract(contract.repository === "elekli/game-base", "repository must be elekli/game-base");
   assertContract(contract.productionBranch === "main", "production branch must be main");
@@ -47,6 +59,12 @@ export async function checkProductionReleaseContract(root: string) {
   assertContract(contract.hostedPreview === false, "Hosted Preview must remain disabled");
   assertContract(contract.vercelGitDeployment === false, "Vercel Git deployment must remain disabled");
   assertContract(
+    rlsPolicyManifest.schema === "app_private" &&
+      Array.isArray(rlsPolicyManifest.policies) &&
+      rlsPolicyManifest.policies.length > 0,
+    "release must own a non-empty app_private RLS policy manifest",
+  );
+  assertContract(
     vercelConfig.git?.deploymentEnabled === false,
     "vercel.json must disable Git deployments",
   );
@@ -55,6 +73,7 @@ export async function checkProductionReleaseContract(root: string) {
   const verification = workflow.indexOf("Verify exact main commit and successful CI");
   const candidateCheckout = workflow.indexOf('git checkout --detach "$COMMIT_SHA"');
   const repositoryScripts = workflow.indexOf("pnpm install --frozen-lockfile");
+  const migrationPreflight = workflow.indexOf("pnpm release:migration:preflight");
   assertContract(trustedCheckout >= 0, "workflow must check out trusted main first");
   assertContract(
     !workflow.includes("ref: ${{ inputs.commit_sha }}"),
@@ -72,8 +91,28 @@ export async function checkProductionReleaseContract(root: string) {
   assertContract(
     verification > trustedCheckout &&
       candidateCheckout > verification &&
-      repositoryScripts > candidateCheckout,
+      repositoryScripts > candidateCheckout &&
+      migrationPreflight > repositoryScripts,
     "candidate checkout and repository scripts must follow trust verification",
+  );
+  assertContract(
+    workflow.includes("PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}"),
+    "migration preflight must receive its connection only from the Production Environment secret",
+  );
+  assertContract(
+    workflow.includes("PRODUCTION_MIGRATION_CA_CERT: ${{ secrets.PRODUCTION_MIGRATION_CA_CERT }}"),
+    "migration preflight must receive its CA certificate from the Production Environment secret",
+  );
+  assertContract(
+    ciWorkflow.includes("pnpm release:migrations:lint -- --baseline-ref origin/main") &&
+      /fetch-depth:\s*0/.test(ciWorkflow),
+    "CI must compare the destructive-migration baseline with trusted main history",
+  );
+  assertContract(
+    workflow.includes(
+      "pnpm release:migration:preflight -- --baseline-ref origin/main",
+    ),
+    "Production preflight must compare all existing migrations with trusted main",
   );
   assertContract(!/vercel\s+(deploy|--prod)|supabase\s+db\s+(push|reset)/.test(workflow), "T01 gate must not deploy or mutate Production");
 
