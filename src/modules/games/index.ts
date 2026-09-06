@@ -1,6 +1,6 @@
 import {
   SourceContentChangedError,
-  SourceIdentityConflictError,
+  isSourceIdentityConflictError,
   SourceNotLinkedError,
   SourceQueryInvalidError,
 } from "./internal/errors";
@@ -65,7 +65,7 @@ export function createGamesService(catalogs: Readonly<Record<Provider, SourceCat
         const result = await store.createFromSource(ref, snapshot);
         return { ...result, identityConflict: null };
       } catch (error) {
-        if (error instanceof SourceIdentityConflictError) {
+        if (isSourceIdentityConflictError(error)) {
           const game = await store.get(error.gameId);
           if (!game) throw error;
           return { game, created: false, identityConflict: error.trashed ? "trashed" : "active" };

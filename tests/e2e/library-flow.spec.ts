@@ -22,6 +22,15 @@ test("owner can search a source fixture and add it to the library", async ({ pag
     page.getByRole("button", { name: "展開確認並加入" }).first().click(),
   ]);
   await expect(page.getByText("範例桌遊", { exact: true })).toBeVisible();
+
+  await page.getByRole("link", { name: "新增遊戲" }).click();
+  await page.getByLabel("搜尋遊戲").fill("範例桌遊");
+  await page.getByRole("button", { name: "同時搜尋" }).click();
+  await Promise.all([
+    page.waitForURL(/\/$/),
+    page.getByRole("button", { name: "展開確認並加入" }).first().click(),
+  ]);
+  await expect(page.getByRole("heading", { name: "範例桌遊" })).toHaveCount(1);
 });
 
 test("owner can link a manual board game to a distinct BGG fixture on mobile", async ({ page }, testInfo) => {
@@ -44,7 +53,10 @@ test("owner can link a manual board game to a distinct BGG fixture on mobile", a
   expect((await confirmationRequest).postDataJSON()).toMatchObject({ provider: "bgg", sourceId: "3" });
   await expect(page.getByText("來源已取得，請確認資料後連結。")).toBeVisible();
   await expect(page.getByText("請確認這是要連結的遊戲。").locator("..").getByText("來源：BGG")).toBeVisible();
-  await page.getByRole("button", { name: "連結此來源" }).click();
+  await Promise.all([
+    page.waitForEvent("load"),
+    page.getByRole("button", { name: "連結此來源" }).click(),
+  ]);
 
   await expect(page).toHaveURL(/\/games\/[^/]+$/);
   await expect(page.getByRole("heading", { name: manualName })).toBeVisible();
@@ -111,7 +123,10 @@ test("#36 owner data keeps source platforms read-only and hides platform editing
   await page.getByLabel("名稱搜尋").fill("範例電子遊戲");
   await page.getByRole("button", { name: "搜尋來源" }).click();
   await page.getByRole("button", { name: "取得並確認" }).click();
-  await page.getByRole("button", { name: "連結此來源" }).click();
+  await Promise.all([
+    page.waitForEvent("load"),
+    page.getByRole("button", { name: "連結此來源" }).click(),
+  ]);
   await expect(page.getByText("來源支援平台（僅供參考）")).toBeVisible();
   await expect(page.getByText("PC", { exact: true })).toBeVisible();
   await page.getByText("編輯擁有者資料").click();
@@ -120,7 +135,10 @@ test("#36 owner data keeps source platforms read-only and hides platform editing
   await page.locator('input[name="actualPlatforms"][value="Steam"]').check();
   await page.getByLabel("自由標籤（以逗號分隔）").fill("合作, 收藏");
   await page.getByLabel("人數說明（選填）").fill("兩人時採輪流模式");
-  await page.getByRole("button", { name: "儲存資料" }).click();
+  await Promise.all([
+    page.waitForEvent("load"),
+    page.getByRole("button", { name: "儲存資料" }).click(),
+  ]);
   await expect(page.getByRole("heading", { name: "#36 自訂顯示名稱" })).toBeVisible();
   await expect(page.getByRole("definition").filter({ hasText: "Steam" })).toBeVisible();
   await expect(page.getByText("合作、收藏", { exact: true })).toBeVisible();
@@ -158,7 +176,10 @@ test("#39 refresh failure keeps safe source data and retry succeeds once per cli
   await expect(page.getByRole("status")).toContainText("來源暫時無法使用");
   expect(refreshRequests).toBe(1);
   await expect(refreshButton).toBeEnabled();
-  await refreshButton.click();
+  await Promise.all([
+    page.waitForEvent("load"),
+    refreshButton.click(),
+  ]);
   await expect(page.getByRole("button", { name: "重新整理來源資料" })).toBeVisible();
   expect(refreshRequests).toBe(2);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
@@ -232,7 +253,10 @@ test("#41 owner searches and combines actual-platform and free-tag filters on mo
     await page.getByText("找不到？建立手動條目").click();
     await page.getByRole("textbox", { name: "遊戲名稱" }).fill(fixture.name);
     await page.getByRole("combobox").last().selectOption(fixture.medium);
-    await page.getByRole("button", { name: "建立手動條目" }).click();
+    await Promise.all([
+      page.waitForURL(/\/$/),
+      page.getByRole("button", { name: "建立手動條目" }).click(),
+    ]);
     await page.getByRole("link", { name: fixture.name }).last().click();
     await page.getByText("編輯擁有者資料").click();
     if (fixture.platform) await page.locator(`input[name="actualPlatforms"][value="${fixture.platform}"]`).check();
@@ -344,7 +368,10 @@ test("#59 owner opens a contributor-scoped local library and combines another fi
     await page.getByRole("link", { name }).last().click();
     await page.getByText("編輯擁有者資料").click();
     await page.getByLabel("自由標籤（以逗號分隔）").fill("#59 組合條件");
-    await page.getByRole("button", { name: "儲存資料" }).click();
+    await Promise.all([
+      page.waitForEvent("load"),
+      page.getByRole("button", { name: "儲存資料" }).click(),
+    ]);
     await page.getByText("貢獻關係").click();
     const form = page.getByRole("heading", { name: "手動貢獻" }).locator("..");
     await form.getByPlaceholder("人物或組織名稱").fill(contributorName);
