@@ -34,3 +34,7 @@ export class MediaStoredObjectInvalidError extends MediaOperationError {
 export class MediaFinalizeUnavailableError extends MediaOperationError {
   constructor() { super("media_finalize_unavailable", "媒體完成確認暫時無法執行，請重試。"); this.name = "MediaFinalizeUnavailableError"; }
 }
+
+export class MediaBeginUnavailableError extends MediaOperationError {
+  constructor() { super("media_begin_unavailable", "媒體上傳暫時無法開始，請重試。"); this.name = "MediaBeginUnavailableError"; }
+}

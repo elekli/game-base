@@ -214,6 +214,13 @@ begin
   if new.superseded_at is not null and new.purpose is distinct from 'source_cover' then
     raise exception 'only source cover may be superseded';
   end if;
+  if new.authority_state = 'verified' and (
+    new.kind is distinct from new.purpose or
+    new.object_key is distinct from new.original_object_path or
+    new.mime_type is distinct from new.actual_mime_type
+  ) then
+    raise exception 'verified media asset aliases must match authority fields';
+  end if;
   if new.authority_state = 'verified' and not exists (
     select 1 from app_private.media_ingests ingest
     where ingest.id = new.ingest_id

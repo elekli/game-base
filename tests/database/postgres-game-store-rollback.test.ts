@@ -228,6 +228,12 @@ describe("PostgresGameStore 真實交易回滾", () => {
 
     const retryOperationId = "71000000-0000-4000-8000-000000000001";
     await store.refreshSource(created.game.id, snapshot, retryOperationId);
+    const replacementIdentityId = "74000000-0000-4000-8000-000000000001";
+    await runtimeDatabase.unsafe("insert into app_private.external_game_identities (id, provider, source_id, medium, snapshot) values ($1, 'bgg', '989999', 'board_game', '{}'::jsonb)", [replacementIdentityId]);
+    await runtimeDatabase.unsafe("update app_private.games set external_game_identity_id = $1 where id = $2", [replacementIdentityId, created.game.id]);
+    await expect(store.refreshSource(created.game.id, snapshot, retryOperationId)).rejects.toBeInstanceOf(SourceRefreshIdempotencyConflictError);
+    await runtimeDatabase.unsafe("update app_private.games set external_game_identity_id = $1 where id = $2", [created.game.externalIdentityId, created.game.id]);
+    await runtimeDatabase.unsafe("delete from app_private.external_game_identities where id = $1", [replacementIdentityId]);
     const changed = { ...snapshot, title: "交易回滾測試：封面刷新後", coverUrl: "https://cf.geekdo-images.com/rollback-refresh-changed/original/img/test.jpg" };
     await expect(store.refreshSource(created.game.id, changed, retryOperationId)).rejects.toBeInstanceOf(SourceRefreshIdempotencyConflictError);
     expect((await store.get(created.game.id))?.snapshot?.title).toBe(snapshot.title);

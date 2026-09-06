@@ -4,6 +4,7 @@ import { assertMediaFileSize } from "./file-size-policy";
 import {
   MediaFileEmptyError,
   MediaFileTooLargeError,
+  MediaBeginUnavailableError,
   MediaFinalizeUnavailableError,
   MediaOperationError,
   MediaStoredObjectInvalidError,
@@ -34,19 +35,24 @@ export function createMediaService(dependencies: Readonly<{ store: MediaStore; o
   return {
     async beginMediaUpload(owner, command) {
       void owner;
-      assertMediaFileSize(command.declaredByteSize);
-      if (!command.originalFileName.trim() || !command.declaredMimeType.trim()) throw new MediaStoredObjectInvalidError();
-      const ingestId = randomUUID();
-      const assetId = randomUUID();
-      const objectPath = `originals/${assetId}/${randomUUID()}`;
-      const staleAfter = new Date(now().getTime() + 26 * 60 * 60 * 1000).toISOString();
-      const begun = await dependencies.store.begin(command, { ingestId, assetId, objectPath, staleAfter });
-      if (begun.status === "already_finalized") return begun;
-      if (begun.status === "finalizing") return begun;
-      const { ingest } = begun;
-      await dependencies.store.renewGrant(ingest.idempotencyKey, ingest.originalObjectPath, staleAfter);
-      const grant = await dependencies.objects.createUploadGrant(ingest.originalObjectPath);
-      return { status: "upload_grant", ingestId: ingest.id, assetId: ingest.reservedAssetId, objectPath: ingest.originalObjectPath, ...grant };
+      try {
+        assertMediaFileSize(command.declaredByteSize);
+        if (!command.originalFileName.trim() || !command.declaredMimeType.trim()) throw new MediaStoredObjectInvalidError();
+        const ingestId = randomUUID();
+        const assetId = randomUUID();
+        const objectPath = `originals/${assetId}/${randomUUID()}`;
+        const staleAfter = new Date(now().getTime() + 26 * 60 * 60 * 1000).toISOString();
+        const begun = await dependencies.store.begin(command, { ingestId, assetId, objectPath, staleAfter });
+        if (begun.status === "already_finalized") return begun;
+        if (begun.status === "finalizing") return begun;
+        const { ingest } = begun;
+        await dependencies.store.renewGrant(ingest.idempotencyKey, ingest.originalObjectPath, staleAfter);
+        const grant = await dependencies.objects.createUploadGrant(ingest.originalObjectPath);
+        return { status: "upload_grant", ingestId: ingest.id, assetId: ingest.reservedAssetId, objectPath: ingest.originalObjectPath, ...grant };
+      } catch (error) {
+        if (error instanceof MediaOperationError) throw error;
+        throw new MediaBeginUnavailableError();
+      }
     },
     async finalizeMediaUpload(owner, command) {
       void owner;

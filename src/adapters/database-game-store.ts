@@ -363,8 +363,8 @@ export class PostgresGameStore implements GameStore {
         returning payload_fingerprint
       `) as Row[];
       if (!receipt[0]) {
-        const existing = await tx.execute(sql`select payload_fingerprint from app_private.source_refresh_operations where operation_id = ${sourceCoverOperationId}`) as Row[];
-        if (existing[0]?.payload_fingerprint !== payloadFingerprint) throw new SourceRefreshIdempotencyConflictError();
+        const existing = await tx.execute(sql`select game_id, external_game_identity_id, payload_fingerprint from app_private.source_refresh_operations where operation_id = ${sourceCoverOperationId}`) as Row[];
+        if (existing[0]?.payload_fingerprint !== payloadFingerprint || String(existing[0]?.game_id) !== gameId || String(existing[0]?.external_game_identity_id) !== identityId) throw new SourceRefreshIdempotencyConflictError();
       }
       await tx.execute(sql`update app_private.external_game_identities set snapshot = ${JSON.stringify(snapshot)}::jsonb, updated_at = now() where id = ${identityId}`);
       await tx.execute(sql`delete from app_private.external_game_categories where identity_id = ${identityId}`);

@@ -65,6 +65,28 @@ export class StreamReader {
     }
   }
 
+  async skipUntil(value: number): Promise<boolean> {
+    while (true) {
+      if (this.pushedBack.length > 0) {
+        if (this.pushedBack[0] === value) return true;
+        this.pushedBack.shift();
+        this.consumed += 1;
+        continue;
+      }
+      while (this.offset >= this.current.byteLength) {
+        const next = await this.iterator.next();
+        if (next.done) return false;
+        this.current = next.value;
+        this.offset = 0;
+      }
+      const found = this.current.indexOf(value, this.offset);
+      const end = found === -1 ? this.current.byteLength : found;
+      this.consumed += end - this.offset;
+      this.offset = end;
+      if (found !== -1) return true;
+    }
+  }
+
   async end(expectedSize: number): Promise<void> {
     if (this.consumed !== expectedSize || await this.byte() !== null) throw new MediaStoredObjectInvalidError();
   }
@@ -133,7 +155,14 @@ async function jpeg(reader: StreamReader, expectedSize: number): Promise<ImageHe
   if (soi[0] !== 0xff || soi[1] !== 0xd8) throw new MediaStoredObjectInvalidError();
   let dimensions: ImageHeader | null = null;
   let inScan = false;
+  let sawScan = false;
+  let sawScanData = false;
   while (true) {
+    if (inScan) {
+      const before = reader.consumed;
+      if (!await reader.skipUntil(0xff)) throw new MediaStoredObjectInvalidError();
+      sawScanData = sawScanData || reader.consumed > before;
+    }
     const prefix = await reader.byte();
     if (prefix === null) throw new MediaStoredObjectInvalidError();
     if (inScan && prefix !== 0xff) continue;
@@ -141,9 +170,9 @@ async function jpeg(reader: StreamReader, expectedSize: number): Promise<ImageHe
     let marker = await reader.byte();
     while (marker === 0xff) marker = await reader.byte();
     if (marker === null) throw new MediaStoredObjectInvalidError();
-    if (inScan && marker === 0x00) continue;
+    if (inScan && marker === 0x00) { sawScanData = true; continue; }
     if (marker === 0xd9) {
-      if (!dimensions) throw new MediaStoredObjectInvalidError();
+      if (!dimensions || !sawScan || !sawScanData) throw new MediaStoredObjectInvalidError();
       await reader.end(expectedSize);
       return dimensions;
     }
@@ -152,10 +181,17 @@ async function jpeg(reader: StreamReader, expectedSize: number): Promise<ImageHe
     if (length < 2) throw new MediaStoredObjectInvalidError();
     const payloadLength = length - 2;
     if (sofMarkers.has(marker)) {
-      if (payloadLength < 6) throw new MediaStoredObjectInvalidError();
-      const header = await reader.exact(5);
+      if (payloadLength < 9) throw new MediaStoredObjectInvalidError();
+      const header = await reader.exact(6);
+      if (payloadLength !== 6 + 3 * header[5]) throw new MediaStoredObjectInvalidError();
       dimensions = checked("image/jpeg", u16be(header, 3), u16be(header, 1));
-      await reader.skip(payloadLength - 5);
+      await reader.skip(payloadLength - 6);
+    } else if (marker === 0xda) {
+      if (!dimensions || payloadLength < 6) throw new MediaStoredObjectInvalidError();
+      const header = await reader.exact(1);
+      if (payloadLength !== 1 + 2 * header[0] + 3) throw new MediaStoredObjectInvalidError();
+      await reader.skip(payloadLength - 1);
+      sawScan = true;
     } else {
       await reader.skip(payloadLength);
     }

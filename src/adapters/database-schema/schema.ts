@@ -1,21 +1,8 @@
-import { pgTable, pgSchema, foreignKey, pgPolicy, uuid, text, jsonb, timestamp, uniqueIndex, type AnyPgColumn, index, integer, boolean, numeric, bigint } from "drizzle-orm/pg-core"
+import { pgTable, pgSchema, uniqueIndex, foreignKey, pgPolicy, uuid, text, type AnyPgColumn, index, timestamp, jsonb, integer, boolean, numeric, bigint } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 export const appPrivate = pgSchema("app_private");
 
-
-export const externalGameIdentitiesInAppPrivate = appPrivate.table("external_game_identities", {
-	id: uuid().defaultRandom().notNull(),
-	provider: text().notNull(),
-	sourceId: text("source_id").notNull(),
-	medium: text().notNull(),
-	snapshot: jsonb().notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	sourceCoverAssetId: uuid("source_cover_asset_id").references((): AnyPgColumn => mediaAssetsInAppPrivate.id, { onDelete: "restrict" }),
-}, (table) => [
-	pgPolicy("runtime_external_identity", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
-]);
 
 export const gameNamesInAppPrivate = appPrivate.table("game_names", {
 	id: uuid().defaultRandom().notNull(),
@@ -54,6 +41,19 @@ export const gamesInAppPrivate = appPrivate.table("games", {
 			name: "games_external_identity_medium_fk"
 		}),
 	pgPolicy("runtime_games", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
+export const externalGameIdentitiesInAppPrivate = appPrivate.table("external_game_identities", {
+	id: uuid().defaultRandom().notNull(),
+	provider: text().notNull(),
+	sourceId: text("source_id").notNull(),
+	medium: text().notNull(),
+	snapshot: jsonb().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	sourceCoverAssetId: uuid("source_cover_asset_id").references((): AnyPgColumn => mediaAssetsInAppPrivate.id, { onDelete: "restrict" }),
+}, (table) => [
+	pgPolicy("runtime_external_identity", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
 export const sourceCategoriesInAppPrivate = appPrivate.table("source_categories", {

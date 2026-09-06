@@ -1,5 +1,5 @@
 begin;
-select plan(48);
+select plan(49);
 
 select has_column('app_private', 'media_ingests', 'idempotency_key', 'ingest 保存全域冪等鍵');
 select has_column('app_private', 'media_ingests', 'reserved_asset_id', 'ingest 預留固定 asset id');
@@ -84,6 +84,11 @@ select extensions.throws_like(
   $$insert into app_private.media_assets (id, ingest_id, game_id, purpose, original_object_path, original_file_name, actual_mime_type, byte_size, width, height, authority_state, kind, object_key, mime_type) values ('40000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'gallery_image', 'originals/40000000-0000-4000-8000-000000000001/a', 'photo.png', 'image/png', 24, 2, 3, 'verified', 'gallery_image', 'originals/40000000-0000-4000-8000-000000000001/a', 'image/png')$$,
   '%media asset must match its finalized ingest ledger%',
   'finalizing ingest 不可單獨提交 verified asset'
+);
+select extensions.throws_like(
+  $$insert into app_private.media_assets (id, ingest_id, game_id, purpose, original_object_path, original_file_name, actual_mime_type, byte_size, width, height, authority_state, kind, object_key, mime_type) values ('40000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'gallery_image', 'originals/40000000-0000-4000-8000-000000000001/a', 'photo.png', 'image/png', 24, 2, 3, 'verified', 'source_cover', 'originals/contradictory', 'image/jpeg')$$,
+  '%verified media asset aliases must match authority fields%',
+  'verified asset 不可提交矛盾的 legacy alias 欄位'
 );
 
 set constraints app_private.media_assets_valid_references deferred;

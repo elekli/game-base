@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   MEDIA_MAX_BYTES,
+  MediaBeginUnavailableError,
   MediaFileEmptyError,
   MediaFileTooLargeError,
   MediaStoredObjectInvalidError,
@@ -122,8 +123,21 @@ describe("媒體公開介面", () => {
       objects: { ...objectStore({ bytes: png(), mimeType: "image/png" }), createUploadGrant },
     });
 
-    await expect(service.beginMediaUpload(owner, command())).rejects.toThrow("cleanup won");
+    await expect(service.beginMediaUpload(owner, command())).rejects.toBeInstanceOf(MediaBeginUnavailableError);
     expect(createUploadGrant).not.toHaveBeenCalled();
+  });
+
+  it("Storage grant 原始失敗轉成 begin unavailable，既有 ingest 可重試", async () => {
+    const store = createInMemoryMediaStore({ activeGameIds: [gameId] });
+    let attempts = 0;
+    const objects = { ...objectStore({ bytes: png(), mimeType: "image/png" }), async createUploadGrant(path: string) {
+      attempts += 1;
+      if (attempts === 1) throw new Error("raw grant failure");
+      return { token: path, expiresAt: "2026-09-06T02:00:00.000Z" };
+    } };
+    const service = createMediaService({ store, objects });
+    await expect(service.beginMediaUpload(owner, command())).rejects.toBeInstanceOf(MediaBeginUnavailableError);
+    await expect(service.beginMediaUpload(owner, command())).resolves.toMatchObject({ status: "upload_grant" });
   });
 
   it("begin 對空檔與超過 50 MiB 使用相同的具名邊界錯誤", async () => {
@@ -233,6 +247,24 @@ describe("媒體公開介面", () => {
     });
     await truncated.beginMediaUpload(owner, command({ declaredMimeType: mimeType, declaredByteSize: truncatedBytes.byteLength }));
     await expect(truncated.finalizeMediaUpload(owner, { idempotencyKey })).rejects.toBeInstanceOf(MediaStoredObjectInvalidError);
+  });
+
+  it("拒絕只有 SOF 後直接 EOI、沒有 SOS 與 scan data 的 JPEG", async () => {
+    const bytes = Uint8Array.from([...jpeg().subarray(0, 15), 0xff, 0xd9]);
+    const service = createMediaService({ store: createInMemoryMediaStore({ activeGameIds: [gameId] }), objects: objectStore({ bytes, mimeType: "image/jpeg" }) });
+    await service.beginMediaUpload(owner, command({ declaredMimeType: "image/jpeg", declaredByteSize: bytes.byteLength, originalFileName: "bad.jpg" }));
+    await expect(service.finalizeMediaUpload(owner, { idempotencyKey })).rejects.toBeInstanceOf(MediaStoredObjectInvalidError);
+  });
+
+  it("以分塊掃描大型 JPEG entropy", async () => {
+    const base = jpeg();
+    const bytes = new Uint8Array(base.byteLength + 2_000_000);
+    bytes.set(base.subarray(0, base.byteLength - 2));
+    bytes.fill(1, base.byteLength - 2, bytes.byteLength - 2);
+    bytes.set([0xff, 0xd9], bytes.byteLength - 2);
+    const service = createMediaService({ store: createInMemoryMediaStore({ activeGameIds: [gameId] }), objects: objectStore({ bytes, mimeType: "image/jpeg" }) });
+    await service.beginMediaUpload(owner, command({ declaredMimeType: "image/jpeg", declaredByteSize: bytes.byteLength, originalFileName: "large.jpg" }));
+    await expect(service.finalizeMediaUpload(owner, { idempotencyKey })).resolves.toMatchObject({ asset: { actualMimeType: "image/jpeg" } });
   });
 
   it("finalize 拒絕宣稱／Storage metadata／點陣檔頭 MIME 不一致與 SVG", async () => {
