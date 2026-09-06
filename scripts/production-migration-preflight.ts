@@ -41,6 +41,7 @@ export type ProductionDatabaseSnapshot = {
   migrations: MigrationIdentity[];
   appMigratorExists: boolean;
   appMigratorIsRestricted: boolean;
+  appMigratorReachableRoles: ReachableRole[];
   appRuntimeExists: boolean;
   appRuntimeIsRestricted: boolean;
   appRuntimeReachableRoles: ReachableRole[];
@@ -105,6 +106,7 @@ const FORBIDDEN_DDL = [
   /\balter\s+table\b[^;]*?\badd\s+(?:column\s+)?[^;]*?\bnot\s+null\b/i,
   /\balter\s+table\b[^;]*?\balter\s+(?:column\s+)?\S+\s+(?:(?:set\s+data\s+)?type|set\s+not\s+null)\b/i,
   /\balter\s+table\b[^;]*?\bdisable\s+row\s+level\s+security\b/i,
+  /\balter\s+table\b[^;]*?\bdisable\s+(?:trigger|rule)\b/i,
   /\btruncate\b/i,
   /\bcreate\s+unique\s+index\b/i,
   /\balter\s+policy\b/i,
@@ -123,6 +125,35 @@ select json_build_object(
       and not rolbypassrls and not rolcreatedb and not rolcreaterole
     from pg_roles where rolname = 'app_migrator'
   ), false),
+  'appMigratorReachableRoles', coalesce((
+    with recursive reachable_role(role_oid) as (
+      select membership.roleid
+      from pg_auth_members membership
+      join pg_roles member_role on member_role.oid = membership.member
+      where member_role.rolname = 'app_migrator'
+        and (
+          membership.inherit_option
+          or membership.set_option
+          or membership.admin_option
+        )
+      union
+      select membership.roleid
+      from pg_auth_members membership
+      join reachable_role reachable on reachable.role_oid = membership.member
+      where membership.inherit_option
+        or membership.set_option
+        or membership.admin_option
+    )
+    select json_agg(json_build_object(
+      'name', role.rolname,
+      'isSuperuser', role.rolsuper,
+      'bypassRls', role.rolbypassrls,
+      'canCreateRole', role.rolcreaterole,
+      'canCreateDatabase', role.rolcreatedb
+    ) order by role.rolname)
+    from reachable_role reachable
+    join pg_roles role on role.oid = reachable.role_oid
+  ), '[]'::json),
   'appRuntimeExists', exists(select 1 from pg_roles where rolname = 'app_runtime'),
   'appRuntimeIsRestricted', coalesce((
     select rolcanlogin and not rolsuper and not rolinherit and not rolreplication
@@ -1091,6 +1122,8 @@ function assertSnapshot(
   const rolesPass =
     snapshot.appMigratorExists &&
     snapshot.appMigratorIsRestricted &&
+    Array.isArray(snapshot.appMigratorReachableRoles) &&
+    snapshot.appMigratorReachableRoles.length === 0 &&
     snapshot.appRuntimeExists &&
     snapshot.appRuntimeIsRestricted &&
     snapshot.appPrivateOwnedByMigrator &&

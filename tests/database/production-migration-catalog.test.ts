@@ -163,4 +163,25 @@ describe("production migration PostgreSQL catalog checks", () => {
       await database.unsafe("rollback");
     }
   });
+
+  it.each([
+    ["INHERIT TRUE, SET FALSE, ADMIN FALSE"],
+    ["INHERIT FALSE, SET TRUE, ADMIN FALSE"],
+    ["INHERIT FALSE, SET FALSE, ADMIN TRUE"],
+  ])("detects app_migrator outward reachability through %s", async (options) => {
+    const healthy = await snapshot();
+    expect(healthy.appMigratorReachableRoles).toEqual([]);
+
+    await database.unsafe("begin");
+    try {
+      await database.unsafe(`
+        create role acl_elevated_probe superuser;
+        grant acl_elevated_probe to app_migrator with ${options};
+      `);
+      const drifted = await snapshot();
+      expect(drifted.appMigratorReachableRoles).toHaveLength(1);
+    } finally {
+      await database.unsafe("rollback");
+    }
+  });
 });

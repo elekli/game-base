@@ -83,6 +83,7 @@ function healthySnapshot(): ProductionDatabaseSnapshot {
     ],
     appMigratorExists: true,
     appMigratorIsRestricted: true,
+    appMigratorReachableRoles: [],
     appRuntimeExists: true,
     appRuntimeIsRestricted: true,
     appRuntimeReachableRoles: [],
@@ -162,6 +163,8 @@ describe("production migration safety lint", () => {
     "alter table app_private.games alter constraint games_parent_id_fkey deferrable",
     "alter table app_private.games add column title text not null",
     "alter table app_private.games disable row level security",
+    "alter table app_private.games disable trigger prevent_system_platform_mutation",
+    "alter table app_private.games disable rule game_write_guard",
     "alter table app_private.games alter column title type varchar(50)",
     "alter table app_private.games alter column title set not null",
     "alter table app_private.games alter title type varchar(50)",
@@ -203,6 +206,7 @@ describe("production migration safety lint", () => {
         -- alter table app_private.games add unique (title);
         -- alter table app_private.games validate constraint games_title_check;
         -- alter policy runtime_games on app_private.games using (false);
+        -- alter table app_private.games disable trigger prevent_system_platform_mutation;
         select 'it''s not -- a comment: drop table app_private.games';
         select 'alter view app_private.game_summary rename to archived_summary';
         select 'reassign owned by app_runtime to app_migrator';
@@ -211,6 +215,7 @@ describe("production migration safety lint", () => {
         select 'alter table app_private.games add primary key (id)';
         select 'alter table app_private.games alter constraint games_parent_id_fkey deferrable';
         select 'create policy runtime_games on app_private.games as restrictive using (false)';
+        select 'alter table app_private.games disable rule game_write_guard';
         select E'escaped\\' quote /* still text */ drop table app_private.games';
         select $$drop table app_private.games;$$;
         create function app_private.example() returns text language sql as
@@ -228,6 +233,8 @@ describe("production migration safety lint", () => {
     "alter table app_private.games alter constraint games_parent_id_fkey deferrable",
     "alter policy runtime_games on app_private.games using (false)",
     "create policy runtime_games on app_private.games as restrictive using (false)",
+    "alter table app_private.games disable trigger prevent_system_platform_mutation",
+    "alter table app_private.games disable rule game_write_guard",
   ])("rejects two-phase contract violations inside routine bodies: %s", async (ddl) => {
     const root = await migrationFixture({
       "0001_dynamic.sql": `
@@ -809,7 +816,39 @@ describe("production migration preflight", () => {
         connect: async () => session,
       }),
     ).rejects.toThrow("ProductionMigrationPreflightError");
-    expect(statements.join("\n").match(/membership\.inherit_option/g)).toHaveLength(4);
+    expect(statements.join("\n").match(/membership\.inherit_option/g)).toHaveLength(6);
+  });
+
+  it("rejects every role reachable outward from app_migrator", async () => {
+    const root = await migrationFixture({
+      "0001_runtime_security.sql": "create schema app_private;",
+      "0002_games.sql": "create table app_private.games (id uuid primary key);",
+    });
+    const snapshot = healthySnapshot();
+    snapshot.appMigratorReachableRoles = [
+      {
+        name: "postgres",
+        isSuperuser: true,
+        bypassRls: true,
+        canCreateRole: true,
+        canCreateDatabase: true,
+      },
+    ];
+    const session: ReadOnlyDatabaseSession = {
+      async unsafe<T>(sql: string) {
+        return sql.includes("json_build_object") ? ([{ snapshot }] as T[]) : [];
+      },
+      async release() {},
+    };
+
+    await expect(
+      runProductionMigrationPreflight({
+        root,
+        databaseUrl:
+          "postgres://postgres.wbtyuvufhrhybquzwfip:secret@aws-0-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=verify-full",
+        connect: async () => session,
+      }),
+    ).rejects.toThrow("ProductionMigrationPreflightError");
   });
 
   it.each([
@@ -1008,7 +1047,7 @@ describe("production migration preflight", () => {
     expect(statements.join("\n")).toContain("with recursive reachable_role");
     expect(statements.join("\n")).toContain("membership.set_option");
     expect(statements.join("\n")).toContain("membership.inherit_option");
-    expect(statements.join("\n").match(/membership\.inherit_option/g)).toHaveLength(4);
+    expect(statements.join("\n").match(/membership\.inherit_option/g)).toHaveLength(6);
   });
 
   it.each([
