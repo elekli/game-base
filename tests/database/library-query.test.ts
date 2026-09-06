@@ -17,7 +17,7 @@ function runtimeUrl(): string {
   return url.toString();
 }
 
-function bggSnapshot(sourceId: string, title: string, categories: SourceSnapshot["categories"], weight: number | null, strategyRank: number | null): SourceSnapshot {
+function bggSnapshot(sourceId: string, title: string, categories: SourceSnapshot["categories"], weight: number | null, strategyRank: number | null, contributors: SourceSnapshot["contributors"] = []): SourceSnapshot {
   return {
     ref: { provider: "bgg", medium: "board_game", sourceId },
     canonicalUrl: `https://boardgamegeek.com/boardgame/${sourceId}`,
@@ -28,7 +28,7 @@ function bggSnapshot(sourceId: string, title: string, categories: SourceSnapshot
     releaseYear: null,
     coverUrl: null,
     categories,
-    contributors: [],
+    contributors,
     minPlayers: null,
     maxPlayers: null,
     supportsSolo: "unknown",
@@ -77,6 +77,7 @@ async function cleanTestData(): Promise<void> {
   await runtimeDatabase.unsafe("delete from app_private.source_categories where source_category_id like 'sql-query-%'");
   await runtimeDatabase.unsafe("delete from app_private.platforms where name like 'SQL 篩選測試：%'");
   await runtimeDatabase.unsafe("delete from app_private.tags where name like 'SQL 篩選測試：%'");
+  await runtimeDatabase.unsafe("delete from app_private.contributors where source_contributor_id like 'sql-query-contributor-%' or (source_provider is null and name like 'SQL 篩選測試：%')");
 }
 
 beforeAll(async () => {
@@ -180,6 +181,54 @@ describe("Postgres 收藏庫 SQL 查詢", () => {
     await expect(library.listGames({ actualPlatforms: ["sql 篩選測試：steam"], tags: ["SQL 篩選測試：派對", "SQL 篩選測試：動作"] })).resolves.toMatchObject([{ id: hades.id }]);
     await expect(library.listGames({ actualPlatforms: ["來源 PC"] })).resolves.toEqual([]);
     await expect(library.listGames({ actualPlatforms: [], tags: [] })).resolves.toHaveLength(3);
+  });
+
+  it("以本地 contributor UUID 組合收藏庫條件，同名不同實體不合併且排除回收區", async () => {
+    const sharedContributor = { sourceContributorId: "sql-query-contributor-shared", name: "SQL 篩選測試：同名作者", entityKind: "person" as const, role: "design" as const };
+    const distinctContributor = { ...sharedContributor, sourceContributorId: "sql-query-contributor-distinct" };
+    const firstSnapshot = bggSnapshot("981021", "SQL 篩選測試：貢獻者一", [], null, null, [sharedContributor]);
+    const secondSnapshot = bggSnapshot("981022", "SQL 篩選測試：貢獻者二", [], null, null, [sharedContributor]);
+    const sameNameSnapshot = bggSnapshot("981023", "SQL 篩選測試：同名不同人", [], null, null, [distinctContributor]);
+    const trashedSnapshot = bggSnapshot("981024", "SQL 篩選測試：回收貢獻者", [], null, null, [sharedContributor]);
+    const first = await store.createFromSource(firstSnapshot.ref, firstSnapshot);
+    const second = await store.createFromSource(secondSnapshot.ref, secondSnapshot);
+    const sameName = await store.createFromSource(sameNameSnapshot.ref, sameNameSnapshot);
+    const trashed = await store.createFromSource(trashedSnapshot.ref, trashedSnapshot);
+    const manual = await store.createManual("SQL 篩選測試：同名手動貢獻者", "board_game");
+    const manualResult = await store.addManualContribution({ kind: "new", gameId: manual.id, name: sharedContributor.name, entityKind: "person", role: "design", allowDuplicate: true });
+    if (manualResult.status !== "created") throw new Error("expected manual contributor fixture");
+    await store.edit(first.game.id, { tags: ["SQL 篩選測試：貢獻者交集"] });
+    await store.edit(second.game.id, { tags: ["SQL 篩選測試：其他標籤"] });
+    await store.trash(trashed.game.id);
+
+    const contributorId = (await store.get(first.game.id))?.contributors[0]?.contributorId;
+    const distinctContributorId = (await store.get(sameName.game.id))?.contributors[0]?.contributorId;
+    const manualContributorId = manualResult.game.contributors[0]?.contributorId;
+    expect(contributorId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(distinctContributorId).not.toBe(contributorId);
+    expect(manualContributorId).not.toBe(contributorId);
+    await expect(runtimeDatabase.unsafe("select source_provider, source_contributor_id from app_private.contributors where id = $1", [manualContributorId])).resolves.toEqual([{ source_provider: null, source_contributor_id: null }]);
+    expect((await store.get(second.game.id))?.contributors[0]?.contributorId).toBe(contributorId);
+    await expect(library.listGames({ contributorIds: [contributorId ?? "missing"] })).resolves.toMatchObject([{ id: first.game.id }, { id: second.game.id }]);
+    await expect(library.listGames({ contributorIds: [contributorId ?? "missing"], tags: ["SQL 篩選測試：貢獻者交集"] })).resolves.toMatchObject([{ id: first.game.id }]);
+    await expect(library.listGames({ contributorIds: [distinctContributorId ?? "missing"] })).resolves.toMatchObject([{ id: sameName.game.id }]);
+    await expect(library.listGames({ contributorIds: [manualContributorId ?? "missing"] })).resolves.toMatchObject([{ id: manual.id }]);
+  });
+
+  it("legacy snapshot 缺少來源關係時只在本地 contributor 身分可對應時提供可用篩選", async () => {
+    const sourceContributor = { sourceContributorId: "sql-query-contributor-legacy", name: "SQL 篩選測試：Legacy 作者", entityKind: "person" as const, role: "design" as const };
+    const snapshot = bggSnapshot("981025", "SQL 篩選測試：Legacy 貢獻者", [], null, null, [sourceContributor]);
+    const created = await store.createFromSource(snapshot.ref, snapshot);
+    const contributorId = created.game.contributors[0]?.contributorId;
+    if (!contributorId) throw new Error("expected local source contributor id");
+    await runtimeDatabase.unsafe("delete from app_private.source_contributions where identity_id = $1", [created.game.externalIdentityId]);
+
+    await expect(store.get(created.game.id)).resolves.toMatchObject({ contributors: [{ contributorId }] });
+    await expect(library.listGames({ contributorIds: [contributorId] })).resolves.toMatchObject([{ id: created.game.id }]);
+
+    await runtimeDatabase.unsafe("delete from app_private.contributors where id = $1", [contributorId]);
+    await expect(store.get(created.game.id)).resolves.toMatchObject({ contributors: [{ contributorId: null }] });
+    await expect(library.listGames({ contributorIds: [contributorId] })).resolves.toEqual([]);
   });
 
   it("以日文來源名稱及別名部分搜尋，空白搜尋不增加條件", async () => {

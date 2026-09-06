@@ -42,9 +42,10 @@ function snapshotSourceNames(snapshot: SourceSnapshot | null): readonly string[]
 }
 
 function sourceContributions(snapshot: SourceSnapshot | null, row: Row): readonly GameContribution[] {
-  const stored = jsonArray<GameContribution>(row.source_contributions);
+  const stored = jsonArray<Extract<GameContribution, { origin: "source" }>>(row.source_contributions);
   if (stored.length > 0) return stored.map((contribution) => ({ ...contribution, origin: "source" as const }));
-  return snapshot?.contributors.map((contributor) => ({ id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}:${contributor.role}`, contributorId: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}`, name: contributor.name, entityKind: contributor.entityKind, role: contributor.role, origin: "source" as const, provider: snapshot.ref.provider, sourceContributorId: contributor.sourceContributorId })) ?? [];
+  const localIds = new Map(jsonArray<{ contributorId: string; sourceContributorId: string }>(row.source_contributor_entities).map((entity) => [entity.sourceContributorId, entity.contributorId]));
+  return snapshot?.contributors.map((contributor) => ({ id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}:${contributor.role}`, contributorId: localIds.get(contributor.sourceContributorId) ?? null, name: contributor.name, entityKind: contributor.entityKind, role: contributor.role, origin: "source" as const, provider: snapshot.ref.provider, sourceContributorId: contributor.sourceContributorId })) ?? [];
 }
 
 function withCurrentBggMetrics(snapshot: SourceSnapshot | null, row: Row): SourceSnapshot | null {
@@ -108,6 +109,7 @@ export class PostgresGameStore implements GameStore {
     coalesce((select jsonb_agg(t.name order by t.name) from app_private.game_tags gt join app_private.tags t on t.id = gt.tag_id where gt.game_id = g.id), '[]'::jsonb) as tags,
     bcm.identity_id as metrics_identity_id, bcm.weight as metrics_weight, bcm.strategy_rank as metrics_strategy_rank,
     coalesce((select jsonb_agg(jsonb_build_object('id', sc.id, 'contributorId', c.id, 'name', c.name, 'entityKind', c.entity_kind, 'role', sc.role, 'provider', c.source_provider, 'sourceContributorId', c.source_contributor_id)) from app_private.source_contributions sc join app_private.contributors c on c.id = sc.contributor_id where sc.identity_id = i.id), '[]'::jsonb) as source_contributions,
+    coalesce((select jsonb_agg(jsonb_build_object('contributorId', c.id, 'sourceContributorId', c.source_contributor_id)) from app_private.contributors c where not exists (select 1 from app_private.source_contributions linked where linked.identity_id = i.id) and c.source_provider = i.provider and exists (select 1 from jsonb_array_elements(coalesce(i.snapshot -> 'contributors', '[]'::jsonb)) contributor where contributor ->> 'sourceContributorId' = c.source_contributor_id)), '[]'::jsonb) as source_contributor_entities,
     coalesce((select jsonb_agg(jsonb_build_object('id', mc.id, 'contributorId', c.id, 'name', c.name, 'entityKind', c.entity_kind, 'role', mc.role)) from app_private.manual_contributions mc join app_private.contributors c on c.id = mc.contributor_id where mc.game_id = g.id), '[]'::jsonb) as manual_contributions,
     (select case when mi.original_state = 'failed' or mi.thumbnail_state = 'failed' then 'failed' when mi.original_state = 'ready' and mi.thumbnail_state = 'ready' then 'ready' else 'pending' end from app_private.media_ingests mi where mi.game_id = g.id and mi.source_url = i.snapshot ->> 'coverUrl' limit 1) as cover_ingest_state`;
 
@@ -131,6 +133,12 @@ export class PostgresGameStore implements GameStore {
     if (actualPlatforms.length) clauses.push(sql`exists (select 1 from app_private.game_platforms gp join app_private.platforms p on p.id = gp.platform_id where gp.game_id = g.id and p.normalized_name in (${sql.join(actualPlatforms.map((name) => sql`${name}`), sql`, `)}))`);
     const tags = uniqueNames(query.tags ?? []).map(normalized);
     if (tags.length) clauses.push(sql`exists (select 1 from app_private.game_tags gt join app_private.tags t on t.id = gt.tag_id where gt.game_id = g.id and t.normalized_name in (${sql.join(tags.map((name) => sql`${name}`), sql`, `)}))`);
+    const contributorIds = [...new Set(query.contributorIds ?? [])];
+    if (contributorIds.length) clauses.push(sql`(
+      exists (select 1 from app_private.source_contributions sc where sc.identity_id = i.id and sc.contributor_id in (${sql.join(contributorIds.map((id) => sql`${id}`), sql`, `)}))
+      or exists (select 1 from app_private.manual_contributions mc where mc.game_id = g.id and mc.contributor_id in (${sql.join(contributorIds.map((id) => sql`${id}`), sql`, `)}))
+      or exists (select 1 from app_private.contributors c where c.id in (${sql.join(contributorIds.map((id) => sql`${id}`), sql`, `)}) and c.source_provider = i.provider and exists (select 1 from jsonb_array_elements(coalesce(i.snapshot -> 'contributors', '[]'::jsonb)) contributor where contributor ->> 'sourceContributorId' = c.source_contributor_id))
+    )`);
     const selectedByKind = new Map<string, string[]>();
     for (const category of query.sourceCategories ?? []) {
       const ids = selectedByKind.get(category.kind) ?? [];

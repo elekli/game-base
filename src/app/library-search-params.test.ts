@@ -25,7 +25,7 @@ describe("收藏庫篩選參數", () => {
 
   it("多媒介解析時清除分類、重度與 BGG 排序", () => {
     expect(parseLibrarySearchParams({ medium: ["board_game", "video_game"], category: "category:1", weightMin: "2", sort: "strategy_rank" })).toEqual({
-      search: undefined, media: ["board_game", "video_game"], actualPlatforms: [], tags: [], sourceCategories: [], weightMin: undefined, weightMax: undefined, sort: "name",
+      search: undefined, media: ["board_game", "video_game"], actualPlatforms: [], tags: [], contributorIds: [], sourceCategories: [], weightMin: undefined, weightMax: undefined, sort: "name",
     });
   });
 
@@ -40,9 +40,20 @@ describe("收藏庫篩選參數", () => {
   });
 
   it("解析瀏覽器歷史 URL 時保留重複條件", () => {
-    expect(parseLibraryUrlSearchParams(new URLSearchParams("search=Zelda&platform=Steam&platform=Switch"))).toMatchObject({
+    expect(parseLibraryUrlSearchParams(new URLSearchParams("search=Zelda&platform=Steam&platform=Switch&contributor=11111111-1111-4111-8111-111111111111"))).toMatchObject({
       search: "Zelda",
       actualPlatforms: ["Steam", "Switch"],
+      contributorIds: ["11111111-1111-4111-8111-111111111111"],
     });
+  });
+
+  it("表單保留本地 contributor UUID，並忽略非 UUID 查詢值", () => {
+    const form = new FormData();
+    form.append("contributor", "11111111-1111-4111-8111-111111111111");
+    form.append("contributor", "not-a-local-id");
+    form.set("sort", "name");
+
+    expect(buildLibrarySearchParams(form).toString()).toBe("contributor=11111111-1111-4111-8111-111111111111&sort=name");
+    expect(parseLibrarySearchParams({ contributor: ["11111111-1111-4111-8111-111111111111", "not-a-local-id"] }).contributorIds).toEqual(["11111111-1111-4111-8111-111111111111"]);
   });
 });
