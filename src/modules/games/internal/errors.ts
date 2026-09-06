@@ -52,6 +52,14 @@ export class SourceContentChangedError extends SourceOperationError {
 export class SourceIdentityConflictError extends SourceOperationError {
   constructor(public readonly gameId: string, public readonly trashed: boolean) { super("source_identity_conflict", trashed ? "此來源已存在於資源回收區，請先還原。" : "此來源已存在於收藏庫。", null); this.name = "SourceIdentityConflictError"; }
 }
+
+export function isSourceIdentityConflictError(error: unknown): error is SourceIdentityConflictError {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as Partial<SourceIdentityConflictError>;
+  return candidate.sourceCode === "source_identity_conflict"
+    && typeof candidate.gameId === "string"
+    && typeof candidate.trashed === "boolean";
+}
 export class SourceMediumMismatchError extends SourceOperationError {
   constructor() { super("source_medium_mismatch", "來源遊戲類型與目前條目不相容。", null); this.name = "SourceMediumMismatchError"; }
 }

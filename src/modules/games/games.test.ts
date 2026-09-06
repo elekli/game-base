@@ -80,6 +80,22 @@ describe("games service", () => {
     expect(await store.list()).toHaveLength(2);
   });
 
+  it("開發伺服器重新載入模組後仍能辨識既有來源身分", async () => {
+    const { service, store } = setup();
+    const ref = { provider: "bgg" as const, medium: "board_game" as const, sourceId: "1" };
+    const confirmation = await service.getExternalGameConfirmation({ ref });
+    const existing = await store.createManual("既有遊戲", "board_game");
+    vi.spyOn(store, "createFromSource").mockRejectedValue({
+      sourceCode: "source_identity_conflict",
+      gameId: existing.id,
+      trashed: false,
+    });
+
+    const result = await service.createGameFromExternalSource({ ref, confirmationFingerprint: confirmation.fingerprint });
+
+    expect(result).toMatchObject({ game: existing, created: false, identityConflict: "active" });
+  });
+
   it("資源回收項目仍占用來源身分", async () => {
     const { service, store } = setup();
     const ref = { provider: "bgg" as const, medium: "board_game" as const, sourceId: "1" };
