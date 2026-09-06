@@ -4,6 +4,19 @@ import { readFile } from "node:fs/promises";
 import { checkProductionReleaseContract } from "../../scripts/check-production-release-contract";
 
 describe("production release contract", () => {
+  it("records the disabled Supabase Git production mapping and sole schema writer", async () => {
+    const contract = JSON.parse(
+      await readFile(".github/production-release-contract.json", "utf8"),
+    ) as Record<string, unknown>;
+
+    expect(contract.supabaseGitProductionBranch).toBe(
+      "production-deploy-disabled-use-github-actions",
+    );
+    expect(contract.productionSchemaWriter).toBe(
+      ".github/workflows/production-release.yml",
+    );
+  });
+
   it("accepts the repository-owned no-preview release contract", async () => {
     await expect(checkProductionReleaseContract(process.cwd())).resolves.toEqual({
       ciCheck: "verify",

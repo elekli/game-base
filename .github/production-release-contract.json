@@ -8,6 +8,8 @@
   "vercelProjectName": "game-base",
   "supabaseProjectRef": "wbtyuvufhrhybquzwfip",
   "supabaseRegion": "ap-south-1",
+  "supabaseGitProductionBranch": "production-deploy-disabled-use-github-actions",
+  "productionSchemaWriter": ".github/workflows/production-release.yml",
   "vercelGitDeployment": false,
   "hostedPreview": false
 }
