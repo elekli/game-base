@@ -569,11 +569,35 @@ select json_build_object(
 ) as snapshot;
 `;
 
-class ProductionMigrationError extends Error {
-  constructor(name: string, message: string) {
-    super(`${name}: ${message}`);
+type ProductionMigrationErrorName =
+  | "ProductionMigrationConnectionError"
+  | "ProductionMigrationPreflightError"
+  | "ProductionMigrationRollbackError"
+  | "ProductionMigrationSafetyError";
+
+export class ProductionMigrationError extends Error {
+  constructor(
+    name: ProductionMigrationErrorName,
+    readonly safeDetail: string,
+  ) {
+    super(`${name}: ${safeDetail}`);
     this.name = name;
   }
+}
+
+export function formatProductionMigrationFailure(error: unknown) {
+  if (error instanceof ProductionMigrationError) {
+    return {
+      event: "production_migration_preflight_failed" as const,
+      errorName: error.name,
+      detail: error.safeDetail,
+    };
+  }
+  return {
+    event: "production_migration_preflight_failed" as const,
+    errorName: "ProductionMigrationUnexpectedError" as const,
+    detail: "unexpected preflight failure; inspect protected runner diagnostics",
+  };
 }
 
 type SqlToken = Readonly<{
@@ -1428,8 +1452,8 @@ async function main() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch(() => {
-    console.error("ProductionMigrationPreflightError: preflight failed; no secret details were emitted");
+  main().catch((error: unknown) => {
+    console.error(JSON.stringify(formatProductionMigrationFailure(error)));
     process.exitCode = 1;
   });
 }
