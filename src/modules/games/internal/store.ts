@@ -147,10 +147,7 @@ export class InMemoryGameStore implements GameStore {
   }
 
   async list(query = ""): Promise<readonly GameRecord[]> {
-    const normalized = query.trim().toLocaleLowerCase("en-US");
-    return [...this.games.values()]
-      .filter((game) => game.trashedAt === null && (!normalized || [game.displayName, ...game.sourceNames, ...game.aliases].some((name) => name.toLocaleLowerCase("en-US").includes(normalized))))
-      .sort((a, b) => a.displayName.localeCompare(b.displayName, "zh-Hant"));
+    return this.listLibraryGames({ search: query });
   }
 
   async listLibraryGames(query: LibraryGameQuery = {}): Promise<readonly GameRecord[]> {

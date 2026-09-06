@@ -75,6 +75,8 @@ async function cleanTestData(): Promise<void> {
   await runtimeDatabase.unsafe("delete from app_private.games where display_name like 'SQL 篩選測試：%'");
   await runtimeDatabase.unsafe("delete from app_private.external_game_identities where snapshot ->> 'title' like 'SQL 篩選測試：%'");
   await runtimeDatabase.unsafe("delete from app_private.source_categories where source_category_id like 'sql-query-%'");
+  await runtimeDatabase.unsafe("delete from app_private.platforms where name like 'SQL 篩選測試：%'");
+  await runtimeDatabase.unsafe("delete from app_private.tags where name like 'SQL 篩選測試：%'");
 }
 
 beforeAll(async () => {
@@ -156,13 +158,69 @@ describe("Postgres 收藏庫 SQL 查詢", () => {
     ]);
   });
 
+  it("以名稱部分搜尋並在實際平台與自由標籤維度維持 OR／AND", async () => {
+    const snapshot: SourceSnapshot = {
+      ...igdbSnapshot("981007"),
+      title: "SQL 篩選測試：The Legend of Zelda",
+      localizedTitle: "SQL 篩選測試：薩爾達傳說",
+      aliases: ["Breath of the Wild"],
+      supportedPlatforms: ["來源 PC"],
+    };
+    const zelda = await store.createFromSource(snapshot.ref, snapshot);
+    const hades = await store.createManual("SQL 篩選測試：Hades", "video_game");
+    const party = await store.createManual("SQL 篩選測試：派對桌遊", "board_game");
+    await store.edit(zelda.game.id, { displayName: "SQL 篩選測試：曠野之息", actualPlatforms: ["SQL 篩選測試：Switch"], tags: ["SQL 篩選測試：劇情向"] });
+    await store.edit(hades.id, { actualPlatforms: ["SQL 篩選測試：Steam"], tags: ["SQL 篩選測試：劇情向", "SQL 篩選測試：動作"] });
+    await store.edit(party.id, { tags: ["SQL 篩選測試：派對"] });
+
+    await expect(library.listGames({ search: "zELDa" })).resolves.toMatchObject([{ id: zelda.game.id }]);
+    await expect(library.listGames({ search: "breath of" })).resolves.toMatchObject([{ id: zelda.game.id }]);
+    await expect(library.listGames({ search: "薩爾達" })).resolves.toMatchObject([{ id: zelda.game.id }]);
+    await expect(library.listGames({ actualPlatforms: ["SQL 篩選測試：Steam", "SQL 篩選測試：Switch"], tags: ["SQL 篩選測試：劇情向"] })).resolves.toHaveLength(2);
+    await expect(library.listGames({ actualPlatforms: ["sql 篩選測試：steam"], tags: ["SQL 篩選測試：派對", "SQL 篩選測試：動作"] })).resolves.toMatchObject([{ id: hades.id }]);
+    await expect(library.listGames({ actualPlatforms: ["來源 PC"] })).resolves.toEqual([]);
+    await expect(library.listGames({ actualPlatforms: [], tags: [] })).resolves.toHaveLength(3);
+  });
+
+  it("以日文來源名稱及別名部分搜尋，空白搜尋不增加條件", async () => {
+    const snapshot: SourceSnapshot = {
+      ...igdbSnapshot("981008"),
+      title: "SQL 篩選測試：ゼルダの伝説",
+      localizedTitle: null,
+      aliases: ["ブレス オブ ザ ワイルド"],
+    };
+    const zelda = await store.createFromSource(snapshot.ref, snapshot);
+
+    await expect(library.listGames({ search: "ゼルダ" })).resolves.toMatchObject([{ id: zelda.game.id }]);
+    await expect(library.listGames({ search: "ブレス オブ" })).resolves.toMatchObject([{ id: zelda.game.id }]);
+    expect((await library.listGames({ search: "   " })).some((game) => game.id === zelda.game.id)).toBe(true);
+  });
+
+  it("一千款收藏中的部分名稱搜尋不超過一秒安全界線", async () => {
+    await runtimeDatabase.unsafe(`
+      insert into app_private.games (medium, display_name)
+      select 'board_game', 'SQL 篩選測試：效能收藏 ' || lpad(value::text, 4, '0')
+      from generate_series(1, 1000) as value
+    `);
+    await library.listGames({ search: "效能收藏 0999" });
+
+    const startedAt = performance.now();
+    const result = await library.listGames({ search: "效能收藏 0999" });
+    const elapsedMs = performance.now() - startedAt;
+    console.info(`library_search_1000_items_ms=${elapsedMs.toFixed(2)}`);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].displayName).toBe("SQL 篩選測試：效能收藏 0999");
+    expect(elapsedMs).toBeLessThan(1000);
+  });
+
   it("回收區遊戲仍計入共享平台與標籤使用數，且刪除受關係約束", async () => {
     const game = await store.createManual("SQL 篩選測試：回收區共享項目", "video_game");
     await store.edit(game.id, { actualPlatforms: ["SQL 回收平台"], tags: ["SQL 回收標籤"] });
     await store.trash(game.id);
 
     expect(await store.listPlatforms()).toEqual(expect.arrayContaining([{ name: "SQL 回收平台", usageCount: 1, isSystem: false }]));
-    expect(await store.listTags()).toEqual([{ name: "SQL 回收標籤", usageCount: 1, isSystem: false }]);
+    expect(await store.listTags()).toEqual(expect.arrayContaining([{ name: "SQL 回收標籤", usageCount: 1, isSystem: false }]));
     await expect(library.deletePlatform("SQL 回收平台")).rejects.toThrow("仍有遊戲使用");
     await expect(library.deleteTag("SQL 回收標籤")).rejects.toThrow("仍有遊戲使用");
   });

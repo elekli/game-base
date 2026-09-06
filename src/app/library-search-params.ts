@@ -1,11 +1,15 @@
 import type { Medium } from "@/modules/games";
-import { clearIncompatibleSourceCategories, type LibraryFilters, type LibrarySort } from "@/modules/library";
+import { cleanSharedNames, clearIncompatibleSourceCategories, type LibraryFilters, type LibrarySort } from "@/modules/library";
 
 export function buildLibrarySearchParams(form: FormData): URLSearchParams {
   const media = form.getAll("medium").filter((value): value is string => value === "board_game" || value === "video_game");
   const boardOnly = media.length === 1 && media[0] === "board_game";
   const params = new URLSearchParams();
+  const search = form.get("search");
+  if (typeof search === "string" && search.trim()) params.set("search", search.trim());
   for (const medium of media) params.append("medium", medium);
+  for (const platform of cleanSharedNames(form.getAll("platform").filter((value): value is string => typeof value === "string"))) params.append("platform", platform);
+  for (const tag of cleanSharedNames(form.getAll("tag").filter((value): value is string => typeof value === "string"))) params.append("tag", tag);
   if (media.length === 1) {
     for (const category of form.getAll("category")) if (typeof category === "string") params.append("category", category);
   }
@@ -43,8 +47,12 @@ export function parseLibrarySearchParams(
   };
   const sort = many("sort")[0];
   const isBoardOnly = media.length === 1 && media[0] === "board_game";
+  const search = many("search")[0]?.trim() || undefined;
   return {
+    search,
     media,
+    actualPlatforms: cleanSharedNames(many("platform")),
+    tags: cleanSharedNames(many("tag")),
     sourceCategories: clearIncompatibleSourceCategories(media, sourceCategories),
     weightMin: isBoardOnly ? number("weightMin") : undefined,
     weightMax: isBoardOnly ? number("weightMax") : undefined,
@@ -52,4 +60,13 @@ export function parseLibrarySearchParams(
       ? sort as LibrarySort
       : ["name", "recent"].includes(sort ?? "") ? sort as LibrarySort : "name",
   };
+}
+
+export function parseLibraryUrlSearchParams(params: URLSearchParams): LibraryFilters {
+  const values: Record<string, string | string[]> = {};
+  for (const key of new Set(params.keys())) {
+    const entries = params.getAll(key);
+    values[key] = entries.length === 1 ? entries[0] : entries;
+  }
+  return parseLibrarySearchParams(values);
 }
