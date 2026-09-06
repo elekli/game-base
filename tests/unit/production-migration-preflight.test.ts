@@ -158,6 +158,8 @@ describe("production migration safety lint", () => {
     "alter table app_private.games add check (title <> '')",
     "alter table app_private.games add foreign key (parent_id) references app_private.games (id)",
     "alter table app_private.games add primary key (id)",
+    "alter table app_private.games validate constraint games_title_check",
+    "alter table app_private.games alter constraint games_parent_id_fkey deferrable",
     "alter table app_private.games add column title text not null",
     "alter table app_private.games disable row level security",
     "alter table app_private.games alter column title type varchar(50)",
@@ -182,6 +184,8 @@ describe("production migration safety lint", () => {
     "alter default privileges in schema app_private grant select on tables to reporting_role",
     "alter domain app_private.game_slug set not null",
     "alter domain app_private.game_slug add constraint slug_check check (value <> '')",
+    "alter policy runtime_games on app_private.games using (false)",
+    "create policy runtime_games on app_private.games as restrictive for select using (false)",
   ])("rejects unsplit destructive DDL: %s", async (ddl) => {
     const root = await migrationFixture({ "0001_contract.sql": `${ddl};` });
 
@@ -197,12 +201,16 @@ describe("production migration safety lint", () => {
         -- alter table app_private.games rename to archived_games;
         -- reassign owned by app_runtime to app_migrator;
         -- alter table app_private.games add unique (title);
+        -- alter table app_private.games validate constraint games_title_check;
+        -- alter policy runtime_games on app_private.games using (false);
         select 'it''s not -- a comment: drop table app_private.games';
         select 'alter view app_private.game_summary rename to archived_summary';
         select 'reassign owned by app_runtime to app_migrator';
         select 'alter table app_private.games add check (title <> '''')';
         select 'alter table app_private.games add foreign key (parent_id) references app_private.games (id)';
         select 'alter table app_private.games add primary key (id)';
+        select 'alter table app_private.games alter constraint games_parent_id_fkey deferrable';
+        select 'create policy runtime_games on app_private.games as restrictive using (false)';
         select E'escaped\\' quote /* still text */ drop table app_private.games';
         select $$drop table app_private.games;$$;
         create function app_private.example() returns text language sql as
@@ -213,6 +221,27 @@ describe("production migration safety lint", () => {
     await expect(lintProductionMigrations(root)).resolves.toEqual({
       migrationCount: 1,
     });
+  });
+
+  it.each([
+    "alter table app_private.games validate constraint games_title_check",
+    "alter table app_private.games alter constraint games_parent_id_fkey deferrable",
+    "alter policy runtime_games on app_private.games using (false)",
+    "create policy runtime_games on app_private.games as restrictive using (false)",
+  ])("rejects two-phase contract violations inside routine bodies: %s", async (ddl) => {
+    const root = await migrationFixture({
+      "0001_dynamic.sql": `
+        create procedure app_private.contract_violation() language plpgsql as $body$
+        begin
+          ${ddl};
+        end
+        $body$;
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
   });
 
   it("rejects executable REASSIGN OWNED inside a routine body", async () => {
@@ -570,8 +599,7 @@ describe("production migration preflight", () => {
       "0001_runtime_security.sql": "create schema app_private;",
       "0002_games.sql": "create table app_private.games (id uuid primary key);",
       "0007_checkpoint.sql": "select 1;",
-      "0008_change_runtime_games_policy.sql":
-        "alter policy runtime_games on app_private.games using (new_expression);",
+      "0008_policy_manifest_checkpoint.sql": "select 1;",
     });
     await writeFile(
       path.join(root, ".github", "production-rls-policy-manifest.json"),
@@ -638,7 +666,7 @@ describe("production migration preflight", () => {
 
     newPolicySnapshot.migrations.push({
       version: "0008",
-      name: "change_runtime_games_policy",
+      name: "policy_manifest_checkpoint",
     });
     await expect(
       runProductionMigrationPreflight({
@@ -648,7 +676,7 @@ describe("production migration preflight", () => {
     ).resolves.toMatchObject({ pendingMigrationCount: 0 });
     oldPolicySnapshot.migrations.push({
       version: "0008",
-      name: "change_runtime_games_policy",
+      name: "policy_manifest_checkpoint",
     });
     await expect(
       runProductionMigrationPreflight({
@@ -666,7 +694,7 @@ describe("production migration preflight", () => {
       "0001_runtime_security.sql": "create schema app_private;",
       "0002_games.sql": "create table app_private.games (id uuid primary key);",
       "0007_before.sql": "select 1;",
-      "0008_change.sql": "alter policy runtime_games on app_private.games using (false);",
+      "0008_change.sql": "select 1;",
       "0009_after.sql": "select 1;",
     });
     const revision = (validFrom: string, validUntilExclusive: string | null) => ({

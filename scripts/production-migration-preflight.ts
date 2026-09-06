@@ -100,11 +100,15 @@ const FORBIDDEN_DDL = [
   /\balter\s+table\b[^;]*?\bdrop\s+(?:column|constraint)\b/i,
   /\balter\s+table\b[^;]*?\badd\s+constraint\b/i,
   /\balter\s+table\b[^;]*?\badd\s+(?:unique|check|foreign\s+key|primary\s+key)\b/i,
+  /\balter\s+table\b[^;]*?\bvalidate\s+constraint\b/i,
+  /\balter\s+table\b[^;]*?\balter\s+constraint\b/i,
   /\balter\s+table\b[^;]*?\badd\s+(?:column\s+)?[^;]*?\bnot\s+null\b/i,
   /\balter\s+table\b[^;]*?\balter\s+(?:column\s+)?\S+\s+(?:(?:set\s+data\s+)?type|set\s+not\s+null)\b/i,
   /\balter\s+table\b[^;]*?\bdisable\s+row\s+level\s+security\b/i,
   /\btruncate\b/i,
   /\bcreate\s+unique\s+index\b/i,
+  /\balter\s+policy\b/i,
+  /\bcreate\s+policy\b[^;]*?\bas\s+restrictive\b/i,
 ] as const;
 
 export const PRODUCTION_MIGRATION_SNAPSHOT_QUERY = `
