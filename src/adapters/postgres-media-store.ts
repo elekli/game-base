@@ -122,7 +122,7 @@ export class PostgresMediaStore implements MediaStore {
 
   async claimFinalize(idempotencyKey: string, lease: Readonly<{ token: string; until: string }>): Promise<FinalizeClaim> {
     return this.db.transaction(async (tx) => {
-      const rows = await tx.execute(sql`select ${ingestFields}, lease_until > now() as lease_valid from app_private.media_ingests where idempotency_key = ${idempotencyKey} for update`) as Row[];
+      const rows = await tx.execute(sql`select ${ingestFields}, lease_until > now() as lease_valid, stale_after > now() as reservation_valid from app_private.media_ingests where idempotency_key = ${idempotencyKey} for update`) as Row[];
       if (!rows[0]) throw new MediaFinalizeUnavailableError();
       const ingest = ingestFrom(rows[0]);
       if (ingest.state === "finalized") {
@@ -131,13 +131,15 @@ export class PostgresMediaStore implements MediaStore {
         return { status: "already_finalized", result };
       }
       if (ingest.state === "cleanup_pending" || ingest.state === "expired") throw new MediaFinalizeUnavailableError();
+      if (ingest.state === "issued" && rows[0].reservation_valid !== true) throw new MediaFinalizeUnavailableError();
       if (ingest.state === "finalizing" && rows[0].lease_valid === true) throw new MediaFinalizeUnavailableError();
       const claimedRows = await tx.execute(sql`
         update app_private.media_ingests
         set state = 'finalizing', lease_token = ${lease.token}, lease_until = ${lease.until}, last_error_code = null
-        where id = ${ingest.id}
+        where id = ${ingest.id} and (state <> 'issued' or stale_after > now())
         returning ${ingestFields}
       `) as Row[];
+      if (!claimedRows[0]) throw new MediaFinalizeUnavailableError();
       return { status: "claimed", ingest: ingestFrom(claimedRows[0]) };
     });
   }

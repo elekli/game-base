@@ -70,12 +70,17 @@ let runtime: ReturnType<typeof postgres>;
 let database: ReturnType<typeof createDatabase>;
 
 async function clean(): Promise<void> {
-  await runtime.unsafe("update app_private.games set manual_cover_asset_id = null where id = $1", [gameId]);
-  await runtime.unsafe("delete from app_private.media_derivative_attempts where derivative_id in (select id from app_private.media_derivatives where asset_id in (select id from app_private.media_assets where game_id = $1))", [gameId]);
-  await runtime.unsafe("delete from app_private.media_derivatives where asset_id in (select id from app_private.media_assets where game_id = $1)", [gameId]);
-  await runtime.unsafe("delete from app_private.media_assets where game_id = $1", [gameId]);
-  await runtime.unsafe("delete from app_private.media_ingests where game_id = $1", [gameId]);
-  await runtime.unsafe("delete from app_private.games where id = $1", [gameId]);
+  await control.unsafe("set session_replication_role = replica");
+  try {
+    await control.unsafe("update app_private.games set manual_cover_asset_id = null where id = $1", [gameId]);
+    await control.unsafe("delete from app_private.media_derivative_attempts where derivative_id in (select id from app_private.media_derivatives where asset_id in (select id from app_private.media_assets where game_id = $1))", [gameId]);
+    await control.unsafe("delete from app_private.media_derivatives where asset_id in (select id from app_private.media_assets where game_id = $1)", [gameId]);
+    await control.unsafe("delete from app_private.media_assets where game_id = $1", [gameId]);
+    await control.unsafe("delete from app_private.media_ingests where game_id = $1", [gameId]);
+    await control.unsafe("delete from app_private.games where id = $1", [gameId]);
+  } finally {
+    await control.unsafe("set session_replication_role = origin");
+  }
 }
 
 beforeAll(async () => {
@@ -152,6 +157,19 @@ describe("MediaService 與真 PostgreSQL", () => {
     await expect(store.completeFinalize(key, leaseToken, {
       actualMimeType: "image/png", byteSize: png().byteLength, width: 20, height: 30,
     })).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
+  });
+
+  it("PostgreSQL 時鐘拒絕 stale deadline 已過的 issued ingest claim", async () => {
+    const service = serviceFor();
+    await service.beginMediaUpload(owner, beginCommand());
+    await runtime.unsafe("update app_private.media_ingests set stale_after = now() - interval '1 second' where idempotency_key = $1", [key]);
+
+    await expect(service.finalizeMediaUpload(owner, { idempotencyKey: key })).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
+    const rows = await runtime.unsafe<{ state: string; asset_count: number }[]>(`
+      select state, (select count(*)::int from app_private.media_assets where ingest_id = media_ingests.id) as asset_count
+      from app_private.media_ingests where idempotency_key = $1
+    `, [key]);
+    expect(rows[0]).toEqual({ state: "issued", asset_count: 0 });
   });
 
   it("實際大小或 MIME 不符時轉 cleanup_pending，且不建立 asset", async () => {

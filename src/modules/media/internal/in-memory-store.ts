@@ -54,7 +54,9 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
       if (result) return { status: "already_finalized", result };
       const ingest = ingests.get(key);
       if (!ingest || ingest.state === "cleanup_pending" || ingest.state === "expired") throw new MediaFinalizeUnavailableError();
-      if (ingest.state === "finalizing" && ingest.leaseUntil && new Date(ingest.leaseUntil) > new Date()) throw new MediaFinalizeUnavailableError();
+      const current = input.now?.() ?? new Date();
+      if (ingest.state === "issued" && new Date(ingest.staleAfter) <= current) throw new MediaFinalizeUnavailableError();
+      if (ingest.state === "finalizing" && ingest.leaseUntil && new Date(ingest.leaseUntil) > current) throw new MediaFinalizeUnavailableError();
       const claimed = { ...ingest, state: "finalizing" as const, leaseToken: lease.token, leaseUntil: lease.until };
       ingests.set(key, claimed);
       return { status: "claimed", ingest: claimed };

@@ -183,6 +183,18 @@ describe("媒體公開介面", () => {
     await expect(service.finalizeMediaUpload(owner, { idempotencyKey })).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
   });
 
+  it("issued ingest 超過 stale deadline 後不得再 claim finalize", async () => {
+    const start = new Date("2026-09-06T00:00:00.000Z");
+    const store = createInMemoryMediaStore({ activeGameIds: [gameId], now: () => new Date(start.getTime() + 27 * 60 * 60_000) });
+    const service = createMediaService({ store, objects: objectStore({ bytes: png(), mimeType: "image/png" }), now: () => start });
+    await service.beginMediaUpload(owner, command());
+
+    await expect(store.claimFinalize(idempotencyKey, {
+      token: "33333333-3333-4333-8333-333333333334",
+      until: new Date(start.getTime() + 28 * 60 * 60_000).toISOString(),
+    })).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
+  });
+
   it.each([
     ["PNG", "image/png", png()],
     ["JPEG", "image/jpeg", jpeg()],

@@ -1,5 +1,5 @@
 begin;
-select plan(24);
+select plan(27);
 
 select has_column('app_private', 'media_ingests', 'idempotency_key', 'ingest 保存全域冪等鍵');
 select has_column('app_private', 'media_ingests', 'reserved_asset_id', 'ingest 預留固定 asset id');
@@ -74,6 +74,12 @@ set actual_mime_type = 'image/png', actual_byte_size = 24, image_width = 2, imag
     state = 'finalizing', lease_token = '50000000-0000-4000-8000-000000000001', lease_until = now() + interval '5 minutes'
 where id = '20000000-0000-4000-8000-000000000001';
 
+select extensions.throws_like(
+  $$update app_private.media_ingests set state = 'finalized', lease_token = null, lease_until = null, finalized_at = now() where id = '20000000-0000-4000-8000-000000000001'$$,
+  '%finalized media ingest must match a verified asset%',
+  '沒有 verified asset 的 ingest 不可直接進入 finalized'
+);
+
 insert into app_private.media_assets (
   id, ingest_id, game_id, purpose, original_object_path, original_file_name,
   actual_mime_type, byte_size, width, height, authority_state, kind, object_key, mime_type
@@ -105,6 +111,16 @@ select extensions.throws_like(
   $$update app_private.media_ingests set reserved_asset_id = gen_random_uuid() where id = '20000000-0000-4000-8000-000000000001'$$,
   '%finalized media ingest authority fields are immutable%',
   '已有權威 asset 的 ingest 不可改寫 immutable authority 欄位'
+);
+select extensions.throws_like(
+  $$delete from app_private.media_assets where id = '40000000-0000-4000-8000-000000000001'$$,
+  '%cannot delete verified asset referenced by finalized ingest%',
+  'finalized ingest 對應的 verified asset 不可刪除'
+);
+select extensions.throws_like(
+  $$update app_private.media_assets set authority_state = 'legacy_unverified' where id = '40000000-0000-4000-8000-000000000001'$$,
+  '%cannot detach verified asset referenced by finalized ingest%',
+  '不可先降級 finalized verified asset 再繞過 DELETE guard'
 );
 
 select extensions.throws_like(

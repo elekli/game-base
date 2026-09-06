@@ -247,7 +247,7 @@ returns trigger language plpgsql as $$
 declare
   asset app_private.media_assets%rowtype;
 begin
-  select * into asset from app_private.media_assets where ingest_id = old.id and authority_state = 'verified';
+  select * into asset from app_private.media_assets where ingest_id = new.id and authority_state = 'verified';
   if found and (
     new.state <> 'finalized' or
     new.reserved_asset_id is distinct from asset.id or
@@ -262,6 +262,28 @@ begin
   ) then
     raise exception 'finalized media ingest authority fields are immutable';
   end if;
+  if new.state = 'finalized' and not found then
+    raise exception 'finalized media ingest must match a verified asset';
+  end if;
+  return new;
+end;
+$$;
+
+create function app_private.prevent_finalized_media_asset_delete()
+returns trigger language plpgsql as $$
+begin
+  if old.authority_state = 'verified' and exists (
+    select 1 from app_private.media_ingests ingest
+    where ingest.id = old.ingest_id and ingest.state = 'finalized' and ingest.reserved_asset_id = old.id
+  ) then
+    if tg_op = 'DELETE' then
+      raise exception 'cannot delete verified asset referenced by finalized ingest';
+    end if;
+    if new.id is distinct from old.id or new.ingest_id is distinct from old.ingest_id or new.authority_state is distinct from old.authority_state then
+      raise exception 'cannot detach verified asset referenced by finalized ingest';
+    end if;
+  end if;
+  if tg_op = 'DELETE' then return old; end if;
   return new;
 end;
 $$;
@@ -282,9 +304,17 @@ create constraint trigger media_derivatives_image_only
 after insert or update on app_private.media_derivatives
 deferrable initially immediate for each row execute function app_private.assert_image_media_derivative();
 
-create trigger media_ingests_protect_finalized
-before update on app_private.media_ingests
-for each row execute function app_private.protect_finalized_media_ingest();
+create constraint trigger media_ingests_protect_finalized
+after insert or update on app_private.media_ingests
+deferrable initially immediate for each row execute function app_private.protect_finalized_media_ingest();
+
+create trigger media_assets_prevent_finalized_delete
+before delete on app_private.media_assets
+for each row execute function app_private.prevent_finalized_media_asset_delete();
+
+create trigger media_assets_prevent_finalized_detach
+before update of id, ingest_id, authority_state on app_private.media_assets
+for each row execute function app_private.prevent_finalized_media_asset_delete();
 
 create index media_ingests_finalize_candidates_idx on app_private.media_ingests (state, lease_until);
 create index media_ingests_cleanup_candidates_idx on app_private.media_ingests (state, stale_after);
@@ -304,6 +334,7 @@ revoke execute on function app_private.assert_valid_source_cover_pointer() from 
 revoke execute on function app_private.assert_valid_media_asset_references() from public, anon, authenticated, service_role;
 revoke execute on function app_private.assert_image_media_derivative() from public, anon, authenticated, service_role;
 revoke execute on function app_private.protect_finalized_media_ingest() from public, anon, authenticated, service_role;
+revoke execute on function app_private.prevent_finalized_media_asset_delete() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_system_platform_mutation() from public;
 
 -- TODO(#media-ledger-contract): 完成 Storage 重驗與雙版本部署後，另以 contract migration
