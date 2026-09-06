@@ -1,4 +1,5 @@
 import postgres from "postgres";
+import { readFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -20,6 +21,36 @@ const database = postgres(adminDatabaseUrl.toString(), {
   prepare: false,
   onnotice: () => undefined,
 });
+const postgresDatabase = postgres(directDatabaseUrl, {
+  max: 1,
+  prepare: false,
+  onnotice: () => undefined,
+});
+
+type MembershipEvidence = Readonly<{
+  adminOption: boolean;
+  grantor: string;
+  inheritOption: boolean;
+  setOption: boolean;
+}>;
+
+async function appMigratorMembershipEvidence() {
+  return postgresDatabase.unsafe<MembershipEvidence[]>(`
+    select
+      grantor.rolname as grantor,
+      membership.admin_option as "adminOption",
+      membership.inherit_option as "inheritOption",
+      membership.set_option as "setOption"
+    from pg_auth_members membership
+    join pg_roles granted_role on granted_role.oid = membership.roleid
+    join pg_roles member_role on member_role.oid = membership.member
+    join pg_roles grantor on grantor.oid = membership.grantor
+    where granted_role.rolname = 'app_migrator'
+      and member_role.rolname = 'postgres'
+    order by grantor.rolname, membership.inherit_option,
+      membership.set_option, membership.admin_option
+  `);
+}
 
 async function snapshot(): Promise<ProductionDatabaseSnapshot> {
   const rows = await database.unsafe<{ snapshot: ProductionDatabaseSnapshot }[]>(
@@ -31,10 +62,12 @@ async function snapshot(): Promise<ProductionDatabaseSnapshot> {
 describe("production migration PostgreSQL catalog checks", () => {
   beforeAll(async () => {
     await database.unsafe("select 1");
+    await postgresDatabase.unsafe("select 1");
   });
 
   afterAll(async () => {
     await database.end();
+    await postgresDatabase.end();
   });
 
   it("accepts the healthy ACL and exact effective default-privilege matrices", async () => {
@@ -42,6 +75,107 @@ describe("production migration PostgreSQL catalog checks", () => {
 
     expect(healthy.unexpectedAclCount).toBe(0);
     expect(healthy.defaultPrivilegeDriftCount).toBe(0);
+  });
+
+  it("revokes PUBLIC execute only after postgres switches to the function owner", async () => {
+    const remediation = await readFile(
+      "supabase/migrations/0010_revoke_public_platform_trigger_execute_as_owner.sql",
+      "utf8",
+    );
+    const functionIdentity =
+      "app_private.prevent_system_platform_mutation()";
+    const identity = await postgresDatabase.unsafe<
+      { currentUser: string; sessionUser: string }[]
+    >(`
+      select current_user as "currentUser", session_user as "sessionUser"
+    `);
+    expect(identity[0]).toEqual({
+      currentUser: "postgres",
+      sessionUser: "postgres",
+    });
+
+    const membershipBaseline = await appMigratorMembershipEvidence();
+    expect(membershipBaseline.length).toBeGreaterThan(0);
+
+    await postgresDatabase.unsafe("begin");
+    try {
+      await postgresDatabase.unsafe("grant app_migrator to postgres");
+      const membershipWithTemporaryGrant =
+        await appMigratorMembershipEvidence();
+      expect(membershipWithTemporaryGrant).toEqual([
+        {
+          adminOption: false,
+          grantor: "postgres",
+          inheritOption: true,
+          setOption: true,
+        },
+        ...membershipBaseline,
+      ]);
+
+      await postgresDatabase.unsafe(`
+        set local role app_migrator;
+        grant usage on schema app_private to postgres;
+        grant execute on function ${functionIdentity} to public;
+        reset role;
+        revoke app_migrator from postgres;
+      `);
+      expect(await appMigratorMembershipEvidence()).toEqual(membershipBaseline);
+
+      await postgresDatabase.unsafe(
+        `revoke execute on function ${functionIdentity} from public`,
+      );
+
+      const afterMemberRevoke = await postgresDatabase.unsafe<
+        {
+          acl: string[];
+          currentUser: string;
+          memberOfOwnerRole: boolean;
+          publicCanExecute: boolean;
+        }[]
+      >(`
+        select
+          coalesce(procedure.proacl::text[], array[]::text[]) as acl,
+          current_user as "currentUser",
+          pg_has_role(current_user, 'app_migrator', 'member') as "memberOfOwnerRole",
+          has_function_privilege('public', procedure.oid, 'execute') as "publicCanExecute"
+        from pg_proc procedure
+        where procedure.oid = to_regprocedure('${functionIdentity}')
+      `);
+      expect(afterMemberRevoke[0]).toMatchObject({
+        currentUser: "postgres",
+        memberOfOwnerRole: true,
+        publicCanExecute: true,
+      });
+      expect(afterMemberRevoke[0]!.acl).toContain("=X/app_migrator");
+
+      await postgresDatabase.unsafe(remediation);
+
+      const afterOwnerRevoke = await postgresDatabase.unsafe<
+        {
+          acl: string[];
+          currentUser: string;
+          publicCanExecute: boolean;
+          runtimeCanExecute: boolean;
+        }[]
+      >(`
+        select
+          coalesce(procedure.proacl::text[], array[]::text[]) as acl,
+          current_user as "currentUser",
+          has_function_privilege('public', procedure.oid, 'execute') as "publicCanExecute",
+          has_function_privilege('app_runtime', procedure.oid, 'execute') as "runtimeCanExecute"
+        from pg_proc procedure
+        where procedure.oid = to_regprocedure('${functionIdentity}')
+      `);
+      expect(afterOwnerRevoke[0]).toMatchObject({
+        currentUser: "postgres",
+        publicCanExecute: false,
+        runtimeCanExecute: false,
+      });
+      expect(afterOwnerRevoke[0]!.acl).not.toContain("=X/app_migrator");
+      expect(await appMigratorMembershipEvidence()).toEqual(membershipBaseline);
+    } finally {
+      await postgresDatabase.unsafe("rollback");
+    }
   });
 
   it("detects PUBLIC OID 0 grants across every supported catalog branch", async () => {

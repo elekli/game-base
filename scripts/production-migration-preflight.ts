@@ -80,18 +80,44 @@ const LINT_BASELINE_PATH = ".github/production-migration-lint-baseline.json";
 const RLS_POLICY_MANIFEST_PATH = ".github/production-rls-policy-manifest.json";
 const RUNTIME_ROLE_REACHABILITY_ALLOWLIST_PATH =
   ".github/production-runtime-role-reachability-allowlist.json";
-const KNOWN_DRIFT_REMEDIATION_NAME = "revoke_public_platform_trigger_execute";
-const KNOWN_DRIFT_REMEDIATION_SQL =
+const LEGACY_KNOWN_DRIFT_REMEDIATION_NAME =
+  "revoke_public_platform_trigger_execute";
+const LEGACY_KNOWN_DRIFT_REMEDIATION_SQL =
   "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n";
-const KNOWN_DRIFT_REMEDIATION_FILENAMES = new Set([
+const LEGACY_KNOWN_DRIFT_REMEDIATION_FILENAMES = new Set([
   "0007_revoke_public_platform_trigger_execute.sql",
   "0008_revoke_public_platform_trigger_execute.sql",
   "0009_revoke_public_platform_trigger_execute.sql",
 ]);
 const PENDING_KNOWN_DRIFT_REMEDIATION = {
-  version: "0009",
-  filename: "0009_revoke_public_platform_trigger_execute.sql",
+  version: "0010",
+  name: "revoke_public_platform_trigger_execute_as_owner",
+  filename: "0010_revoke_public_platform_trigger_execute_as_owner.sql",
+  sql:
+    "grant app_migrator to postgres;\n" +
+    "set local role app_migrator;\n" +
+    "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n" +
+    "reset role;\n" +
+    "revoke app_migrator from postgres;\n",
 } as const;
+
+function isExactKnownDriftRemediation(migration: {
+  version: string;
+  name: string;
+  filename: string;
+  sql: string;
+}) {
+  const isLegacyRemediation =
+    LEGACY_KNOWN_DRIFT_REMEDIATION_FILENAMES.has(migration.filename) &&
+    migration.name === LEGACY_KNOWN_DRIFT_REMEDIATION_NAME &&
+    migration.sql === LEGACY_KNOWN_DRIFT_REMEDIATION_SQL;
+  const isPendingRemediation =
+    migration.version === PENDING_KNOWN_DRIFT_REMEDIATION.version &&
+    migration.name === PENDING_KNOWN_DRIFT_REMEDIATION.name &&
+    migration.filename === PENDING_KNOWN_DRIFT_REMEDIATION.filename &&
+    migration.sql === PENDING_KNOWN_DRIFT_REMEDIATION.sql;
+  return isLegacyRemediation || isPendingRemediation;
+}
 const INITIAL_LINT_BASELINE = {
   "0001_runtime_security.sql":
     "c6bf64ba267281f66cbedfffd6854c3a2eade1e9631587a2e738fee9a544d787",
@@ -1226,10 +1252,7 @@ export async function lintProductionMigrations(
   }
   for (const migration of migrations) {
     const digest = createHash("sha256").update(migration.sql).digest("hex");
-    const isExactKnownRemediation =
-      KNOWN_DRIFT_REMEDIATION_FILENAMES.has(migration.filename) &&
-      migration.name === KNOWN_DRIFT_REMEDIATION_NAME &&
-      migration.sql === KNOWN_DRIFT_REMEDIATION_SQL;
+    const isExactKnownRemediation = isExactKnownDriftRemediation(migration);
     if (
       !isExactKnownRemediation &&
       containsForbiddenMigrationSql(migration.sql) &&
@@ -1516,8 +1539,8 @@ export async function runProductionMigrationPreflight(options: {
       pendingMigrations.length === 1 &&
       pendingRemediation!.version === PENDING_KNOWN_DRIFT_REMEDIATION.version &&
       pendingRemediation!.filename === PENDING_KNOWN_DRIFT_REMEDIATION.filename &&
-      pendingRemediation!.name === KNOWN_DRIFT_REMEDIATION_NAME &&
-      pendingRemediation!.sql === KNOWN_DRIFT_REMEDIATION_SQL;
+      pendingRemediation!.name === PENDING_KNOWN_DRIFT_REMEDIATION.name &&
+      pendingRemediation!.sql === PENDING_KNOWN_DRIFT_REMEDIATION.sql;
     const preflightState = assertSnapshot(
       snapshot,
       migrations.map(({ version, name }) => ({ version, name })),
