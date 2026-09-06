@@ -1,8 +1,21 @@
-import { pgTable, pgSchema, uniqueIndex, foreignKey, pgPolicy, uuid, text, type AnyPgColumn, index, timestamp, jsonb, integer, boolean, numeric, bigint } from "drizzle-orm/pg-core"
+import { pgTable, pgSchema, foreignKey, pgPolicy, uuid, text, jsonb, timestamp, uniqueIndex, type AnyPgColumn, index, integer, boolean, numeric, bigint } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 export const appPrivate = pgSchema("app_private");
 
+
+export const externalGameIdentitiesInAppPrivate = appPrivate.table("external_game_identities", {
+	id: uuid().defaultRandom().notNull(),
+	provider: text().notNull(),
+	sourceId: text("source_id").notNull(),
+	medium: text().notNull(),
+	snapshot: jsonb().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	sourceCoverAssetId: uuid("source_cover_asset_id").references((): AnyPgColumn => mediaAssetsInAppPrivate.id, { onDelete: "restrict" }),
+}, (table) => [
+	pgPolicy("runtime_external_identity", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
 
 export const gameNamesInAppPrivate = appPrivate.table("game_names", {
 	id: uuid().defaultRandom().notNull(),
@@ -41,19 +54,6 @@ export const gamesInAppPrivate = appPrivate.table("games", {
 			name: "games_external_identity_medium_fk"
 		}),
 	pgPolicy("runtime_games", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
-]);
-
-export const externalGameIdentitiesInAppPrivate = appPrivate.table("external_game_identities", {
-	id: uuid().defaultRandom().notNull(),
-	provider: text().notNull(),
-	sourceId: text("source_id").notNull(),
-	medium: text().notNull(),
-	snapshot: jsonb().notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	sourceCoverAssetId: uuid("source_cover_asset_id").references((): AnyPgColumn => mediaAssetsInAppPrivate.id, { onDelete: "restrict" }),
-}, (table) => [
-	pgPolicy("runtime_external_identity", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
 export const sourceCategoriesInAppPrivate = appPrivate.table("source_categories", {
@@ -243,14 +243,14 @@ export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {
 	originalState: text("original_state").notNull(),
 	thumbnailState: text("thumbnail_state").notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	idempotencyKey: text("idempotency_key").notNull(),
-	reservedAssetId: uuid("reserved_asset_id").notNull(),
-	channel: text().notNull(),
-	purpose: text().notNull(),
+	idempotencyKey: text("idempotency_key"),
+	reservedAssetId: uuid("reserved_asset_id"),
+	channel: text(),
+	purpose: text(),
 	externalGameIdentityId: uuid("external_game_identity_id").references((): AnyPgColumn => externalGameIdentitiesInAppPrivate.id, { onDelete: "restrict" }),
-	originalObjectPath: text("original_object_path").notNull(),
-	originalFileName: text("original_file_name").notNull(),
-	declaredMimeType: text("declared_mime_type").notNull(),
+	originalObjectPath: text("original_object_path"),
+	originalFileName: text("original_file_name"),
+	declaredMimeType: text("declared_mime_type"),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	declaredByteSize: bigint("declared_byte_size", { mode: "number" }),
 	actualMimeType: text("actual_mime_type"),
@@ -258,16 +258,21 @@ export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {
 	actualByteSize: bigint("actual_byte_size", { mode: "number" }),
 	imageWidth: integer("image_width"),
 	imageHeight: integer("image_height"),
-	state: text().notNull(),
+	state: text(),
 	leaseToken: uuid("lease_token"),
 	leaseUntil: timestamp("lease_until", { withTimezone: true, mode: 'string' }),
-	staleAfter: timestamp("stale_after", { withTimezone: true, mode: 'string' }).notNull(),
+	staleAfter: timestamp("stale_after", { withTimezone: true, mode: 'string' }),
 	lastErrorCode: text("last_error_code"),
 	finalizedAt: timestamp("finalized_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
 	index("media_ingests_cleanup_candidates_idx").using("btree", table.state.asc().nullsLast().op("text_ops"), table.staleAfter.asc().nullsLast().op("timestamptz_ops")),
 	index("media_ingests_finalize_candidates_idx").using("btree", table.state.asc().nullsLast().op("text_ops"), table.leaseUntil.asc().nullsLast().op("timestamptz_ops")),
 	index("media_ingests_game_id_idx").using("btree", table.gameId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.gameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "media_ingests_game_id_fkey"
+		}).onDelete("cascade"),
 	pgPolicy("runtime_media_ingests", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
@@ -280,11 +285,11 @@ export const mediaAssetsInAppPrivate = appPrivate.table("media_assets", {
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	byteSize: bigint("byte_size", { mode: "number" }).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	gameId: uuid("game_id").notNull().references((): AnyPgColumn => gamesInAppPrivate.id, { onDelete: "restrict" }),
-	purpose: text().notNull(),
-	originalObjectPath: text("original_object_path").notNull(),
-	originalFileName: text("original_file_name").notNull(),
-	actualMimeType: text("actual_mime_type").notNull(),
+	gameId: uuid("game_id"),
+	purpose: text(),
+	originalObjectPath: text("original_object_path"),
+	originalFileName: text("original_file_name"),
+	actualMimeType: text("actual_mime_type"),
 	width: integer(),
 	height: integer(),
 	caption: text(),
@@ -293,8 +298,19 @@ export const mediaAssetsInAppPrivate = appPrivate.table("media_assets", {
 	removedAt: timestamp("removed_at", { withTimezone: true, mode: 'string' }),
 	removedReason: text("removed_reason"),
 	supersededAt: timestamp("superseded_at", { withTimezone: true, mode: 'string' }),
+	authorityState: text("authority_state").default('legacy_unverified'),
 }, (table) => [
 	index("media_assets_game_id_idx").using("btree", table.gameId.asc().nullsLast().op("uuid_ops")).where(sql`((removed_at IS NULL) AND (superseded_at IS NULL))`),
+	foreignKey({
+			columns: [table.ingestId],
+			foreignColumns: [mediaIngestsInAppPrivate.id],
+			name: "media_assets_ingest_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.gameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "media_assets_game_id_fkey"
+		}).onDelete("cascade"),
 	pgPolicy("runtime_media_assets", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
@@ -305,7 +321,8 @@ export const mediaDerivativesInAppPrivate = appPrivate.table("media_derivatives"
 	objectKey: text("object_key"),
 	state: text().notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	spec: text().notNull(),
+	spec: text(),
+	authorityState: text("authority_state").default('legacy_unverified'),
 	currentObjectPath: text("current_object_path"),
 	width: integer(),
 	height: integer(),
@@ -324,7 +341,7 @@ export const mediaDerivativesInAppPrivate = appPrivate.table("media_derivatives"
 			columns: [table.assetId],
 			foreignColumns: [mediaAssetsInAppPrivate.id],
 			name: "media_derivatives_asset_id_fkey"
-		}).onDelete("restrict"),
+		}).onDelete("cascade"),
 	pgPolicy("runtime_media_derivatives", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
@@ -346,4 +363,24 @@ export const mediaDerivativeAttemptsInAppPrivate = appPrivate.table("media_deriv
 			name: "media_derivative_attempts_derivative_id_fkey"
 		}).onDelete("restrict"),
 	pgPolicy("runtime_media_derivative_attempts", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
+export const sourceRefreshOperationsInAppPrivate = appPrivate.table("source_refresh_operations", {
+	operationId: uuid("operation_id").notNull(),
+	gameId: uuid("game_id").notNull(),
+	externalGameIdentityId: uuid("external_game_identity_id").notNull(),
+	payloadFingerprint: text("payload_fingerprint").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.gameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "source_refresh_operations_game_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.externalGameIdentityId],
+			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
+			name: "source_refresh_operations_external_game_identity_id_fkey"
+		}).onDelete("cascade"),
+	pgPolicy("runtime_source_refresh_operations", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);

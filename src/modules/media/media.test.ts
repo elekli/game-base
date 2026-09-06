@@ -4,11 +4,18 @@ import {
   MediaFileEmptyError,
   MediaFileTooLargeError,
   MediaStoredObjectInvalidError,
+  MediaFinalizeUnavailableError,
   MediaUploadIdempotencyConflictError,
   createInMemoryMediaStore,
   createMediaService,
+  type BeginMediaUploadResult,
   type MediaObjectStore,
 } from "./index";
+
+function grantFrom(result: BeginMediaUploadResult) {
+  if (result.status !== "upload_grant") throw new Error("expected upload grant");
+  return result;
+}
 
 const owner = { sub: "owner-subject" };
 const gameId = "11111111-1111-4111-8111-111111111111";
@@ -98,8 +105,8 @@ describe("媒體公開介面", () => {
       objects: objectStore({ bytes: png(), mimeType: "image/png" }),
     });
 
-    const first = await service.beginMediaUpload(owner, command());
-    const replay = await service.beginMediaUpload(owner, command());
+    const first = grantFrom(await service.beginMediaUpload(owner, command()));
+    const replay = grantFrom(await service.beginMediaUpload(owner, command()));
 
     expect(replay).toEqual(first);
     expect(first.objectPath).toMatch(new RegExp(`^originals/${first.assetId}/[0-9a-f-]{36}$`));
@@ -136,7 +143,7 @@ describe("媒體公開介面", () => {
       store: createInMemoryMediaStore({ activeGameIds: [gameId] }),
       objects: objectStore({ bytes: png(), mimeType: "image/png" }),
     });
-    const grant = await service.beginMediaUpload(owner, command());
+    const grant = grantFrom(await service.beginMediaUpload(owner, command()));
 
     const first = await service.finalizeMediaUpload(owner, { idempotencyKey });
     const replay = await service.finalizeMediaUpload(owner, { idempotencyKey });
@@ -146,6 +153,34 @@ describe("媒體公開介面", () => {
       asset: { id: grant.assetId, purpose: "gallery_image", actualMimeType: "image/png", width: 2, height: 3 },
       thumbnail: { spec: "thumb_webp_v1", state: "pending" },
     });
+  });
+
+  it("begin 重播 finalized／finalizing ingest 不再簽發可覆寫原檔的 grant", async () => {
+    const store = createInMemoryMediaStore({ activeGameIds: [gameId] });
+    const createUploadGrant = vi.fn(async (path: string) => ({ token: `grant:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }));
+    const service = createMediaService({ store, objects: { ...objectStore({ bytes: png(), mimeType: "image/png" }), createUploadGrant } });
+    await service.beginMediaUpload(owner, command());
+    const finalized = await service.finalizeMediaUpload(owner, { idempotencyKey });
+
+    await expect(service.beginMediaUpload(owner, command())).resolves.toEqual({ status: "already_finalized", result: finalized });
+    await expect(service.beginMediaUpload(owner, command({ originalFileName: "finalized-different.png" })))
+      .rejects.toBeInstanceOf(MediaUploadIdempotencyConflictError);
+    expect(createUploadGrant).toHaveBeenCalledTimes(1);
+
+    const secondKey = "22222222-2222-4222-8222-222222222223";
+    await service.beginMediaUpload(owner, { ...command(), idempotencyKey: secondKey });
+    await store.claimFinalize(secondKey, { token: "33333333-3333-4333-8333-333333333333", until: new Date(Date.now() + 60_000).toISOString() });
+    await expect(service.beginMediaUpload(owner, { ...command(), idempotencyKey: secondKey })).resolves.toEqual({ status: "finalizing" });
+    expect(createUploadGrant).toHaveBeenCalledTimes(2);
+  });
+
+  it("過期 lease 即使 token 未被取代也不得完成 finalize", async () => {
+    const start = new Date("2026-09-06T00:00:00.000Z");
+    const store = createInMemoryMediaStore({ activeGameIds: [gameId], now: () => new Date(start.getTime() + 10 * 60_000) });
+    const service = createMediaService({ store, objects: objectStore({ bytes: png(), mimeType: "image/png" }), now: () => start });
+    await service.beginMediaUpload(owner, command());
+
+    await expect(service.finalizeMediaUpload(owner, { idempotencyKey })).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
   });
 
   it.each([

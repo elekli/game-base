@@ -9,7 +9,7 @@ function sameCommand(ingest: MediaIngest, command: BeginMediaUploadCommand): boo
   return ingest.gameId === command.gameId && ingest.purpose === command.purpose && ingest.originalFileName === command.originalFileName && ingest.declaredMimeType === command.declaredMimeType && ingest.declaredByteSize === command.declaredByteSize;
 }
 
-export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readonly string[] }>): MediaStore {
+export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readonly string[]; now?: () => Date }>): MediaStore {
   const games = new Set(input.activeGameIds);
   const ingests = new Map<string, MediaIngest>();
   const results = new Map<string, MediaUploadResult>();
@@ -20,7 +20,11 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
       const existing = ingests.get(command.idempotencyKey);
       if (existing) {
         if (!sameCommand(existing, command)) throw new MediaUploadIdempotencyConflictError();
-        return { ingest: existing, created: false };
+        const result = results.get(command.idempotencyKey);
+        if (existing.state === "finalized" && result) return { status: "already_finalized", result };
+        if (existing.state === "finalizing") return { status: "finalizing" };
+        if (existing.state !== "issued") throw new MediaFinalizeUnavailableError();
+        return { status: "grantable", ingest: existing, created: false };
       }
       const ingest: MediaIngest = {
         id: reserved.ingestId,
@@ -38,7 +42,7 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
         staleAfter: reserved.staleAfter,
       };
       ingests.set(command.idempotencyKey, ingest);
-      return { ingest, created: true };
+      return { status: "grantable", ingest, created: true };
     },
     async renewGrant(key, objectPath, staleAfter) {
       const ingest = ingests.get(key);
@@ -67,7 +71,7 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
       const existing = results.get(key);
       if (existing) return existing;
       const ingest = ingests.get(key);
-      if (!ingest || ingest.state !== "finalizing" || ingest.leaseToken !== leaseToken) throw new MediaFinalizeUnavailableError();
+      if (!ingest || ingest.state !== "finalizing" || ingest.leaseToken !== leaseToken || !ingest.leaseUntil || new Date(ingest.leaseUntil) <= (input.now?.() ?? new Date())) throw new MediaFinalizeUnavailableError();
       const now = new Date().toISOString();
       const asset = {
         id: ingest.reservedAssetId,

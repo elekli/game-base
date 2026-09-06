@@ -2,7 +2,7 @@ import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDatabase } from "@/adapters/database";
 import { PostgresGameStore } from "@/adapters/database-game-store";
-import type { GameRecord, SourceSnapshot } from "@/modules/games";
+import { SourceRefreshIdempotencyConflictError, type GameRecord, type SourceSnapshot } from "@/modules/games";
 
 const SOURCE_FAILURE_TRIGGER = "rollback_integration_source_failure";
 const SOURCE_FAILURE_FUNCTION = "app_private.rollback_integration_source_failure";
@@ -72,8 +72,9 @@ async function cleanTestData(): Promise<void> {
   await runtimeDatabase.unsafe("delete from app_private.media_derivatives where asset_id in (select asset.id from app_private.media_assets asset join app_private.games game on game.id = asset.game_id where game.display_name like '交易回滾測試：%')");
   await runtimeDatabase.unsafe("delete from app_private.media_assets where game_id in (select id from app_private.games where display_name like '交易回滾測試：%')");
   await runtimeDatabase.unsafe("delete from app_private.media_ingests where game_id in (select id from app_private.games where display_name like '交易回滾測試：%')");
+  await runtimeDatabase.unsafe("delete from app_private.source_refresh_operations where game_id in (select id from app_private.games where display_name like '交易回滾測試：%')");
   await runtimeDatabase.unsafe("delete from app_private.games where display_name like '交易回滾測試：%'");
-  await runtimeDatabase.unsafe("delete from app_private.external_game_identities where provider = 'bgg' and source_id in ('980001', '980002', '980003')");
+  await runtimeDatabase.unsafe("delete from app_private.external_game_identities where provider = 'bgg' and source_id in ('980001', '980002', '980003', '980004')");
   await runtimeDatabase.unsafe("delete from app_private.source_categories where source_category_id like 'rollback-integration-%'");
   await runtimeDatabase.unsafe("delete from app_private.contributors where source_provider = 'bgg' and source_contributor_id like 'rollback-integration-%'");
   await runtimeDatabase.unsafe("delete from app_private.platforms where is_system = false and normalized_name like '交易回滾測試平台%'");
@@ -209,14 +210,28 @@ afterAll(async () => {
 });
 
 describe("PostgresGameStore 真實交易回滾", () => {
+  it("coverIngestState 以最新 ingest 決定，不被舊 ready 遮蔽", async () => {
+    const snapshot = snapshotFor("980004", "交易回滾測試：封面狀態", "rollback-integration-state-category", "rollback-integration-state-contributor", "rollback-state-cover", 3.2);
+    const created = await store.createFromSource(snapshot.ref, snapshot);
+    await runtimeDatabase.unsafe("update app_private.media_ingests set original_state = 'ready', thumbnail_state = 'ready', created_at = '2026-01-01T00:00:00Z' where game_id = $1", [created.game.id]);
+    await store.refreshSource(created.game.id, snapshot, "73000000-0000-4000-8000-000000000001");
+    await runtimeDatabase.unsafe("update app_private.media_ingests set created_at = '2026-01-02T00:00:00Z' where game_id = $1 and original_state = 'pending'", [created.game.id]);
+
+    expect((await store.get(created.game.id))?.coverIngestState).toBe("pending");
+    await runtimeDatabase.unsafe("update app_private.media_ingests set original_state = 'failed' where game_id = $1 and created_at = '2026-01-02T00:00:00Z'", [created.game.id]);
+    expect((await store.get(created.game.id))?.coverIngestState).toBe("failed");
+  });
+
   it("相同封面網址的後續 refresh 仍建立新的來源攝取紀錄", async () => {
     const snapshot = snapshotFor("980003", "交易回滾測試：封面刷新", "rollback-integration-cover-category", "rollback-integration-cover-contributor", "rollback-refresh-same-cover", 3.2);
     const created = await store.createFromSource(snapshot.ref, snapshot);
 
     const retryOperationId = "71000000-0000-4000-8000-000000000001";
     await store.refreshSource(created.game.id, snapshot, retryOperationId);
-    await store.refreshSource(created.game.id, snapshot, retryOperationId);
-    await store.refreshSource(created.game.id, snapshot, "71000000-0000-4000-8000-000000000002");
+    const changed = { ...snapshot, title: "交易回滾測試：封面刷新後", coverUrl: "https://cf.geekdo-images.com/rollback-refresh-changed/original/img/test.jpg" };
+    await expect(store.refreshSource(created.game.id, changed, retryOperationId)).rejects.toBeInstanceOf(SourceRefreshIdempotencyConflictError);
+    expect((await store.get(created.game.id))?.snapshot?.title).toBe(snapshot.title);
+    await store.refreshSource(created.game.id, changed, "71000000-0000-4000-8000-000000000002");
 
     const rows = await runtimeDatabase.unsafe<DatabaseRow[]>(`
       select idempotency_key, external_game_identity_id, source_url
@@ -227,7 +242,7 @@ describe("PostgresGameStore 真實交易回滾", () => {
     expect(rows).toHaveLength(3);
     expect(new Set(rows.map((row) => row.idempotency_key)).size).toBe(3);
     expect(rows.every((row) => row.external_game_identity_id === created.game.externalIdentityId)).toBe(true);
-    expect(rows.every((row) => row.source_url === snapshot.coverUrl)).toBe(true);
+    expect(rows.map((row) => row.source_url)).toEqual(expect.arrayContaining([snapshot.coverUrl, changed.coverUrl]));
   });
 
   it("link 中途失敗後不留下 identity、來源列、封面匯入或改動 owner data", async () => {

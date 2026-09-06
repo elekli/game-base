@@ -67,7 +67,7 @@ async function readResult(executor: QueryExecutor, ingestId: string): Promise<Me
       derivative.spec, derivative.state as derivative_state
     from app_private.media_assets asset
     left join app_private.media_derivatives derivative on derivative.asset_id = asset.id
-    where asset.ingest_id = ${ingestId}
+    where asset.ingest_id = ${ingestId} and asset.authority_state = 'verified'
     limit 1
   `) as Row[];
   if (!rows[0]) return null;
@@ -104,7 +104,14 @@ export class PostgresMediaStore implements MediaStore {
       const rows = inserted[0] ? inserted : await tx.execute(sql`select ${ingestFields} from app_private.media_ingests where idempotency_key = ${command.idempotencyKey}`) as Row[];
       const ingest = ingestFrom(rows[0]);
       if (!sameCommand(ingest, command)) throw new MediaUploadIdempotencyConflictError();
-      return { ingest, created: Boolean(inserted[0]) };
+      if (ingest.state === "finalized") {
+        const result = await readResult(tx, ingest.id);
+        if (!result) throw new MediaFinalizeUnavailableError();
+        return { status: "already_finalized", result };
+      }
+      if (ingest.state === "finalizing") return { status: "finalizing" };
+      if (ingest.state !== "issued") throw new MediaFinalizeUnavailableError();
+      return { status: "grantable", ingest, created: Boolean(inserted[0]) };
     });
   }
 
@@ -115,7 +122,7 @@ export class PostgresMediaStore implements MediaStore {
 
   async claimFinalize(idempotencyKey: string, lease: Readonly<{ token: string; until: string }>): Promise<FinalizeClaim> {
     return this.db.transaction(async (tx) => {
-      const rows = await tx.execute(sql`select ${ingestFields} from app_private.media_ingests where idempotency_key = ${idempotencyKey} for update`) as Row[];
+      const rows = await tx.execute(sql`select ${ingestFields}, lease_until > now() as lease_valid from app_private.media_ingests where idempotency_key = ${idempotencyKey} for update`) as Row[];
       if (!rows[0]) throw new MediaFinalizeUnavailableError();
       const ingest = ingestFrom(rows[0]);
       if (ingest.state === "finalized") {
@@ -124,7 +131,7 @@ export class PostgresMediaStore implements MediaStore {
         return { status: "already_finalized", result };
       }
       if (ingest.state === "cleanup_pending" || ingest.state === "expired") throw new MediaFinalizeUnavailableError();
-      if (ingest.state === "finalizing" && ingest.leaseUntil && new Date(ingest.leaseUntil) > new Date()) throw new MediaFinalizeUnavailableError();
+      if (ingest.state === "finalizing" && rows[0].lease_valid === true) throw new MediaFinalizeUnavailableError();
       const claimedRows = await tx.execute(sql`
         update app_private.media_ingests
         set state = 'finalizing', lease_token = ${lease.token}, lease_until = ${lease.until}, last_error_code = null
@@ -154,7 +161,7 @@ export class PostgresMediaStore implements MediaStore {
 
   async completeFinalize(idempotencyKey: string, leaseToken: string, object: ValidatedMediaObject): Promise<MediaUploadResult> {
     return this.db.transaction(async (tx) => {
-      const rows = await tx.execute(sql`select ${ingestFields} from app_private.media_ingests where idempotency_key = ${idempotencyKey} for update`) as Row[];
+      const rows = await tx.execute(sql`select ${ingestFields}, lease_until > now() as lease_valid from app_private.media_ingests where idempotency_key = ${idempotencyKey} for update`) as Row[];
       if (!rows[0]) throw new MediaFinalizeUnavailableError();
       const ingest = ingestFrom(rows[0]);
       if (ingest.state === "finalized") {
@@ -162,7 +169,7 @@ export class PostgresMediaStore implements MediaStore {
         if (!existing) throw new MediaFinalizeUnavailableError();
         return existing;
       }
-      if (ingest.state !== "finalizing" || ingest.leaseToken !== leaseToken) throw new MediaFinalizeUnavailableError();
+      if (ingest.state !== "finalizing" || ingest.leaseToken !== leaseToken || rows[0].lease_valid !== true) throw new MediaFinalizeUnavailableError();
       await tx.execute(sql`
         update app_private.media_ingests
         set actual_mime_type = ${object.actualMimeType}, actual_byte_size = ${object.byteSize},
@@ -172,17 +179,17 @@ export class PostgresMediaStore implements MediaStore {
       await tx.execute(sql`
         insert into app_private.media_assets (
           id, ingest_id, game_id, purpose, original_object_path, original_file_name,
-          actual_mime_type, byte_size, width, height, kind, object_key, mime_type
+          actual_mime_type, byte_size, width, height, authority_state, kind, object_key, mime_type
         ) values (
           ${ingest.reservedAssetId}, ${ingest.id}, ${ingest.gameId}, ${ingest.purpose}, ${ingest.originalObjectPath},
-          ${ingest.originalFileName}, ${object.actualMimeType}, ${object.byteSize}, ${object.width}, ${object.height},
+          ${ingest.originalFileName}, ${object.actualMimeType}, ${object.byteSize}, ${object.width}, ${object.height}, 'verified',
           ${ingest.purpose}, ${ingest.originalObjectPath}, ${object.actualMimeType}
         ) on conflict (ingest_id) do nothing
       `);
       if (ingest.purpose !== "attachment") {
         await tx.execute(sql`
-          insert into app_private.media_derivatives (asset_id, spec, state, kind)
-          values (${ingest.reservedAssetId}, ${MEDIA_THUMBNAIL_SPEC}, 'pending', 'thumbnail_webp')
+          insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind)
+          values (${ingest.reservedAssetId}, ${MEDIA_THUMBNAIL_SPEC}, 'verified', 'pending', 'thumbnail_webp')
           on conflict (asset_id, spec) do nothing
         `);
       }

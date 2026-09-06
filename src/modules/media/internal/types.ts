@@ -18,6 +18,7 @@ export type BeginMediaUploadCommand = Readonly<{
 export type FinalizeMediaUploadCommand = Readonly<{ idempotencyKey: string }>;
 
 export type UploadGrant = Readonly<{
+  status: "upload_grant";
   ingestId: string;
   assetId: string;
   objectPath: string;
@@ -73,10 +74,14 @@ export type MediaIngest = Readonly<{
   staleAfter: string;
 }>;
 
-export type BeginMediaRecord = Readonly<{
-  ingest: MediaIngest;
-  created: boolean;
-}>;
+export type BeginMediaRecord =
+  | Readonly<{ status: "grantable"; ingest: MediaIngest; created: boolean }>
+  | Readonly<{ status: "finalizing" }>
+  | Readonly<{ status: "already_finalized"; result: MediaUploadResult }>;
+
+export type BeginMediaUploadResult = UploadGrant
+  | Readonly<{ status: "finalizing" }>
+  | Readonly<{ status: "already_finalized"; result: MediaUploadResult }>;
 
 export type FinalizeClaim =
   | Readonly<{ status: "already_finalized"; result: MediaUploadResult }>
@@ -99,6 +104,6 @@ export type MediaStore = Readonly<{
 }>;
 
 export type MediaService = Readonly<{
-  beginMediaUpload(owner: OwnerIdentity, command: BeginMediaUploadCommand): Promise<UploadGrant>;
+  beginMediaUpload(owner: OwnerIdentity, command: BeginMediaUploadCommand): Promise<BeginMediaUploadResult>;
   finalizeMediaUpload(owner: OwnerIdentity, command: FinalizeMediaUploadCommand): Promise<MediaUploadResult>;
 }>;

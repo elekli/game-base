@@ -1,5 +1,5 @@
 begin;
-select plan(21);
+select plan(24);
 
 select has_column('app_private', 'media_ingests', 'idempotency_key', 'ingest 保存全域冪等鍵');
 select has_column('app_private', 'media_ingests', 'reserved_asset_id', 'ingest 預留固定 asset id');
@@ -19,6 +19,7 @@ select ok((
   join pg_opclass opc on opc.oid = idx.indclass[1]
   where rel.relname = 'media_ingests_finalize_candidates_idx'
 ), 'finalize 索引 lease_until 使用 timestamptz_ops');
+select ok(not has_function_privilege('public', 'app_private.prevent_system_platform_mutation()', 'execute'), 'system platform trigger function 不授予 PUBLIC EXECUTE');
 
 grant app_runtime to postgres;
 grant usage on schema extensions to app_runtime;
@@ -75,11 +76,11 @@ where id = '20000000-0000-4000-8000-000000000001';
 
 insert into app_private.media_assets (
   id, ingest_id, game_id, purpose, original_object_path, original_file_name,
-  actual_mime_type, byte_size, width, height, kind, object_key, mime_type
+  actual_mime_type, byte_size, width, height, authority_state, kind, object_key, mime_type
 ) values (
   '40000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001',
   '10000000-0000-4000-8000-000000000001', 'gallery_image',
-  'originals/40000000-0000-4000-8000-000000000001/a', 'photo.png', 'image/png', 24, 2, 3,
+  'originals/40000000-0000-4000-8000-000000000001/a', 'photo.png', 'image/png', 24, 2, 3, 'verified',
   'gallery_image', 'originals/40000000-0000-4000-8000-000000000001/a', 'image/png'
 );
 
@@ -89,9 +90,22 @@ select extensions.throws_like(
   '權威 asset 不可為零 byte'
 );
 
-insert into app_private.media_derivatives (asset_id, spec, state, kind)
-values ('40000000-0000-4000-8000-000000000001', 'thumb_webp_v1', 'pending', 'thumbnail_webp');
+insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind)
+values ('40000000-0000-4000-8000-000000000001', 'thumb_webp_v1', 'verified', 'pending', 'thumbnail_webp');
 select ok(exists(select 1 from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001' and state = 'pending' and current_object_path is null), '圖片可建立尚無指標的 pending derivative');
+
+update app_private.media_ingests set state = 'finalized', lease_token = null, lease_until = null, finalized_at = now()
+where id = '20000000-0000-4000-8000-000000000001';
+select extensions.throws_like(
+  $$update app_private.media_ingests set state = 'issued' where id = '20000000-0000-4000-8000-000000000001'$$,
+  '%finalized media ingest authority fields are immutable%',
+  '已有權威 asset 的 ingest 不可退回 issued'
+);
+select extensions.throws_like(
+  $$update app_private.media_ingests set reserved_asset_id = gen_random_uuid() where id = '20000000-0000-4000-8000-000000000001'$$,
+  '%finalized media ingest authority fields are immutable%',
+  '已有權威 asset 的 ingest 不可改寫 immutable authority 欄位'
+);
 
 select extensions.throws_like(
   $$update app_private.media_derivatives set state = 'ready' where asset_id = '40000000-0000-4000-8000-000000000001'$$,

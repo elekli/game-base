@@ -4,10 +4,17 @@ import { createDatabase } from "@/adapters/database";
 import { PostgresMediaStore } from "@/adapters/postgres-media-store";
 import {
   MediaStoredObjectInvalidError,
+  MediaFinalizeUnavailableError,
   MediaUploadIdempotencyConflictError,
   createMediaService,
+  type BeginMediaUploadResult,
   type MediaObjectStore,
 } from "@/modules/media";
+
+function grantFrom(result: BeginMediaUploadResult) {
+  if (result.status !== "upload_grant") throw new Error("expected upload grant");
+  return result;
+}
 
 const directDatabaseUrl = process.env.DIRECT_DATABASE_URL ?? "postgres://postgres:postgres@127.0.0.1:54322/postgres";
 const gameId = "51000000-0000-4000-8000-000000000001";
@@ -116,12 +123,14 @@ describe("MediaService 與真 PostgreSQL", () => {
 
   it("finalize 建立單一 asset 與 pending derivative，回應遺失後重播同一結果", async () => {
     const service = serviceFor();
-    const grant = await service.beginMediaUpload(owner, beginCommand({ purpose: "custom_cover" }));
+    const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand({ purpose: "custom_cover" })));
 
     const first = await service.finalizeMediaUpload(owner, { idempotencyKey: key });
     const replay = await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    const beginReplay = await service.beginMediaUpload(owner, beginCommand({ purpose: "custom_cover" }));
 
     expect(replay).toEqual(first);
+    expect(beginReplay).toEqual({ status: "already_finalized", result: first });
     expect(first.asset.id).toBe(grant.assetId);
     const rows = await runtime.unsafe<{ asset_count: number; derivative_count: number; manual_cover_asset_id: string }[]>(`
       select
@@ -131,6 +140,18 @@ describe("MediaService 與真 PostgreSQL", () => {
       from app_private.games where id = $3
     `, [grant.ingestId, grant.assetId, gameId]);
     expect(rows[0]).toEqual({ asset_count: 1, derivative_count: 1, manual_cover_asset_id: grant.assetId });
+  });
+
+  it("PostgreSQL 時鐘判定 lease 過期後拒絕舊 token 完成", async () => {
+    const store = new PostgresMediaStore(database.db);
+    const service = createMediaService({ store, objects: objects() });
+    await service.beginMediaUpload(owner, beginCommand());
+    const leaseToken = "53000000-0000-4000-8000-000000000001";
+    await store.claimFinalize(key, { token: leaseToken, until: "2000-01-01T00:00:00.000Z" });
+
+    await expect(store.completeFinalize(key, leaseToken, {
+      actualMimeType: "image/png", byteSize: png().byteLength, width: 20, height: 30,
+    })).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
   });
 
   it("實際大小或 MIME 不符時轉 cleanup_pending，且不建立 asset", async () => {

@@ -12,6 +12,7 @@ export type SourceErrorCode =
   | "source_identity_conflict"
   | "source_medium_mismatch"
   | "source_not_linked"
+  | "source_refresh_idempotency_conflict"
   | "source_persistence_failed";
 
 export class SourceOperationError extends NamedError {
@@ -68,4 +69,7 @@ export class SourceNotLinkedError extends SourceOperationError {
 }
 export class SourcePersistenceFailedError extends SourceOperationError {
   constructor() { super("source_persistence_failed", "來源資料無法儲存，請稍後再試。", null); this.name = "SourcePersistenceFailedError"; }
+}
+export class SourceRefreshIdempotencyConflictError extends SourceOperationError {
+  constructor() { super("source_refresh_idempotency_conflict", "此重新整理操作已用於不同來源內容。", null); this.name = "SourceRefreshIdempotencyConflictError"; }
 }
