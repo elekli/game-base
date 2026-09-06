@@ -154,6 +154,10 @@ describe("production migration safety lint", () => {
     "drop policy runtime_games on app_private.games",
     "alter table app_private.games drop column title",
     "alter table app_private.games add constraint title_unique unique (title)",
+    "alter table app_private.games add unique (title)",
+    "alter table app_private.games add check (title <> '')",
+    "alter table app_private.games add foreign key (parent_id) references app_private.games (id)",
+    "alter table app_private.games add primary key (id)",
     "alter table app_private.games add column title text not null",
     "alter table app_private.games disable row level security",
     "alter table app_private.games alter column title type varchar(50)",
@@ -192,9 +196,13 @@ describe("production migration safety lint", () => {
         -- drop table app_private.games;
         -- alter table app_private.games rename to archived_games;
         -- reassign owned by app_runtime to app_migrator;
+        -- alter table app_private.games add unique (title);
         select 'it''s not -- a comment: drop table app_private.games';
         select 'alter view app_private.game_summary rename to archived_summary';
         select 'reassign owned by app_runtime to app_migrator';
+        select 'alter table app_private.games add check (title <> '''')';
+        select 'alter table app_private.games add foreign key (parent_id) references app_private.games (id)';
+        select 'alter table app_private.games add primary key (id)';
         select E'escaped\\' quote /* still text */ drop table app_private.games';
         select $$drop table app_private.games;$$;
         create function app_private.example() returns text language sql as

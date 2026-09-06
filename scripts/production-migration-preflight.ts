@@ -99,6 +99,7 @@ const FORBIDDEN_DDL = [
   /\bdrop\b/i,
   /\balter\s+table\b[^;]*?\bdrop\s+(?:column|constraint)\b/i,
   /\balter\s+table\b[^;]*?\badd\s+constraint\b/i,
+  /\balter\s+table\b[^;]*?\badd\s+(?:unique|check|foreign\s+key|primary\s+key)\b/i,
   /\balter\s+table\b[^;]*?\badd\s+(?:column\s+)?[^;]*?\bnot\s+null\b/i,
   /\balter\s+table\b[^;]*?\balter\s+(?:column\s+)?\S+\s+(?:(?:set\s+data\s+)?type|set\s+not\s+null)\b/i,
   /\balter\s+table\b[^;]*?\bdisable\s+row\s+level\s+security\b/i,
@@ -114,13 +115,13 @@ select json_build_object(
   ), '[]'::json),
   'appMigratorExists', exists(select 1 from pg_roles where rolname = 'app_migrator'),
   'appMigratorIsRestricted', coalesce((
-    select not rolsuper and not rolinherit and not rolreplication
+    select rolcanlogin and not rolsuper and not rolinherit and not rolreplication
       and not rolbypassrls and not rolcreatedb and not rolcreaterole
     from pg_roles where rolname = 'app_migrator'
   ), false),
   'appRuntimeExists', exists(select 1 from pg_roles where rolname = 'app_runtime'),
   'appRuntimeIsRestricted', coalesce((
-    select not rolsuper and not rolinherit and not rolreplication
+    select rolcanlogin and not rolsuper and not rolinherit and not rolreplication
       and not rolbypassrls and not rolcreatedb and not rolcreaterole
     from pg_roles where rolname = 'app_runtime'
   ), false),

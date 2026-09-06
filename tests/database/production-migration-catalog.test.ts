@@ -146,4 +146,21 @@ describe("production migration PostgreSQL catalog checks", () => {
       await database.unsafe("rollback");
     }
   });
+
+  it.each([
+    ["app_migrator", "appMigratorIsRestricted"],
+    ["app_runtime", "appRuntimeIsRestricted"],
+  ] as const)("rejects NOLOGIN drift for %s", async (role, snapshotField) => {
+    const healthy = await snapshot();
+    expect(healthy[snapshotField]).toBe(true);
+
+    await database.unsafe("begin");
+    try {
+      await database.unsafe(`alter role ${role} nologin`);
+      const drifted = await snapshot();
+      expect(drifted[snapshotField]).toBe(false);
+    } finally {
+      await database.unsafe("rollback");
+    }
+  });
 });
