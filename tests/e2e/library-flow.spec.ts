@@ -319,3 +319,53 @@ test("#41 owner searches and combines actual-platform and free-tag filters on mo
   await expect(page.getByRole("search").getByLabel("搜尋收藏庫")).toHaveValue("");
   await expect(page.getByRole("search").locator('input[type="checkbox"]:checked')).toHaveCount(0);
 });
+
+test("#59 owner opens a contributor-scoped local library and combines another filter on mobile", async ({ page }, testInfo) => {
+  const contributorName = "#59 同名導航作者";
+  const firstGame = "#59 貢獻者遊戲一";
+  const secondGame = "#59 貢獻者遊戲二";
+
+  async function createGameWithContributor(name: string, allowSameName: boolean) {
+    await page.goto("/games/new");
+    await page.getByText("找不到？建立手動條目").click();
+    await page.getByRole("textbox", { name: "遊戲名稱" }).fill(name);
+    await page.getByRole("button", { name: "建立手動條目" }).click();
+    await page.getByRole("link", { name }).last().click();
+    await page.getByText("編輯擁有者資料").click();
+    await page.getByLabel("自由標籤（以逗號分隔）").fill("#59 組合條件");
+    await page.getByRole("button", { name: "儲存資料" }).click();
+    await page.getByText("貢獻關係").click();
+    const form = page.getByRole("heading", { name: "手動貢獻" }).locator("..");
+    await form.getByPlaceholder("人物或組織名稱").fill(contributorName);
+    if (allowSameName) {
+      await form.getByRole("button", { name: "新增手動貢獻" }).click();
+      await expect(page.getByRole("button", { name: "仍建立新的同名貢獻者" })).toBeVisible();
+      await Promise.all([page.waitForEvent("load"), page.getByRole("button", { name: "仍建立新的同名貢獻者" }).click()]);
+    } else {
+      await Promise.all([page.waitForEvent("load"), form.getByRole("button", { name: "新增手動貢獻" }).click()]);
+    }
+    await page.getByText("貢獻關係").click();
+    await expect(page.getByRole("link", { name: `查看 ${contributorName} 的收藏庫遊戲` })).toBeVisible();
+  }
+
+  await createGameWithContributor(firstGame, false);
+  await createGameWithContributor(secondGame, true);
+  await page.goto("/");
+  await page.getByRole("link", { name: firstGame }).click();
+  await page.getByText("貢獻關係").click();
+  await page.getByRole("link", { name: `查看 ${contributorName} 的收藏庫遊戲` }).click();
+
+  await expect(page).toHaveURL(/\?contributor=/);
+  const contributorId = new URL(page.url()).searchParams.get("contributor");
+  expect(contributorId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  expect(page.url()).not.toContain(encodeURIComponent(contributorName));
+  await expect(page.getByText("已依貢獻者篩選收藏庫；可繼續組合其他條件。")).toBeVisible();
+  await expect(page.getByRole("heading", { name: firstGame })).toBeVisible();
+  await expect(page.getByRole("heading", { name: secondGame })).toHaveCount(0);
+  await page.getByRole("search").getByLabel("#59 組合條件").check();
+  await page.getByRole("search").getByRole("button", { name: "套用篩選" }).click();
+  expect(new URL(page.url()).searchParams.get("contributor")).toBe(contributorId);
+  await expect(page.getByRole("heading", { name: firstGame })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: testInfo.outputPath("contributor-library-filter-390.png"), fullPage: true });
+});

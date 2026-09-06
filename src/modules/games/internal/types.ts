@@ -31,6 +31,7 @@ export type LibraryGameQuery = Readonly<{
   media?: readonly Medium[];
   actualPlatforms?: readonly string[];
   tags?: readonly string[];
+  contributorIds?: readonly string[];
   sourceCategories?: readonly Pick<SourceCategory, "kind" | "sourceCategoryId">[];
   weightMin?: number | null;
   weightMax?: number | null;
@@ -64,16 +65,17 @@ export type SourceSnapshot = Readonly<{
   supportedPlatforms: readonly string[];
 }>;
 
-export type GameContribution = Readonly<{
+type GameContributionBase = Readonly<{
   id: string;
-  contributorId: string;
   name: string;
   entityKind: "person" | "company";
   role: "design" | "art" | "publisher";
-  origin: "source" | "manual";
-  provider: Provider | null;
-  sourceContributorId: string | null;
 }>;
+
+export type GameContribution = GameContributionBase & (
+  | Readonly<{ contributorId: string | null; origin: "source"; provider: Provider; sourceContributorId: string }>
+  | Readonly<{ contributorId: string; origin: "manual"; provider: null; sourceContributorId: null }>
+);
 
 export type SourceCatalogPort = Readonly<{
   search(input: SourceSearchQuery): Promise<readonly NormalizedSearchCandidate[]>;

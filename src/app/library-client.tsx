@@ -18,6 +18,7 @@ type FormState = Readonly<{
   media: Medium[];
   platforms: string[];
   tags: string[];
+  contributorIds: string[];
   categories: string[];
   sort: string;
   weightMin: string;
@@ -32,6 +33,7 @@ function initialFormState(filters: LibraryFilters, sharedPlatforms: readonly Sha
     media: [...(filters.media ?? [])],
     platforms: sharedPlatforms.filter((item) => selectedPlatforms.has(normalizeSharedName(item.name))).map((item) => item.name),
     tags: sharedTags.filter((item) => selectedTags.has(normalizeSharedName(item.name))).map((item) => item.name),
+    contributorIds: [...(filters.contributorIds ?? [])],
     categories: (filters.sourceCategories ?? []).map((category) => `${category.kind}:${category.sourceCategoryId}`),
     sort: filters.sort ?? "name",
     weightMin: filters.weightMin?.toString() ?? "",
@@ -97,6 +99,8 @@ export function LibraryClient({ games, sourceCategories, filters, sharedPlatform
   }
   return <>
     <form ref={formRef} className="mb-6 space-y-3 rounded-2xl border border-slate-200 bg-white p-4" role="search" onSubmit={(event) => { event.preventDefault(); cancelScheduledSearch(); const params = buildLibrarySearchParams(new FormData(event.currentTarget)); window.location.assign(params.toString() ? `/?${params.toString()}` : "/"); }}>
+      {formState.contributorIds.map((contributorId) => <input key={contributorId} type="hidden" name="contributor" value={contributorId} />)}
+      {formState.contributorIds.length > 0 && <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-900">已依貢獻者篩選收藏庫；可繼續組合其他條件。</p>}
       <div><label className="mb-2 block text-sm font-medium" htmlFor="library-search">搜尋收藏庫</label><input id="library-search" name="search" type="search" value={formState.search} onChange={(event) => { setFormState((current) => ({ ...current, search: event.target.value })); scheduleSearch(); }} placeholder="名稱、原文名稱或別名" className="min-h-11 w-full rounded-xl border border-slate-300 px-3 py-2 text-base" /></div>
       <fieldset><legend className="mb-2 text-sm font-medium">遊戲類型</legend><div className="flex flex-wrap gap-3">{(Object.keys(mediumLabels) as Medium[]).map((medium) => <label className="flex items-center gap-2 text-sm" key={medium}><input type="checkbox" name="medium" value={medium} checked={formState.media.includes(medium)} onChange={(event) => toggle("media", medium, event.target.checked)} />{mediumLabels[medium]}</label>)}</div></fieldset>
       {sharedPlatforms.length > 0 && <fieldset><legend className="text-sm font-medium">實際平台</legend><p className="mt-1 text-xs text-slate-500">選取多個平台時，符合任一平台即可。</p><div className="mt-2 flex flex-wrap gap-2">{sharedPlatforms.map((platform) => <label className="flex min-h-11 items-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-sm" key={platform.name}><input type="checkbox" name="platform" value={platform.name} checked={formState.platforms.includes(platform.name)} onChange={(event) => toggle("platforms", platform.name, event.target.checked)} />{platform.name}</label>)}</div></fieldset>}

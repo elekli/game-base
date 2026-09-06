@@ -34,6 +34,27 @@ describe("library names", () => {
 });
 
 describe("library filters", () => {
+  it("只以本地 contributor UUID 篩選，同名實體不會互相命中", () => {
+    const contribution = (contributorId: string) => ({
+      id: `contribution-${contributorId}`,
+      contributorId,
+      name: "同名作者",
+      entityKind: "person" as const,
+      role: "design" as const,
+      origin: "manual" as const,
+      provider: null,
+      sourceContributorId: null,
+    });
+    const games = [
+      game({ id: "selected", contributors: [contribution("contributor-a")] }),
+      game({ id: "same-name", contributors: [contribution("contributor-b")] }),
+      game({ id: "unrelated" }),
+    ];
+
+    expect(filterAndSortGames(games, { contributorIds: ["contributor-a"] }).map((item) => item.id)).toEqual(["selected"]);
+    expect(filterAndSortGames(games, { contributorIds: [] })).toHaveLength(3);
+  });
+
   it("遊戲媒介以同維度聯集篩選", () => {
     const games = [
       game({ id: "a", medium: "board_game" }),
@@ -177,6 +198,7 @@ describe("library service", () => {
     const created = await service.addManualContribution({ kind: "new", gameId: game.id, name: "同名作者", entityKind: "person", role: "design", allowDuplicate: false });
     if (created.status !== "created") throw new Error("expected initial contributor");
     const contributorId = created.game.contributors[0].contributorId;
+    if (!contributorId) throw new Error("expected local contributor id");
 
     const reused = await service.addManualContribution({ kind: "existing", gameId: game.id, contributorId, role: "art" });
 
@@ -208,6 +230,7 @@ describe("library service", () => {
     const snapshot = { ref: { provider: "bgg" as const, medium: "board_game" as const, sourceId: "source-contributor-reuse" }, canonicalUrl: "https://example.test/source-contributor-reuse", title: "來源遊戲", localizedTitle: null, aliases: [], description: null, releaseYear: null, coverUrl: null, categories: [], contributors: [{ sourceContributorId: "source-author", name: "來源作者", entityKind: "person" as const, role: "design" as const }], minPlayers: null, maxPlayers: null, supportsSolo: "unknown" as const, playtimeMinutes: null, weight: null, strategyRank: null, supportedPlatforms: [] };
     const created = await store.createFromSource(snapshot.ref, snapshot);
     const sourceContributor = created.game.contributors[0];
+    if (!sourceContributor.contributorId) throw new Error("expected local source contributor id");
     expect(await service.findContributorMatches(created.game.id, " 來源作者 ")).toMatchObject([{ contributorId: sourceContributor.contributorId, provider: "bgg", sourceContributorId: "source-author", rolesOnGame: ["design"] }]);
 
     const reused = await service.addManualContribution({ kind: "existing", gameId: created.game.id, contributorId: sourceContributor.contributorId, role: "art" });

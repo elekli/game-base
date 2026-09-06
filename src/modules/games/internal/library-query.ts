@@ -45,6 +45,7 @@ export function filterAndSortLibraryGames(games: readonly GameRecord[], query: L
     if (query.media?.length && !query.media.includes(game.medium)) return false;
     if (!sameDimensionMatches(game.actualPlatforms, query.actualPlatforms)) return false;
     if (!sameDimensionMatches(game.tags, query.tags)) return false;
+    if (query.contributorIds?.length && !game.contributors.some((contributor) => contributor.contributorId !== null && query.contributorIds?.includes(contributor.contributorId))) return false;
     if (!sourceCategoriesMatch(game, query.sourceCategories)) return false;
     const weight = game.snapshot?.weight ?? null;
     if (query.weightMin !== undefined && query.weightMin !== null && (weight === null || weight < query.weightMin)) return false;

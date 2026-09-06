@@ -122,7 +122,7 @@ export class InMemoryGameStore implements GameStore {
         : { id: randomUUID(), name: contributor.name, entityKind: contributor.entityKind, provider: snapshot.ref.provider, sourceContributorId: contributor.sourceContributorId };
       this.contributors.set(entity.id, entity);
       this.sourceContributors.set(sourceKey, entity.id);
-      return { id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}:${contributor.role}`, contributorId: entity.id, name: entity.name, entityKind: entity.entityKind, role: contributor.role, origin: "source" as const, provider: entity.provider, sourceContributorId: entity.sourceContributorId };
+      return { id: `source:${snapshot.ref.provider}:${contributor.sourceContributorId}:${contributor.role}`, contributorId: entity.id, name: entity.name, entityKind: entity.entityKind, role: contributor.role, origin: "source" as const, provider: snapshot.ref.provider, sourceContributorId: contributor.sourceContributorId };
     });
   }
 

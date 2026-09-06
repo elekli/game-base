@@ -76,6 +76,7 @@ describe("PostgresGameStore contributor 重用", () => {
     const first = await store.addManualContribution({ kind: "new", gameId: game.id, name: `${testPrefix}重用`, entityKind: "person", role: "design", allowDuplicate: false });
     if (first.status !== "created") throw new Error("fixture contributor was not created");
     const contributorId = first.game.contributors[0].contributorId;
+    if (!contributorId) throw new Error("fixture contributor has no local id");
 
     const reused = await store.addManualContribution({ kind: "existing", gameId: game.id, contributorId, role: "art" });
 

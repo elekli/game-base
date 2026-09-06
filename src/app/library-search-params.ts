@@ -1,6 +1,14 @@
 import type { Medium } from "@/modules/games";
 import { cleanSharedNames, clearIncompatibleSourceCategories, type LibraryFilters, type LibrarySort } from "@/modules/library";
 
+const localContributorId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function cleanContributorIds(values: readonly FormDataEntryValue[]): string[] {
+  const ids = new Set<string>();
+  for (const value of values) if (typeof value === "string" && localContributorId.test(value)) ids.add(value.toLowerCase());
+  return [...ids];
+}
+
 export function buildLibrarySearchParams(form: FormData): URLSearchParams {
   const media = form.getAll("medium").filter((value): value is string => value === "board_game" || value === "video_game");
   const boardOnly = media.length === 1 && media[0] === "board_game";
@@ -10,6 +18,7 @@ export function buildLibrarySearchParams(form: FormData): URLSearchParams {
   for (const medium of media) params.append("medium", medium);
   for (const platform of cleanSharedNames(form.getAll("platform").filter((value): value is string => typeof value === "string"))) params.append("platform", platform);
   for (const tag of cleanSharedNames(form.getAll("tag").filter((value): value is string => typeof value === "string"))) params.append("tag", tag);
+  for (const contributorId of cleanContributorIds(form.getAll("contributor"))) params.append("contributor", contributorId);
   if (media.length === 1) {
     for (const category of form.getAll("category")) if (typeof category === "string") params.append("category", category);
   }
@@ -53,6 +62,7 @@ export function parseLibrarySearchParams(
     media,
     actualPlatforms: cleanSharedNames(many("platform")),
     tags: cleanSharedNames(many("tag")),
+    contributorIds: cleanContributorIds(many("contributor")),
     sourceCategories: clearIncompatibleSourceCategories(media, sourceCategories),
     weightMin: isBoardOnly ? number("weightMin") : undefined,
     weightMax: isBoardOnly ? number("weightMax") : undefined,
