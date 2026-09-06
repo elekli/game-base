@@ -5,7 +5,11 @@ import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 
-import { runProductionMigrationPreflight } from "./production-migration-preflight";
+import {
+  formatProductionMigrationFailure,
+  ProductionMigrationError,
+  runProductionMigrationPreflight,
+} from "./production-migration-preflight";
 import {
   buildReleaseRecords,
   buildReleaseIdentity,
@@ -154,6 +158,27 @@ function requiredEnvironment(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`ProductionMigrationRunnerError: ${name} is required`);
   return value;
+}
+
+export function formatProductionMigrationRunnerFailure(error: unknown) {
+  if (error instanceof ProductionMigrationReleaseError) {
+    return {
+      event: "production_migration_runner_failed" as const,
+      detail: error.safeDetail,
+    };
+  }
+  if (error instanceof ProductionMigrationError) {
+    const diagnostic = formatProductionMigrationFailure(error);
+    return {
+      event: "production_migration_runner_failed" as const,
+      errorName: diagnostic.errorName,
+      detail: diagnostic.detail,
+    };
+  }
+  return {
+    event: "production_migration_runner_failed" as const,
+    detail: "inspect protected runner diagnostics",
+  };
 }
 
 function validateSourceActor(value: unknown): string {
@@ -421,10 +446,7 @@ async function main() {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main().catch((error: unknown) => {
-    console.error(JSON.stringify({
-      event: "production_migration_runner_failed",
-      detail: error instanceof ProductionMigrationReleaseError ? error.safeDetail : "inspect protected runner diagnostics",
-    }));
+    console.error(JSON.stringify(formatProductionMigrationRunnerFailure(error)));
     process.exitCode = 1;
   });
 }

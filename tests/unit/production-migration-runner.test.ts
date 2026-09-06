@@ -5,7 +5,13 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { buildReleaseIdentity } from "../../scripts/production-migration-release";
+import {
+  buildReleaseIdentity,
+  ProductionMigrationReleaseError,
+} from "../../scripts/production-migration-release";
+import {
+  ProductionMigrationError,
+} from "../../scripts/production-migration-preflight";
 
 import {
   SUPABASE_CLI_VERSION,
@@ -13,6 +19,7 @@ import {
   authorizePersistedPlan,
   buildSupabaseApplyInvocation,
   createNormalReleasePorts,
+  formatProductionMigrationRunnerFailure,
   parsePersistedPlan,
   persistNormalReleaseRecords,
   runSupabaseApply,
@@ -20,6 +27,50 @@ import {
 } from "../../scripts/production-migration-runner";
 
 describe("production migration runner", () => {
+  it.each([
+    ["ProductionMigrationConnectionError", "Production database connection failed"],
+    ["ProductionMigrationPreflightError", "Production database failed checks: grants(unsafe=1,missing=0)"],
+    ["ProductionMigrationSafetyError", "migration contains forbidden destructive SQL"],
+    ["ProductionMigrationRollbackError", "read-only preflight transaction could not be explicitly rolled back"],
+  ] as const)("preserves controlled %s diagnostics without raw failure data", (errorName, safeDetail) => {
+    const canary = "postgres://owner:secret@example.test/db CA-CANARY SELECT-sensitive-row";
+    const error = new ProductionMigrationError(errorName, safeDetail);
+    error.stack = canary;
+    Object.assign(error, { cause: new Error(canary), databaseRows: [canary] });
+
+    const diagnostic = formatProductionMigrationRunnerFailure(error);
+
+    expect(diagnostic).toEqual({
+      event: "production_migration_runner_failed",
+      errorName,
+      detail: safeDetail,
+    });
+    expect(Object.keys(diagnostic).sort()).toEqual(["detail", "errorName", "event"]);
+    expect(JSON.stringify(diagnostic)).not.toContain(canary);
+  });
+
+  it("keeps unexpected diagnostics generic and drops raw error fields", () => {
+    const canary = "postgres://owner:secret@example.test/db CA-CANARY SELECT-sensitive-row";
+    const error = new Error(canary, { cause: { sql: canary, rows: [canary] } });
+
+    const diagnostic = formatProductionMigrationRunnerFailure(error);
+
+    expect(diagnostic).toEqual({
+      event: "production_migration_runner_failed",
+      detail: "inspect protected runner diagnostics",
+    });
+    expect(JSON.stringify(diagnostic)).not.toContain(canary);
+  });
+
+  it("retains existing safe release-state diagnostics", () => {
+    expect(formatProductionMigrationRunnerFailure(
+      new ProductionMigrationReleaseError("candidate is not current main"),
+    )).toEqual({
+      event: "production_migration_runner_failed",
+      detail: "candidate is not current main",
+    });
+  });
+
   it("pins Supabase CLI 2.116.0 in package and lock files", async () => {
     expect(SUPABASE_CLI_VERSION).toBe("2.116.0");
     await expect(assertPinnedSupabaseCli(process.cwd())).resolves.toBeUndefined();
