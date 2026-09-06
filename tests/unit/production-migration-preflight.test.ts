@@ -457,21 +457,28 @@ describe("production migration safety lint", () => {
     );
   });
 
-  it("allows only the 0007 through 0009 named byte-exact grant remediations", async () => {
-    const sql =
+  it("allows only the named byte-exact legacy and 0010 grant remediations", async () => {
+    const legacySql =
       "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n";
+    const roleAwareSql =
+      "grant app_migrator to postgres;\n" +
+      "set local role app_migrator;\n" +
+      "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n" +
+      "reset role;\n" +
+      "revoke app_migrator from postgres;\n";
     const approved = await migrationFixture({
-      "0007_revoke_public_platform_trigger_execute.sql": sql,
-      "0008_revoke_public_platform_trigger_execute.sql": sql,
-      "0009_revoke_public_platform_trigger_execute.sql": sql,
+      "0007_revoke_public_platform_trigger_execute.sql": legacySql,
+      "0008_revoke_public_platform_trigger_execute.sql": legacySql,
+      "0009_revoke_public_platform_trigger_execute.sql": legacySql,
+      "0010_revoke_public_platform_trigger_execute_as_owner.sql": roleAwareSql,
     });
-    const unnamed = await migrationFixture({ "0001_other.sql": sql });
+    const unnamed = await migrationFixture({ "0001_other.sql": legacySql });
     const futureCopy = await migrationFixture({
-      "0010_revoke_public_platform_trigger_execute.sql": sql,
+      "0011_revoke_public_platform_trigger_execute_as_owner.sql": roleAwareSql,
     });
 
     await expect(lintProductionMigrations(approved)).resolves.toEqual({
-      migrationCount: 3,
+      migrationCount: 4,
     });
     await expect(lintProductionMigrations(unnamed)).rejects.toThrow(
       "ProductionMigrationSafetyError",
@@ -1488,11 +1495,16 @@ describe("production migration preflight", () => {
   });
 
   it("allows only the exact pending forward migration for the known PUBLIC drift", async () => {
+    const roleAwareSql =
+      "grant app_migrator to postgres;\n" +
+      "set local role app_migrator;\n" +
+      "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n" +
+      "reset role;\n" +
+      "revoke app_migrator from postgres;\n";
     const root = await migrationFixture({
       "0001_runtime_security.sql": "create schema app_private;",
       "0002_games.sql": "create table app_private.games (id uuid primary key);",
-      "0009_revoke_public_platform_trigger_execute.sql":
-        "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n",
+      "0010_revoke_public_platform_trigger_execute_as_owner.sql": roleAwareSql,
     });
     const snapshot = healthySnapshot();
     snapshot.unsafeGrantCount = 1;
@@ -1518,13 +1530,18 @@ describe("production migration preflight", () => {
     });
   });
 
-  it("rejects known PUBLIC drift when a safe 0010 follows the exact 0009", async () => {
+  it("rejects known PUBLIC drift when a safe 0011 follows the exact 0010", async () => {
+    const roleAwareSql =
+      "grant app_migrator to postgres;\n" +
+      "set local role app_migrator;\n" +
+      "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n" +
+      "reset role;\n" +
+      "revoke app_migrator from postgres;\n";
     const root = await migrationFixture({
       "0001_runtime_security.sql": "create schema app_private;",
       "0002_games.sql": "create table app_private.games (id uuid primary key);",
-      "0009_revoke_public_platform_trigger_execute.sql":
-        "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n",
-      "0010_safe_followup.sql":
+      "0010_revoke_public_platform_trigger_execute_as_owner.sql": roleAwareSql,
+      "0011_safe_followup.sql":
         "create table app_private.safe_followup (id uuid primary key);",
     });
     const snapshot = healthySnapshot();
@@ -1548,7 +1565,7 @@ describe("production migration preflight", () => {
     ).rejects.toThrow("ProductionMigrationPreflightError");
   });
 
-  it("recovers when 0008 is recorded but its REVOKE effect is missing", async () => {
+  it("recovers when 0009 is recorded but its REVOKE effect is missing", async () => {
     const repositoryRoot = process.cwd();
     const migrationFilenames = [
       "0001_runtime_security.sql",
@@ -1560,6 +1577,7 @@ describe("production migration preflight", () => {
       "0007_revoke_public_platform_trigger_execute.sql",
       "0008_revoke_public_platform_trigger_execute.sql",
       "0009_revoke_public_platform_trigger_execute.sql",
+      "0010_revoke_public_platform_trigger_execute_as_owner.sql",
     ] as const;
     const root = await migrationFixture(
       Object.fromEntries(
@@ -1595,6 +1613,7 @@ describe("production migration preflight", () => {
       { version: "0006", name: "library_invariants" },
       { version: "0007", name: "revoke_public_platform_trigger_execute" },
       { version: "0008", name: "revoke_public_platform_trigger_execute" },
+      { version: "0009", name: "revoke_public_platform_trigger_execute" },
     ];
     snapshot.unsafeGrantCount = 1;
     snapshot.knownPublicExecuteDriftCount = 1;
@@ -1616,13 +1635,13 @@ describe("production migration preflight", () => {
       }),
     ).resolves.toMatchObject({
       preflightState: "known-drift-remediation-required",
-      appliedMigrationCount: 8,
+      appliedMigrationCount: 9,
       pendingMigrationCount: 1,
       pendingMigrations: [
         {
-          version: "0009",
-          name: "revoke_public_platform_trigger_execute",
-          filename: "0009_revoke_public_platform_trigger_execute.sql",
+          version: "0010",
+          name: "revoke_public_platform_trigger_execute_as_owner",
+          filename: "0010_revoke_public_platform_trigger_execute_as_owner.sql",
         },
       ],
     });
@@ -1643,8 +1662,8 @@ describe("production migration preflight", () => {
     snapshot.knownPublicExecuteDriftCount = 1;
     snapshot.appRuntimeCanExecuteKnownDriftFunction = true;
     snapshot.migrations.push({
-      version: "0009",
-      name: "revoke_public_platform_trigger_execute",
+      version: "0010",
+      name: "revoke_public_platform_trigger_execute_as_owner",
     });
     await expect(
       runProductionMigrationPreflight({
@@ -1667,7 +1686,7 @@ describe("production migration preflight", () => {
       }),
     ).resolves.toMatchObject({
       preflightState: "strict",
-      appliedMigrationCount: 9,
+      appliedMigrationCount: 10,
       pendingMigrationCount: 0,
     });
   });
@@ -1676,8 +1695,8 @@ describe("production migration preflight", () => {
     const root = await migrationFixture({
       "0001_runtime_security.sql": "create schema app_private;",
       "0002_games.sql": "create table app_private.games (id uuid primary key);",
-      "0009_revoke_public_platform_trigger_execute.sql":
-        "revoke execute on function app_private.prevent_system_platform_mutation() from public; select 1;",
+      "0010_revoke_public_platform_trigger_execute_as_owner.sql":
+        "grant app_migrator to postgres; set local role app_migrator; revoke execute on function app_private.prevent_system_platform_mutation() from public; select 1; reset role; revoke app_migrator from postgres;",
     });
     const snapshot = healthySnapshot();
     snapshot.unsafeGrantCount = 1;
@@ -1700,14 +1719,18 @@ describe("production migration preflight", () => {
     ).rejects.toThrow("ProductionMigrationSafetyError");
   });
 
-  it("rejects a 0010 copy of the one-time remediation", async () => {
+  it("rejects a 0011 copy of the one-time remediation", async () => {
     const remediation =
-      "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n";
+      "grant app_migrator to postgres;\n" +
+      "set local role app_migrator;\n" +
+      "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n" +
+      "reset role;\n" +
+      "revoke app_migrator from postgres;\n";
     const root = await migrationFixture({
       "0001_runtime_security.sql": "create schema app_private;",
       "0002_games.sql": "create table app_private.games (id uuid primary key);",
-      "0009_revoke_public_platform_trigger_execute.sql": remediation,
-      "0010_revoke_public_platform_trigger_execute.sql": remediation,
+      "0010_revoke_public_platform_trigger_execute_as_owner.sql": remediation,
+      "0011_revoke_public_platform_trigger_execute_as_owner.sql": remediation,
     });
     const snapshot = healthySnapshot();
     snapshot.unsafeGrantCount = 1;

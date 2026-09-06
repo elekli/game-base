@@ -1,4 +1,5 @@
 import postgres from "postgres";
+import { readFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -42,6 +43,77 @@ describe("production migration PostgreSQL catalog checks", () => {
 
     expect(healthy.unexpectedAclCount).toBe(0);
     expect(healthy.defaultPrivilegeDriftCount).toBe(0);
+  });
+
+  it("revokes PUBLIC execute only after postgres switches to the function owner", async () => {
+    const remediation = await readFile(
+      "supabase/migrations/0010_revoke_public_platform_trigger_execute_as_owner.sql",
+      "utf8",
+    );
+    const functionIdentity =
+      "app_private.prevent_system_platform_mutation()";
+    await database.unsafe("begin");
+    try {
+      await database.unsafe(`
+        set local role app_migrator;
+        grant usage on schema app_private to postgres;
+        grant execute on function ${functionIdentity} to public;
+        reset role;
+        set local role postgres;
+        revoke execute on function ${functionIdentity} from public;
+      `);
+
+      const afterMemberRevoke = await database.unsafe<
+        {
+          acl: string[];
+          currentUser: string;
+          memberOfOwnerRole: boolean;
+          publicCanExecute: boolean;
+        }[]
+      >(`
+        select
+          coalesce(procedure.proacl::text[], array[]::text[]) as acl,
+          current_user as "currentUser",
+          pg_has_role(current_user, 'app_migrator', 'member') as "memberOfOwnerRole",
+          has_function_privilege('public', procedure.oid, 'execute') as "publicCanExecute"
+        from pg_proc procedure
+        where procedure.oid = to_regprocedure('${functionIdentity}')
+      `);
+      expect(afterMemberRevoke[0]).toMatchObject({
+        currentUser: "postgres",
+        memberOfOwnerRole: true,
+        publicCanExecute: true,
+      });
+      expect(afterMemberRevoke[0]!.acl).toContain("=X/app_migrator");
+
+      await database.unsafe("reset role");
+      await database.unsafe(remediation);
+
+      const afterOwnerRevoke = await database.unsafe<
+        {
+          acl: string[];
+          currentUser: string;
+          publicCanExecute: boolean;
+          runtimeCanExecute: boolean;
+        }[]
+      >(`
+        select
+          coalesce(procedure.proacl::text[], array[]::text[]) as acl,
+          current_user as "currentUser",
+          has_function_privilege('public', procedure.oid, 'execute') as "publicCanExecute",
+          has_function_privilege('app_runtime', procedure.oid, 'execute') as "runtimeCanExecute"
+        from pg_proc procedure
+        where procedure.oid = to_regprocedure('${functionIdentity}')
+      `);
+      expect(afterOwnerRevoke[0]).toMatchObject({
+        currentUser: "supabase_admin",
+        publicCanExecute: false,
+        runtimeCanExecute: false,
+      });
+      expect(afterOwnerRevoke[0]!.acl).not.toContain("=X/app_migrator");
+    } finally {
+      await database.unsafe("rollback");
+    }
   });
 
   it("detects PUBLIC OID 0 grants across every supported catalog branch", async () => {
