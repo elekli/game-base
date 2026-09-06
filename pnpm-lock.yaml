@@ -7,6 +7,11 @@ settings:
 overrides:
   esbuild@<=0.24.2: 0.25.12
 
+patchedDependencies:
+  drizzle-kit@0.31.10:
+    hash: bf6eb6dbe3e701b0de55b9e6b341a7653728b237f95b5d1e307b7c9adb1645c4
+    path: patches/drizzle-kit@0.31.10.patch
+
 importers:
 
   .:
@@ -59,7 +64,7 @@ importers:
         version: 4.1.11(vitest@4.1.11)
       drizzle-kit:
         specifier: ^0.31.10
-        version: 0.31.10
+        version: 0.31.10(patch_hash=bf6eb6dbe3e701b0de55b9e6b341a7653728b237f95b5d1e307b7c9adb1645c4)
       eslint:
         specifier: ^9.39.5
         version: 9.39.5(jiti@2.7.0)
@@ -4245,7 +4250,7 @@ snapshots:
     dependencies:
       esutils: 2.0.3
 
-  drizzle-kit@0.31.10:
+  drizzle-kit@0.31.10(patch_hash=bf6eb6dbe3e701b0de55b9e6b341a7653728b237f95b5d1e307b7c9adb1645c4):
     dependencies:
       '@drizzle-team/brocli': 0.10.2
       '@esbuild-kit/esm-loader': 2.6.5

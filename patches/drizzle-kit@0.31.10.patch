@@ -1,0 +1,37 @@
+diff --git a/bin.cjs b/bin.cjs
+index 07274ea6f53fd54a129b3d338892feda6e995cff..926a1d72be8e4cfe9e182b06877b5a4a37fa6790 100755
+--- a/bin.cjs
++++ b/bin.cjs
+@@ -17575 +17575,2 @@
+-    ${where === "" ? "" : ` AND ${where}`};`
++    ${where === "" ? "" : ` AND ${where}`}
++ORDER BY n.nspname, c.relname;`
+@@ -17682,7 +17683,7 @@ WHERE
+       const schemasForLinkedPoliciesInSchema = Object.values((tsSchema == null ? void 0 : tsSchema.policies) ?? {}).map((it) => it.schema);
+       const wherePolicies = [...schemaFilters, ...schemasForLinkedPoliciesInSchema].map((t4) => `schemaname = '${t4}'`).join(" or ");
+       const policiesByTable = {};
+-      const allPolicies = await db.query(`SELECT schemaname, tablename, policyname as name, permissive as "as", roles as to, cmd as for, qual as using, with_check as "withCheck" FROM pg_policies${wherePolicies === "" ? "" : ` WHERE ${wherePolicies}`};`);
++      const allPolicies = await db.query(`SELECT schemaname, tablename, policyname as name, permissive as "as", roles as to, cmd as for, qual as using, with_check as "withCheck" FROM pg_policies${wherePolicies === "" ? "" : ` WHERE ${wherePolicies}`} ORDER BY schemaname, tablename, policyname;`);
+       for (const dbPolicy of allPolicies) {
+         const { tablename, schemaname, to, withCheck, using, ...rest } = dbPolicy;
+         const tableForPolicy = policiesByTable[`${schemaname}.${tablename}`];
+@@ -17717,6 +17718,9 @@ WHERE
+       }
+       const sequencesInColumns = [];
+       const all = allTables.filter((it) => it.type === "table").map((row) => {
++        if (tablesFilter(row.table_name)) {
++          result[`${row.table_schema}.${row.table_name}`] = void 0;
++        }
+         return new Promise(async (res, rej) => {
+           var _a2, _b, _c, _d, _e, _f;
+           const tableName = row.table_name;
+@@ -18108,6 +18112,9 @@ WHERE
+       for await (const _3 of all) {
+       }
+       const allViews = allTables.filter((it) => it.type === "view" || it.type === "materialized_view").map((row) => {
++        if (tablesFilter(row.table_name)) {
++          views[`${row.table_schema}.${row.table_name}`] = void 0;
++        }
+         return new Promise(async (res, rej) => {
+           var _a2, _b, _c, _d;
+           const viewName = row.table_name;
