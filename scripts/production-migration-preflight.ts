@@ -1300,11 +1300,11 @@ function assertSnapshot(
   expectedRlsPolicies: readonly ExpectedRlsPolicyRevision[],
   allowedRuntimeReachableRoles: readonly string[],
   knownDriftRemediationPending: boolean,
-  phase: "pre-apply" | "strict",
+  phase: "pre-apply" | "strict" | "recovery",
 ) {
   const migrationHistoryMatches =
     snapshot.migrations.length <= expectedMigrations.length &&
-    (phase === "pre-apply" ||
+    (phase !== "strict" ||
       snapshot.migrations.length === expectedMigrations.length) &&
     snapshot.migrations.every(
       (migration, index) =>
@@ -1468,7 +1468,7 @@ export async function runProductionMigrationPreflight(options: {
   root: string;
   databaseUrl: string;
   caCertificate?: string;
-  phase?: "pre-apply" | "strict";
+  phase?: "pre-apply" | "strict" | "recovery";
   trustedBaselineText?: string | null;
   trustedMigrationTexts?: Readonly<Record<string, string>>;
   connect?: (databaseUrl: string) => Promise<ReadOnlyDatabaseSession>;
@@ -1516,12 +1516,22 @@ export async function runProductionMigrationPreflight(options: {
       options.phase ?? "pre-apply",
     );
     const appliedMigrationCount = snapshot.migrations.length;
+    const pendingMigrationIdentities = pendingMigrations.map((migration) => ({
+      version: migration.version,
+      name: migration.name,
+      filename: migration.filename,
+      sha256: createHash("sha256").update(migration.sql).digest("hex"),
+    }));
     return {
       projectRef: connection.projectRef,
       connectionMode: connection.connectionMode,
       migrationCount: migrations.length,
       appliedMigrationCount,
       pendingMigrationCount: migrations.length - appliedMigrationCount,
+      pendingMigrations: pendingMigrationIdentities,
+      pendingSetSha256: createHash("sha256")
+        .update(JSON.stringify(pendingMigrationIdentities))
+        .digest("hex"),
       preflightState,
       roleChecks: "passed" as const,
       objectOwnerChecks: "passed" as const,
