@@ -48,7 +48,7 @@ export type ProductionDatabaseSnapshot = {
   expectedCreatorAdminMembershipCount: number;
   appPrivateOwnedByMigrator: boolean;
   appPrivateObjects: AppPrivateObject[];
-  dangerousInboundRoleCount: number;
+  unexpectedInboundMembershipCount: number;
   unexpectedAclCount: number;
   defaultPrivilegeDriftCount: number;
   unsafeGrantCount: number;
@@ -275,22 +275,20 @@ select json_build_object(
       and not membership.set_option
       and membership.admin_option
   ),
-  'dangerousInboundRoleCount', (
-    with recursive inbound_role(role_oid, target_name, path) as (
+  'unexpectedInboundMembershipCount', (
+    with recursive inbound_membership(member_oid, target_name, path) as (
       select membership.member, target.rolname, array[target.oid, membership.member]
       from pg_auth_members membership
       join pg_roles target on target.oid = membership.roleid
       where target.rolname in ('app_runtime', 'app_migrator')
-        and (membership.inherit_option or membership.set_option or membership.admin_option)
       union
       select membership.member, inbound.target_name, inbound.path || membership.member
       from pg_auth_members membership
-      join inbound_role inbound on inbound.role_oid = membership.roleid
-      where (membership.inherit_option or membership.set_option or membership.admin_option)
-        and not membership.member = any(inbound.path)
+      join inbound_membership inbound on inbound.member_oid = membership.roleid
+      where not membership.member = any(inbound.path)
     )
-    select count(*) from inbound_role inbound
-    join pg_roles role on role.oid = inbound.role_oid
+    select count(*) from inbound_membership inbound
+    join pg_roles role on role.oid = inbound.member_oid
     where not (
       cardinality(inbound.path) = 2
       and inbound.target_name in ('app_runtime', 'app_migrator')
@@ -1176,7 +1174,7 @@ function assertSnapshot(
     snapshot.appRuntimeIsRestricted &&
     snapshot.appPrivateOwnedByMigrator &&
     snapshot.expectedCreatorAdminMembershipCount === 2 &&
-    snapshot.dangerousInboundRoleCount === 0 &&
+    snapshot.unexpectedInboundMembershipCount === 0 &&
     reachableRolesPass;
   const objectOwnershipPass =
     Array.isArray(snapshot.appPrivateObjects) &&

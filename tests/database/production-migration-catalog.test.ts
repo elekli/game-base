@@ -167,7 +167,7 @@ describe("production migration PostgreSQL catalog checks", () => {
   it("allows only PostgreSQL's two direct ADMIN-only role-creator memberships", async () => {
     const healthy = await snapshot();
     expect(healthy.expectedCreatorAdminMembershipCount).toBe(2);
-    expect(healthy.dangerousInboundRoleCount).toBe(0);
+    expect(healthy.unexpectedInboundMembershipCount).toBe(0);
 
     await database.unsafe("begin");
     try {
@@ -176,7 +176,28 @@ describe("production migration PostgreSQL catalog checks", () => {
         grant app_runtime to acl_inbound_probe with inherit true, set false, admin false;
       `);
       const drifted = await snapshot();
-      expect(drifted.dangerousInboundRoleCount).toBe(1);
+      expect(drifted.unexpectedInboundMembershipCount).toBe(1);
+    } finally {
+      await database.unsafe("rollback");
+    }
+  });
+
+  it("rejects an extra direct membership even when every option is false", async () => {
+    const healthy = await snapshot();
+    expect(healthy.unexpectedInboundMembershipCount).toBe(0);
+
+    await database.unsafe("begin");
+    try {
+      await database.unsafe(`
+        create role acl_inert_inbound_probe;
+        grant app_runtime to acl_inert_inbound_probe
+          with inherit false, set false, admin false;
+      `);
+      const drifted = await snapshot();
+      expect(drifted.unexpectedInboundMembershipCount).toBe(1);
+      expect(drifted.appRuntimeReachableRoles).toEqual(
+        healthy.appRuntimeReachableRoles,
+      );
     } finally {
       await database.unsafe("rollback");
     }

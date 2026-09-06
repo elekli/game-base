@@ -105,7 +105,7 @@ function healthySnapshot(): ProductionDatabaseSnapshot {
         extensionOwned: false,
       },
     ],
-    dangerousInboundRoleCount: 0,
+    unexpectedInboundMembershipCount: 0,
     unexpectedAclCount: 0,
     defaultPrivilegeDriftCount: 0,
     unsafeGrantCount: 0,
@@ -819,7 +819,9 @@ describe("production migration preflight", () => {
         connect: async () => session,
       }),
     ).rejects.toThrow("ProductionMigrationPreflightError");
-    expect(statements.join("\n").match(/membership\.inherit_option/g)).toHaveLength(7);
+    expect(
+      statements.join("\n").match(/membership\.inherit_option/g),
+    ).toHaveLength(5);
   });
 
   it("rejects every role reachable outward from app_migrator", async () => {
@@ -855,8 +857,8 @@ describe("production migration preflight", () => {
   });
 
   it.each([
-    ["direct reverse membership", "dangerousInboundRoleCount"],
-    ["recursive reverse membership", "dangerousInboundRoleCount"],
+    ["direct reverse membership", "unexpectedInboundMembershipCount"],
+    ["recursive reverse membership", "unexpectedInboundMembershipCount"],
     ["unexpected object ACL", "unexpectedAclCount"],
     ["default privilege drift", "defaultPrivilegeDriftCount"],
   ] as const)("rejects %s", async (_case, field) => {
@@ -883,8 +885,10 @@ describe("production migration preflight", () => {
         connect: async () => session,
       }),
     ).rejects.toThrow("ProductionMigrationPreflightError");
-    if (field === "dangerousInboundRoleCount") {
-      expect(statements.join("\n")).toContain("with recursive inbound_role");
+    if (field === "unexpectedInboundMembershipCount") {
+      expect(statements.join("\n")).toContain(
+        "with recursive inbound_membership",
+      );
     }
   });
 
@@ -1077,7 +1081,9 @@ describe("production migration preflight", () => {
     expect(statements.join("\n")).toContain("with recursive reachable_role");
     expect(statements.join("\n")).toContain("membership.set_option");
     expect(statements.join("\n")).toContain("membership.inherit_option");
-    expect(statements.join("\n").match(/membership\.inherit_option/g)).toHaveLength(7);
+    expect(
+      statements.join("\n").match(/membership\.inherit_option/g),
+    ).toHaveLength(5);
   });
 
   it.each([
