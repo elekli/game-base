@@ -1,5 +1,5 @@
 begin;
-select plan(49);
+select plan(50);
 
 select has_column('app_private', 'media_ingests', 'idempotency_key', 'ingest 保存全域冪等鍵');
 select has_column('app_private', 'media_ingests', 'reserved_asset_id', 'ingest 預留固定 asset id');
@@ -112,6 +112,11 @@ select extensions.throws_like(
 insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind)
 values ('40000000-0000-4000-8000-000000000001', 'thumb_webp_v1', 'verified', 'pending', 'thumbnail_webp');
 select ok(exists(select 1 from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001' and state = 'pending' and current_object_path is null), '圖片可建立尚無指標的 pending derivative');
+select extensions.throws_like(
+  $$delete from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%cannot delete verified image derivative%',
+  'verified image asset 的固定 derivative 不可刪除'
+);
 
 update app_private.media_ingests set state = 'finalized', lease_token = null, lease_until = null, finalized_at = now()
 where id = '20000000-0000-4000-8000-000000000001';
@@ -258,6 +263,14 @@ insert into app_private.media_assets (
    'source_cover', 'originals/source/old', 'old.png', 'image/png', 24, 2, 3, 'verified', 'source_cover', 'originals/source/old', 'image/png'),
   ('41000000-0000-4000-8000-000000000002', '21000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000001',
    'source_cover', 'originals/source/new', 'new.png', 'image/png', 24, 2, 3, 'verified', 'source_cover', 'originals/source/new', 'image/png');
+select extensions.throws_like(
+  $$insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind) values ('41000000-0000-4000-8000-000000000002', null, 'verified', 'pending', 'thumbnail_webp')$$,
+  '%verified media derivative must use thumb_webp_v1 spec%',
+  'verified derivative 第一筆 NULL spec 即拒絕，無法建立多筆 NULL duplicate'
+);
+insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind) values
+  ('41000000-0000-4000-8000-000000000001', 'thumb_webp_v1', 'verified', 'pending', 'thumbnail_webp'),
+  ('41000000-0000-4000-8000-000000000002', 'thumb_webp_v1', 'verified', 'pending', 'thumbnail_webp');
 update app_private.media_ingests
 set state = 'finalized', lease_token = null, lease_until = null, finalized_at = now()
 where id in ('21000000-0000-4000-8000-000000000001', '21000000-0000-4000-8000-000000000002');
@@ -327,17 +340,10 @@ select ok(
 );
 
 select extensions.throws_like(
-  $$insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind) values ('41000000-0000-4000-8000-000000000002', null, 'verified', 'pending', 'thumbnail_webp')$$,
-  '%verified media derivative must use thumb_webp_v1 spec%',
-  'verified derivative 第一筆 NULL spec 即拒絕，無法建立多筆 NULL duplicate'
-);
-delete from app_private.media_derivatives where asset_id = '41000000-0000-4000-8000-000000000002' and spec is null;
-select extensions.throws_like(
   $$update app_private.media_derivatives set asset_id = '41000000-0000-4000-8000-000000000002' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
   '%verified media derivative identity fields are immutable%',
   'verified derivative 不可跨 asset 重接'
 );
-update app_private.media_derivatives set asset_id = '40000000-0000-4000-8000-000000000001' where spec = 'thumb_webp_v1' and asset_id = '41000000-0000-4000-8000-000000000002';
 select extensions.throws_like(
   $$update app_private.media_derivatives set authority_state = 'legacy_unverified' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
   '%verified media derivative identity fields are immutable%',

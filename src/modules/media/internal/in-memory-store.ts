@@ -63,11 +63,13 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
     },
     async releaseIncomplete(key, leaseToken) {
       const ingest = ingests.get(key);
-      if (ingest?.state === "finalizing" && ingest.leaseToken === leaseToken) ingests.set(key, { ...ingest, state: "issued", leaseToken: null, leaseUntil: null });
+      if (!ingest || ingest.state !== "finalizing" || ingest.leaseToken !== leaseToken || !ingest.leaseUntil || new Date(ingest.leaseUntil) <= (input.now?.() ?? new Date())) throw new MediaFinalizeUnavailableError();
+      ingests.set(key, { ...ingest, state: "issued", leaseToken: null, leaseUntil: null });
     },
     async rejectInvalid(key, leaseToken) {
       const ingest = ingests.get(key);
-      if (ingest?.state === "finalizing" && ingest.leaseToken === leaseToken) ingests.set(key, { ...ingest, state: "cleanup_pending", leaseToken: null, leaseUntil: null });
+      if (!ingest || ingest.state !== "finalizing" || ingest.leaseToken !== leaseToken || !ingest.leaseUntil || new Date(ingest.leaseUntil) <= (input.now?.() ?? new Date())) throw new MediaFinalizeUnavailableError();
+      ingests.set(key, { ...ingest, state: "cleanup_pending", leaseToken: null, leaseUntil: null });
     },
     async completeFinalize(key, leaseToken, object: ValidatedMediaObject) {
       const existing = results.get(key);

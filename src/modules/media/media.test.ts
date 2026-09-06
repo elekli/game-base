@@ -79,6 +79,26 @@ function webp(width = 2, height = 3): Uint8Array {
   return result;
 }
 
+function animatedWebp(malformed = false): Uint8Array {
+  const framePayload = malformed ? new Uint8Array(16) : Uint8Array.from([
+    ...new Uint8Array(16), ...new TextEncoder().encode("VP8L"), 5, 0, 0, 0, 0x2f, 1, 0, 0, 0, 0,
+  ]);
+  framePayload[6] = 1;
+  framePayload[9] = 2;
+  const result = new Uint8Array(12 + 18 + 8 + framePayload.byteLength);
+  result.set(new TextEncoder().encode("RIFF"));
+  new DataView(result.buffer).setUint32(4, result.byteLength - 8, true);
+  result.set(new TextEncoder().encode("WEBPVP8X"), 8);
+  new DataView(result.buffer).setUint32(16, 10, true);
+  result[20] = 0x02;
+  result[24] = 1;
+  result[27] = 2;
+  result.set(new TextEncoder().encode("ANMF"), 30);
+  new DataView(result.buffer).setUint32(34, framePayload.byteLength, true);
+  result.set(framePayload, 38);
+  return result;
+}
+
 function objectStore(object: Readonly<{ bytes: Uint8Array; mimeType: string; byteSize?: number }>): MediaObjectStore {
   return {
     async createUploadGrant(path) { return { token: `grant:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }; },
@@ -197,6 +217,31 @@ describe("媒體公開介面", () => {
     await expect(service.finalizeMediaUpload(owner, { idempotencyKey })).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
   });
 
+  it("過期 lease 不得 release incomplete", async () => {
+    let current = new Date("2026-09-06T00:00:00.000Z");
+    const store = createInMemoryMediaStore({ activeGameIds: [gameId], now: () => current });
+    const service = createMediaService({ store, objects: objectStore({ bytes: png(), mimeType: "image/png" }), now: () => current });
+    await service.beginMediaUpload(owner, command());
+    const token = "33333333-3333-4333-8333-333333333335";
+    await store.claimFinalize(idempotencyKey, { token, until: new Date(current.getTime() + 60_000).toISOString() });
+    current = new Date(current.getTime() + 120_000);
+    await expect(store.releaseIncomplete(idempotencyKey, token)).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
+    await expect(service.beginMediaUpload(owner, command())).resolves.toEqual({ status: "finalizing" });
+  });
+
+  it("被新 worker 取代的 token 不得 reject invalid", async () => {
+    let current = new Date("2026-09-06T00:00:00.000Z");
+    const store = createInMemoryMediaStore({ activeGameIds: [gameId], now: () => current });
+    const service = createMediaService({ store, objects: objectStore({ bytes: png(), mimeType: "image/png" }), now: () => current });
+    await service.beginMediaUpload(owner, command());
+    const oldToken = "33333333-3333-4333-8333-333333333336";
+    await store.claimFinalize(idempotencyKey, { token: oldToken, until: new Date(current.getTime() + 60_000).toISOString() });
+    current = new Date(current.getTime() + 120_000);
+    await store.claimFinalize(idempotencyKey, { token: "33333333-3333-4333-8333-333333333337", until: new Date(current.getTime() + 60_000).toISOString() });
+    await expect(store.rejectInvalid(idempotencyKey, oldToken)).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
+    await expect(service.beginMediaUpload(owner, command())).resolves.toEqual({ status: "finalizing" });
+  });
+
   it("issued ingest 超過 stale deadline 後不得再 claim finalize", async () => {
     const start = new Date("2026-09-06T00:00:00.000Z");
     const store = createInMemoryMediaStore({ activeGameIds: [gameId], now: () => new Date(start.getTime() + 27 * 60 * 60_000) });
@@ -265,6 +310,17 @@ describe("媒體公開介面", () => {
     const service = createMediaService({ store: createInMemoryMediaStore({ activeGameIds: [gameId] }), objects: objectStore({ bytes, mimeType: "image/jpeg" }) });
     await service.beginMediaUpload(owner, command({ declaredMimeType: "image/jpeg", declaredByteSize: bytes.byteLength, originalFileName: "large.jpg" }));
     await expect(service.finalizeMediaUpload(owner, { idempotencyKey })).resolves.toMatchObject({ asset: { actualMimeType: "image/jpeg" } });
+  });
+
+  it("animated WebP 由 ANMF 第一幀驗證，缺少幀資料則拒絕", async () => {
+    for (const [bytes, succeeds] of [[animatedWebp(), true], [animatedWebp(true), false]] as const) {
+      const key = `${idempotencyKey}-${succeeds}`;
+      const service = createMediaService({ store: createInMemoryMediaStore({ activeGameIds: [gameId] }), objects: objectStore({ bytes, mimeType: "image/webp" }) });
+      await service.beginMediaUpload(owner, { ...command({ declaredMimeType: "image/webp", declaredByteSize: bytes.byteLength, originalFileName: "animated.webp" }), idempotencyKey: key });
+      const finalize = service.finalizeMediaUpload(owner, { idempotencyKey: key });
+      if (succeeds) await expect(finalize).resolves.toMatchObject({ asset: { actualMimeType: "image/webp", width: 2, height: 3 } });
+      else await expect(finalize).rejects.toBeInstanceOf(MediaStoredObjectInvalidError);
+    }
   });
 
   it("finalize 拒絕宣稱／Storage metadata／點陣檔頭 MIME 不一致與 SVG", async () => {

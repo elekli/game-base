@@ -254,6 +254,12 @@ begin
   if new.purpose = 'attachment' and exists (select 1 from app_private.media_derivatives derivative where derivative.asset_id = new.id) then
     raise exception 'media attachment cannot have a derivative';
   end if;
+  if new.authority_state = 'verified' and new.purpose <> 'attachment' and not exists (
+    select 1 from app_private.media_derivatives derivative
+    where derivative.asset_id = new.id and derivative.authority_state = 'verified' and derivative.spec = 'thumb_webp_v1'
+  ) then
+    raise exception 'verified image asset must have its thumb_webp_v1 derivative';
+  end if;
   return new;
 end;
 $$;
@@ -398,6 +404,19 @@ begin
 end;
 $$;
 
+create function app_private.prevent_verified_media_derivative_delete()
+returns trigger language plpgsql as $$
+begin
+  if old.authority_state = 'verified' and exists (
+    select 1 from app_private.media_assets asset
+    where asset.id = old.asset_id and asset.authority_state = 'verified' and asset.purpose <> 'attachment'
+  ) then
+    raise exception 'cannot delete verified image derivative';
+  end if;
+  return old;
+end;
+$$;
+
 create constraint trigger games_valid_manual_cover
 after insert or update on app_private.games
 deferrable initially immediate for each row execute function app_private.assert_valid_media_cover_pointer();
@@ -438,6 +457,10 @@ create trigger media_derivatives_prevent_verified_identity_update
 before update on app_private.media_derivatives
 for each row execute function app_private.prevent_verified_media_derivative_identity_update();
 
+create trigger media_derivatives_prevent_verified_delete
+before delete on app_private.media_derivatives
+for each row execute function app_private.prevent_verified_media_derivative_delete();
+
 create index media_ingests_finalize_candidates_idx on app_private.media_ingests (state, lease_until);
 create index media_ingests_cleanup_candidates_idx on app_private.media_ingests (state, stale_after);
 create index media_assets_game_id_idx on app_private.media_assets (game_id) where removed_at is null and superseded_at is null;
@@ -462,6 +485,7 @@ revoke execute on function app_private.prevent_finalized_media_ingest_authority_
 revoke execute on function app_private.prevent_finalized_media_ingest_delete() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_finalized_media_asset_delete() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_verified_media_derivative_identity_update() from public, anon, authenticated, service_role;
+revoke execute on function app_private.prevent_verified_media_derivative_delete() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_system_platform_mutation() from public;
 
 -- TODO(#media-ledger-contract): 完成 Storage 重驗與雙版本部署後，另以 contract migration

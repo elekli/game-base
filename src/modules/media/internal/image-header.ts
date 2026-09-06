@@ -243,6 +243,7 @@ async function webp(reader: StreamReader, expectedSize: number): Promise<ImageHe
   if (ascii(header.subarray(0, 4)) !== "RIFF" || ascii(header.subarray(8, 12)) !== "WEBP" || u32le(header, 4) + 8 !== expectedSize) throw new MediaStoredObjectInvalidError();
   let dimensions: ImageHeader | null = null;
   let sawImageData = false;
+  let animated = false;
   while (reader.consumed < expectedSize) {
     const chunkHeader = await reader.exact(8);
     const kind = ascii(chunkHeader.subarray(0, 4));
@@ -251,7 +252,40 @@ async function webp(reader: StreamReader, expectedSize: number): Promise<ImageHe
     if (kind === "VP8X") {
       if (length !== 10) throw new MediaStoredObjectInvalidError();
       const data = await reader.exact(10);
+      animated = (data[0] & 0x02) !== 0;
       dimensions = checked("image/webp", 1 + u24le(data, 4), 1 + u24le(data, 7));
+    } else if (kind === "ANMF") {
+      if (!animated || !dimensions || length < 30) throw new MediaStoredObjectInvalidError();
+      const frame = await reader.exact(16);
+      const frameWidth = 1 + u24le(frame, 6);
+      const frameHeight = 1 + u24le(frame, 9);
+      if (2 * u24le(frame) + frameWidth > dimensions.width || 2 * u24le(frame, 3) + frameHeight > dimensions.height || (frame[15] & 0xfc) !== 0) throw new MediaStoredObjectInvalidError();
+      let remaining = length - 16;
+      while (remaining > 0) {
+        if (remaining < 8) throw new MediaStoredObjectInvalidError();
+        const nested = await reader.exact(8);
+        const nestedKind = ascii(nested.subarray(0, 4));
+        const nestedLength = u32le(nested, 4);
+        const padded = nestedLength + (nestedLength % 2);
+        if (padded > remaining - 8) throw new MediaStoredObjectInvalidError();
+        if (nestedKind === "VP8L") {
+          if (nestedLength < 5) throw new MediaStoredObjectInvalidError();
+          const data = await reader.exact(5);
+          if (data[0] !== 0x2f) throw new MediaStoredObjectInvalidError();
+          await reader.skip(nestedLength - 5);
+          sawImageData = true;
+        } else if (nestedKind === "VP8 ") {
+          if (nestedLength < 10) throw new MediaStoredObjectInvalidError();
+          const data = await reader.exact(10);
+          if (data[3] !== 0x9d || data[4] !== 0x01 || data[5] !== 0x2a) throw new MediaStoredObjectInvalidError();
+          await reader.skip(nestedLength - 10);
+          sawImageData = true;
+        } else {
+          await reader.skip(nestedLength);
+        }
+        if (nestedLength % 2 === 1) await reader.skip(1);
+        remaining -= 8 + padded;
+      }
     } else if (kind === "VP8L") {
       if (length < 5) throw new MediaStoredObjectInvalidError();
       const data = await reader.exact(5);

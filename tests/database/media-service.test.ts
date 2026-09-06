@@ -149,6 +149,8 @@ describe("MediaService 與真 PostgreSQL", () => {
       .rejects.toThrow("verified media derivative identity fields are immutable");
     await expect(runtime.unsafe("update app_private.media_derivatives set authority_state = 'legacy_unverified' where asset_id = $1", [grant.assetId]))
       .rejects.toThrow("verified media derivative identity fields are immutable");
+    await expect(runtime.unsafe("delete from app_private.media_derivatives where asset_id = $1", [grant.assetId]))
+      .rejects.toThrow("cannot delete verified image derivative");
   });
 
   it("PostgreSQL 時鐘判定 lease 過期後拒絕舊 token 完成", async () => {
@@ -161,6 +163,28 @@ describe("MediaService 與真 PostgreSQL", () => {
     await expect(store.completeFinalize(key, leaseToken, {
       actualMimeType: "image/png", byteSize: png().byteLength, width: 20, height: 30,
     })).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
+  });
+
+  it("PostgreSQL 時鐘拒絕過期 worker release incomplete", async () => {
+    const store = new PostgresMediaStore(database.db);
+    await serviceFor().beginMediaUpload(owner, beginCommand());
+    const token = "53000000-0000-4000-8000-000000000002";
+    await store.claimFinalize(key, { token, until: "2000-01-01T00:00:00.000Z" });
+    await expect(store.releaseIncomplete(key, token)).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
+    const rows = await runtime.unsafe<{ state: string }[]>("select state from app_private.media_ingests where idempotency_key = $1", [key]);
+    expect(rows[0].state).toBe("finalizing");
+  });
+
+  it("舊 token 被新 worker 取代後不得 reject invalid", async () => {
+    const store = new PostgresMediaStore(database.db);
+    await serviceFor().beginMediaUpload(owner, beginCommand());
+    const oldToken = "53000000-0000-4000-8000-000000000003";
+    const newToken = "53000000-0000-4000-8000-000000000004";
+    await store.claimFinalize(key, { token: oldToken, until: "2000-01-01T00:00:00.000Z" });
+    await store.claimFinalize(key, { token: newToken, until: "2099-01-01T00:00:00.000Z" });
+    await expect(store.rejectInvalid(key, oldToken)).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
+    const rows = await runtime.unsafe<{ state: string; lease_token: string }[]>("select state, lease_token from app_private.media_ingests where idempotency_key = $1", [key]);
+    expect(rows[0]).toEqual({ state: "finalizing", lease_token: newToken });
   });
 
   it("PostgreSQL 時鐘拒絕 stale deadline 已過的 issued ingest claim", async () => {

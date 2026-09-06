@@ -149,20 +149,24 @@ export class PostgresMediaStore implements MediaStore {
   }
 
   async releaseIncomplete(idempotencyKey: string, leaseToken: string): Promise<void> {
-    await this.db.execute(sql`
+    const rows = await this.db.execute(sql`
       update app_private.media_ingests
       set state = 'issued', lease_token = null, lease_until = null, last_error_code = 'media_upload_incomplete'
-      where idempotency_key = ${idempotencyKey} and state = 'finalizing' and lease_token = ${leaseToken}
-    `);
+      where idempotency_key = ${idempotencyKey} and state = 'finalizing' and lease_token = ${leaseToken} and lease_until > now()
+      returning id
+    `) as Row[];
+    if (!rows[0]) throw new MediaFinalizeUnavailableError();
   }
 
   async rejectInvalid(idempotencyKey: string, leaseToken: string): Promise<void> {
-    await this.db.execute(sql`
+    const rows = await this.db.execute(sql`
       update app_private.media_ingests
       set state = 'cleanup_pending', lease_token = null, lease_until = null,
         last_error_code = 'media_stored_object_invalid', original_state = 'failed'
-      where idempotency_key = ${idempotencyKey} and state = 'finalizing' and lease_token = ${leaseToken}
-    `);
+      where idempotency_key = ${idempotencyKey} and state = 'finalizing' and lease_token = ${leaseToken} and lease_until > now()
+      returning id
+    `) as Row[];
+    if (!rows[0]) throw new MediaFinalizeUnavailableError();
   }
 
   async completeFinalize(idempotencyKey: string, leaseToken: string, object: ValidatedMediaObject): Promise<MediaUploadResult> {
