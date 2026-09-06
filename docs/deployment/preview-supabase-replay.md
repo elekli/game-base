@@ -46,6 +46,10 @@ main + GitHub preview Environment
 
 實際 Hosted Preview project／ref 是外部前置條件，不得以 `preview-ref` fixture 冒充。主 session 或維運者必須在受保護平台完成下列設定，並以非秘密識別值更新 repository binding；本票不建立或修改 Hosted Supabase、GitHub、Vercel 資源。
 
+Production Supabase project 的 Vercel integration 必須維持只注入 Production。不得在該 integration 開啟 Preview 或 Development credential sync：Supabase Branching 是每個 Git branch 對應一個獨立、預設短命的 Preview branch，且官方文件明載 PR 建立、branch provisioning、Vercel 變數同步與部署之間存在競速；在正確 branch credentials 尚未就緒時同步 Production credentials，會破壞本專案「Preview 永不取得 Production secret 或資料庫密碼」的不變式。
+
+本專案不採每個 PR 一個 Supabase Preview branch。所有 Vercel Preview deployment 使用另一個固定、可重設、只含假資料的 Supabase project；其 runtime variables 由 Vercel Preview scope 明確配置，不從 Production integration 複製。若未來要改採 Supabase Branching，必須先另行修訂環境模型、repository binding、資料重設語意與部署競速處理，不能直接切換 integration scope。
+
 1. 建立只供 Preview 使用的 Supabase project，確認不放 Production 資料；取得實際 project ref。
 2. 在 `src/shared/config/deployment-bindings.ts` 填入實際 Preview 的 project ref、Supabase hostname、Supavisor runtime binding 與兩個 key fingerprint；確認不與 Production binding 重疊。不要提交任何 key 原文或角色密碼。
 3. 在 GitHub `preview` Environment 設定 branch restriction 為 `main`，建立非秘密 variable `PREVIEW_SUPABASE_PROJECT_REF`，以及 secret `PREVIEW_DIRECT_DATABASE_URL`。secret 必須是同一 Preview project 的 direct URL，不能是 Supavisor pooler。
