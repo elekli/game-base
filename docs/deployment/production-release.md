@@ -39,7 +39,7 @@ T01 只要求 Vercel Production scope 已有 `SUPABASE_PUBLISHABLE_KEY`（encryp
 
 `app_runtime` 可經 membership-level `INHERIT`、`SET ROLE` 或 `ADMIN OPTION` 遞迴到達的角色，必須與 `.github/production-runtime-role-reachability-allowlist.json` 的 `appRuntimeReachableRoles` 完全相同；目前固定清單為空。PostgreSQL 17 的 membership-level `INHERIT TRUE` 即使搭配 role-level `NOINHERIT`，仍視為權限可達；任何未核准角色都必須停止發布。固定清單將來若因平台必要條件新增角色，仍不得容許 `app_migrator`、superuser、`BYPASSRLS`、`CREATEROLE` 或 `CREATEDB`；應只提交角色名稱，不記錄密碼或其他秘密。
 
-Membership graph 也必須反向檢查：`anon`、`authenticated`、`service_role`，以及任何 LOGIN、superuser、`BYPASSRLS`、`CREATEROLE`、`CREATEDB` 或 replication role，都不得直接或遞迴到達 `app_runtime`／`app_migrator`。`app_migrator` 本身固定為 `NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`。
+Membership graph 也必須反向檢查：只容許 PostgreSQL 建立角色時自動留下的兩條直接 `postgres` role-creator membership，且必須精確為 `ADMIN TRUE`、`INHERIT FALSE`、`SET FALSE`，分別指向 `app_runtime` 與 `app_migrator`。這兩條不授予應用角色權限，並讓既有 `postgres` migration principal 管理其建立的角色。除此以外，任何角色都不得直接或遞迴到達 `app_runtime`／`app_migrator`；額外 membership、兩條既定 membership 缺失或 option 漂移都停止發布。`app_migrator` 本身固定為 `NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`。
 
 `app_private` schema 內的 tables、partitioned tables、sequences、views、materialized views、foreign tables、composite types、standalone types 與 routines，都必須由 `app_migrator` 擁有。preflight 也辨識 extension-owned objects；目前不允許 extension 在 `app_private` 建立例外物件，發現時一律停止發布。這項檢查只讀 schema metadata，不讀取資料列或 routine body；目前 repository 的正常基線為 18 張 table 與 `app_private.prevent_system_platform_mutation()`，未建立 sequence、view 或 standalone type。
 

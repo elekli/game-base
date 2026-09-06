@@ -164,6 +164,24 @@ describe("production migration PostgreSQL catalog checks", () => {
     }
   });
 
+  it("allows only PostgreSQL's two direct ADMIN-only role-creator memberships", async () => {
+    const healthy = await snapshot();
+    expect(healthy.expectedCreatorAdminMembershipCount).toBe(2);
+    expect(healthy.dangerousInboundRoleCount).toBe(0);
+
+    await database.unsafe("begin");
+    try {
+      await database.unsafe(`
+        create role acl_inbound_probe;
+        grant app_runtime to acl_inbound_probe with inherit true, set false, admin false;
+      `);
+      const drifted = await snapshot();
+      expect(drifted.dangerousInboundRoleCount).toBe(1);
+    } finally {
+      await database.unsafe("rollback");
+    }
+  });
+
   it.each([
     ["INHERIT TRUE, SET FALSE, ADMIN FALSE"],
     ["INHERIT FALSE, SET TRUE, ADMIN FALSE"],

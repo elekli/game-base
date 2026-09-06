@@ -89,6 +89,7 @@ function healthySnapshot(): ProductionDatabaseSnapshot {
     appRuntimeExists: true,
     appRuntimeIsRestricted: true,
     appRuntimeReachableRoles: [],
+    expectedCreatorAdminMembershipCount: 2,
     appPrivateOwnedByMigrator: true,
     appPrivateObjects: [
       ...appPrivateTables.map((identity) => ({
@@ -818,7 +819,7 @@ describe("production migration preflight", () => {
         connect: async () => session,
       }),
     ).rejects.toThrow("ProductionMigrationPreflightError");
-    expect(statements.join("\n").match(/membership\.inherit_option/g)).toHaveLength(6);
+    expect(statements.join("\n").match(/membership\.inherit_option/g)).toHaveLength(7);
   });
 
   it("rejects every role reachable outward from app_migrator", async () => {
@@ -885,6 +886,33 @@ describe("production migration preflight", () => {
     if (field === "dangerousInboundRoleCount") {
       expect(statements.join("\n")).toContain("with recursive inbound_role");
     }
+  });
+
+  it("requires exactly the two PostgreSQL role-creator ADMIN memberships", async () => {
+    const root = await migrationFixture({
+      "0001_runtime_security.sql": "create schema app_private;",
+      "0002_games.sql": "create table app_private.games (id uuid primary key);",
+    });
+    const snapshot = healthySnapshot();
+    snapshot.expectedCreatorAdminMembershipCount = 1;
+    const statements: string[] = [];
+    const session: ReadOnlyDatabaseSession = {
+      async unsafe<T>(sql: string) {
+        statements.push(sql);
+        return sql.includes("json_build_object") ? ([{ snapshot }] as T[]) : [];
+      },
+      async release() {},
+    };
+
+    await expect(
+      runProductionMigrationPreflight({
+        root,
+        databaseUrl:
+          "postgres://postgres.wbtyuvufhrhybquzwfip:secret@aws-0-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=verify-full",
+        connect: async () => session,
+      }),
+    ).rejects.toThrow("ProductionMigrationPreflightError");
+    expect(statements.join("\n")).toContain("membership.admin_option");
   });
 
   it("requires app_migrator to keep all restricted role flags", async () => {
@@ -1049,7 +1077,7 @@ describe("production migration preflight", () => {
     expect(statements.join("\n")).toContain("with recursive reachable_role");
     expect(statements.join("\n")).toContain("membership.set_option");
     expect(statements.join("\n")).toContain("membership.inherit_option");
-    expect(statements.join("\n").match(/membership\.inherit_option/g)).toHaveLength(6);
+    expect(statements.join("\n").match(/membership\.inherit_option/g)).toHaveLength(7);
   });
 
   it.each([
