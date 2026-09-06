@@ -21,6 +21,36 @@ const database = postgres(adminDatabaseUrl.toString(), {
   prepare: false,
   onnotice: () => undefined,
 });
+const postgresDatabase = postgres(directDatabaseUrl, {
+  max: 1,
+  prepare: false,
+  onnotice: () => undefined,
+});
+
+type MembershipEvidence = Readonly<{
+  adminOption: boolean;
+  grantor: string;
+  inheritOption: boolean;
+  setOption: boolean;
+}>;
+
+async function appMigratorMembershipEvidence() {
+  return postgresDatabase.unsafe<MembershipEvidence[]>(`
+    select
+      grantor.rolname as grantor,
+      membership.admin_option as "adminOption",
+      membership.inherit_option as "inheritOption",
+      membership.set_option as "setOption"
+    from pg_auth_members membership
+    join pg_roles granted_role on granted_role.oid = membership.roleid
+    join pg_roles member_role on member_role.oid = membership.member
+    join pg_roles grantor on grantor.oid = membership.grantor
+    where granted_role.rolname = 'app_migrator'
+      and member_role.rolname = 'postgres'
+    order by grantor.rolname, membership.inherit_option,
+      membership.set_option, membership.admin_option
+  `);
+}
 
 async function snapshot(): Promise<ProductionDatabaseSnapshot> {
   const rows = await database.unsafe<{ snapshot: ProductionDatabaseSnapshot }[]>(
@@ -32,10 +62,12 @@ async function snapshot(): Promise<ProductionDatabaseSnapshot> {
 describe("production migration PostgreSQL catalog checks", () => {
   beforeAll(async () => {
     await database.unsafe("select 1");
+    await postgresDatabase.unsafe("select 1");
   });
 
   afterAll(async () => {
     await database.end();
+    await postgresDatabase.end();
   });
 
   it("accepts the healthy ACL and exact effective default-privilege matrices", async () => {
@@ -52,18 +84,48 @@ describe("production migration PostgreSQL catalog checks", () => {
     );
     const functionIdentity =
       "app_private.prevent_system_platform_mutation()";
-    await database.unsafe("begin");
+    const identity = await postgresDatabase.unsafe<
+      { currentUser: string; sessionUser: string }[]
+    >(`
+      select current_user as "currentUser", session_user as "sessionUser"
+    `);
+    expect(identity[0]).toEqual({
+      currentUser: "postgres",
+      sessionUser: "postgres",
+    });
+
+    const membershipBaseline = await appMigratorMembershipEvidence();
+    expect(membershipBaseline.length).toBeGreaterThan(0);
+
+    await postgresDatabase.unsafe("begin");
     try {
-      await database.unsafe(`
+      await postgresDatabase.unsafe("grant app_migrator to postgres");
+      const membershipWithTemporaryGrant =
+        await appMigratorMembershipEvidence();
+      expect(membershipWithTemporaryGrant).toEqual([
+        {
+          adminOption: false,
+          grantor: "postgres",
+          inheritOption: true,
+          setOption: true,
+        },
+        ...membershipBaseline,
+      ]);
+
+      await postgresDatabase.unsafe(`
         set local role app_migrator;
         grant usage on schema app_private to postgres;
         grant execute on function ${functionIdentity} to public;
         reset role;
-        set local role postgres;
-        revoke execute on function ${functionIdentity} from public;
+        revoke app_migrator from postgres;
       `);
+      expect(await appMigratorMembershipEvidence()).toEqual(membershipBaseline);
 
-      const afterMemberRevoke = await database.unsafe<
+      await postgresDatabase.unsafe(
+        `revoke execute on function ${functionIdentity} from public`,
+      );
+
+      const afterMemberRevoke = await postgresDatabase.unsafe<
         {
           acl: string[];
           currentUser: string;
@@ -86,10 +148,9 @@ describe("production migration PostgreSQL catalog checks", () => {
       });
       expect(afterMemberRevoke[0]!.acl).toContain("=X/app_migrator");
 
-      await database.unsafe("reset role");
-      await database.unsafe(remediation);
+      await postgresDatabase.unsafe(remediation);
 
-      const afterOwnerRevoke = await database.unsafe<
+      const afterOwnerRevoke = await postgresDatabase.unsafe<
         {
           acl: string[];
           currentUser: string;
@@ -106,13 +167,14 @@ describe("production migration PostgreSQL catalog checks", () => {
         where procedure.oid = to_regprocedure('${functionIdentity}')
       `);
       expect(afterOwnerRevoke[0]).toMatchObject({
-        currentUser: "supabase_admin",
+        currentUser: "postgres",
         publicCanExecute: false,
         runtimeCanExecute: false,
       });
       expect(afterOwnerRevoke[0]!.acl).not.toContain("=X/app_migrator");
+      expect(await appMigratorMembershipEvidence()).toEqual(membershipBaseline);
     } finally {
-      await database.unsafe("rollback");
+      await postgresDatabase.unsafe("rollback");
     }
   });
 
