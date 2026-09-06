@@ -1,4 +1,9 @@
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 
 import { describe, expect, it } from "vitest";
 
@@ -25,8 +30,35 @@ const pendingSetSha256 = createHash("sha256")
   .digest("hex");
 const publicationIdentity = buildReleaseIdentity("123", 1, "b".repeat(40), pendingSetSha256);
 const publicationPath = `.github/production-migration-ledger/${publicationIdentity}.json`;
+const execFileAsync = promisify(execFile);
 
 describe("production migration release records", () => {
+  it("forwards the exact workflow argv through the pnpm package script", async () => {
+    const root = process.cwd();
+    const runnerTemp = await mkdtemp(path.join(tmpdir(), "release-plan-cli-"));
+    const pendingInput = '["0007_revoke_public_platform_trigger_execute.sql"]';
+    try {
+      const workflow = await readFile(path.join(root, ".github/workflows/production-release.yml"), "utf8");
+      const invocation = /^\s*run: (pnpm release:migration:plan[^\n]+)$/m.exec(workflow)?.[1];
+      expect(invocation).toBe(
+        'pnpm release:migration:plan plan-from-input "$PENDING_INPUT" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/expected-plan.json"',
+      );
+      await execFileAsync("/bin/bash", ["-euo", "pipefail", "-c", invocation!], {
+        cwd: root,
+        env: {
+          ...process.env,
+          GITHUB_WORKSPACE: root,
+          PENDING_INPUT: pendingInput,
+          RUNNER_TEMP: runnerTemp,
+        },
+      });
+      const actual = JSON.parse(await readFile(path.join(runnerTemp, "expected-plan.json"), "utf8"));
+      await expect(buildPendingMigrationPlan(root, pendingInput)).resolves.toEqual(actual);
+    } finally {
+      await rm(runnerTemp, { recursive: true, force: true });
+    }
+  });
+
   function normalPorts(overrides: Partial<Parameters<typeof runNormalMigrationRelease>[0]> = {}) {
     const events: string[] = [];
     const plan = { pendingMigrations: [migration], pendingSetSha256 };

@@ -80,6 +80,7 @@ describe("production release contract", () => {
     expect(workflow).toContain("retention-days: 90");
     expect(workflow).toContain("ledger-recovery");
     expect(workflow).not.toContain('> "$RUNNER_TEMP/preflight');
+    expect(workflow).not.toMatch(/pnpm release:migration:(?:plan|run) --(?:\s|$)/);
     expect(workflow).toContain("umask 077");
     expect(workflow).toContain('echo "PGSSLROOTCERT=$cert"');
     expect(workflow.match(/- name: Apply and strict-verify exact migration suffix/g)).toHaveLength(1);
