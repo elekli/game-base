@@ -197,20 +197,20 @@ export class PostgresGameStore implements GameStore {
 
   async listContributorFacets(): Promise<readonly ContributorFacet[]> {
     const rows = await this.db.execute(sql`
-      select distinct contributor_id, name, entity_kind, role from (
-        select c.id as contributor_id, c.name, c.entity_kind, sc.role
+      select distinct contributor_id, name, entity_kind, source_provider, role from (
+        select c.id as contributor_id, c.name, c.entity_kind, c.source_provider, sc.role
         from app_private.games g
         join app_private.source_contributions sc on sc.identity_id = g.external_game_identity_id
         join app_private.contributors c on c.id = sc.contributor_id
         where g.trashed_at is null
         union
-        select c.id as contributor_id, c.name, c.entity_kind, mc.role
+        select c.id as contributor_id, c.name, c.entity_kind, c.source_provider, mc.role
         from app_private.games g
         join app_private.manual_contributions mc on mc.game_id = g.id
         join app_private.contributors c on c.id = mc.contributor_id
         where g.trashed_at is null
         union
-        select c.id as contributor_id, c.name, c.entity_kind, contributor ->> 'role' as role
+        select c.id as contributor_id, c.name, c.entity_kind, c.source_provider, contributor ->> 'role' as role
         from app_private.games g
         join app_private.external_game_identities i on i.id = g.external_game_identity_id
         cross join lateral jsonb_array_elements(coalesce(i.snapshot -> 'contributors', '[]'::jsonb)) contributor
@@ -220,7 +220,7 @@ export class PostgresGameStore implements GameStore {
       ) facets
       order by role asc, name asc, contributor_id asc
     `) as Row[];
-    return rows.map((row) => ({ contributorId: String(row.contributor_id), name: String(row.name), entityKind: row.entity_kind as ContributorFacet["entityKind"], role: row.role as ContributorFacet["role"] }));
+    return rows.map((row) => ({ contributorId: String(row.contributor_id), name: String(row.name), entityKind: row.entity_kind as ContributorFacet["entityKind"], provider: row.source_provider === "bgg" || row.source_provider === "igdb" ? row.source_provider : null, role: row.role as ContributorFacet["role"] }));
   }
 
   private async readGame(executor: QueryExecutor, id: string): Promise<GameRecord | null> {

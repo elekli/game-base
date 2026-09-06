@@ -141,7 +141,42 @@ describe("library service", () => {
     const trashed = await store.createFromSource(source("facet-trashed", "facet-author-b").ref, source("facet-trashed", "facet-author-b"));
     await store.trash(trashed.game.id);
 
-    await expect(service.listContributorFacets()).resolves.toEqual([{ contributorId: active.game.contributors[0].contributorId, name: "同名作者", entityKind: "person", role: "design" }]);
+    await expect(service.listContributorFacets()).resolves.toEqual([{ contributorId: active.game.contributors[0].contributorId, name: "同名作者", entityKind: "person", provider: "bgg", role: "design" }]);
+  });
+
+  it("共享 contributor 部分 refresh 後，facet 使用 canonical entity 的新名稱", async () => {
+    const store = new InMemoryGameStore();
+    const service = createLibraryService(store);
+    const snapshot = (sourceId: string, contributorName: string): SourceSnapshot => ({
+      ref: { provider: "bgg", medium: "board_game", sourceId },
+      canonicalUrl: `https://example.test/${sourceId}`,
+      title: `canonical ${sourceId}`,
+      localizedTitle: null,
+      aliases: [],
+      description: null,
+      releaseYear: null,
+      coverUrl: null,
+      categories: [],
+      contributors: [{ sourceContributorId: "canonical-shared", name: contributorName, entityKind: "company", role: "publisher" }],
+      minPlayers: null,
+      maxPlayers: null,
+      supportsSolo: "unknown",
+      playtimeMinutes: null,
+      weight: null,
+      strategyRank: null,
+      supportedPlatforms: [],
+    });
+    const first = await store.createFromSource(snapshot("canonical-first", "舊名稱").ref, snapshot("canonical-first", "舊名稱"));
+    await store.createFromSource(snapshot("canonical-second", "舊名稱").ref, snapshot("canonical-second", "舊名稱"));
+    await store.refreshSource(first.game.id, snapshot("canonical-first", "新名稱"));
+
+    await expect(service.listContributorFacets()).resolves.toEqual([{
+      contributorId: first.game.contributors[0].contributorId,
+      name: "新名稱",
+      entityKind: "company",
+      provider: "bgg",
+      role: "publisher",
+    }]);
   });
 
   it("以名稱部分搜尋並將實際平台與自由標籤依同維度 OR、跨維度 AND 篩選", async () => {

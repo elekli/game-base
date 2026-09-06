@@ -50,7 +50,7 @@ export type ManualContributionResult =
   | Readonly<{ status: "created"; game: GameRecord; possibleDuplicate: false }>
   | Readonly<{ status: "confirmation_required"; matches: readonly ContributorMatch[]; possibleDuplicate: true }>;
 export type SharedLibraryItem = Readonly<{ name: string; usageCount: number; isSystem: boolean }>;
-export type ContributorFacet = Readonly<{ contributorId: string; name: string; entityKind: "person" | "company"; role: ContributionRole }>;
+export type ContributorFacet = Readonly<{ contributorId: string; name: string; entityKind: "person" | "company"; provider: "bgg" | "igdb" | null; role: ContributionRole }>;
 
 export type GameStore = {
   list(query?: string): Promise<readonly GameRecord[]>;
@@ -164,10 +164,13 @@ export class InMemoryGameStore implements GameStore {
       if (game.trashedAt !== null) continue;
       for (const contribution of game.contributors) {
         if (contribution.contributorId === null) continue;
+        const contributor = this.contributors.get(contribution.contributorId);
+        if (!contributor) throw new SourcePersistenceFailedError();
         facets.set(`${contribution.role}:${contribution.contributorId}`, {
           contributorId: contribution.contributorId,
-          name: contribution.name,
-          entityKind: contribution.entityKind,
+          name: contributor.name,
+          entityKind: contributor.entityKind,
+          provider: contributor.provider,
           role: contribution.role,
         });
       }
