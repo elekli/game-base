@@ -51,9 +51,9 @@ try {
   if (rows.length !== 3 || rows.some((row) => row.authority_state !== "legacy_unverified" || row.derivative_authority_state !== "legacy_unverified" ||
       !String(row.object_key).includes("games/") || !String(row.derivative_object_key).includes("games/")) ||
       Number(rows[1].byte_size) !== 0 || Number(authoritative_count) !== 0 || Number(source_pointer_count) !== 0) {
-    throw new Error("0007 expand did not preserve legacy writes while excluding them from authoritative reads");
+    throw new Error("0011 expand did not preserve legacy writes while excluding them from authoritative reads");
   }
-  console.log(JSON.stringify({ event: "media_migration_upgrade_passed", from: "0006", to: "0007" }));
+  console.log(JSON.stringify({ event: "media_migration_upgrade_passed", from: "0006", to: "0011" }));
 } finally {
   supabase("db", "reset");
 }

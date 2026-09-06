@@ -136,7 +136,7 @@
     {
       "table": "media_derivative_attempts",
       "name": "runtime_media_derivative_attempts",
-      "validFrom": "0007",
+      "validFrom": "0011",
       "validUntilExclusive": null,
       "permissiveness": "PERMISSIVE",
       "command": "ALL",
@@ -169,7 +169,7 @@
     {
       "table": "media_ingest_operations",
       "name": "runtime_media_ingest_operations_insert",
-      "validFrom": "0007",
+      "validFrom": "0011",
       "validUntilExclusive": null,
       "permissiveness": "PERMISSIVE",
       "command": "INSERT",
@@ -180,7 +180,7 @@
     {
       "table": "media_ingest_operations",
       "name": "runtime_media_ingest_operations_select",
-      "validFrom": "0007",
+      "validFrom": "0011",
       "validUntilExclusive": null,
       "permissiveness": "PERMISSIVE",
       "command": "SELECT",
@@ -224,7 +224,7 @@
     {
       "table": "source_refresh_operations",
       "name": "runtime_source_refresh_operations_insert",
-      "validFrom": "0007",
+      "validFrom": "0011",
       "validUntilExclusive": null,
       "permissiveness": "PERMISSIVE",
       "command": "INSERT",
@@ -235,7 +235,7 @@
     {
       "table": "source_refresh_operations",
       "name": "runtime_source_refresh_operations_select",
-      "validFrom": "0007",
+      "validFrom": "0011",
       "validUntilExclusive": null,
       "permissiveness": "PERMISSIVE",
       "command": "SELECT",
