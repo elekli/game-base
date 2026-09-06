@@ -83,6 +83,14 @@ const RUNTIME_ROLE_REACHABILITY_ALLOWLIST_PATH =
 const KNOWN_DRIFT_REMEDIATION_NAME = "revoke_public_platform_trigger_execute";
 const KNOWN_DRIFT_REMEDIATION_SQL =
   "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n";
+const KNOWN_DRIFT_REMEDIATION_FILENAMES = new Set([
+  "0007_revoke_public_platform_trigger_execute.sql",
+  "0008_revoke_public_platform_trigger_execute.sql",
+]);
+const PENDING_KNOWN_DRIFT_REMEDIATION = {
+  version: "0008",
+  filename: "0008_revoke_public_platform_trigger_execute.sql",
+} as const;
 const INITIAL_LINT_BASELINE = {
   "0001_runtime_security.sql":
     "c6bf64ba267281f66cbedfffd6854c3a2eade1e9631587a2e738fee9a544d787",
@@ -1218,6 +1226,7 @@ export async function lintProductionMigrations(
   for (const migration of migrations) {
     const digest = createHash("sha256").update(migration.sql).digest("hex");
     const isExactKnownRemediation =
+      KNOWN_DRIFT_REMEDIATION_FILENAMES.has(migration.filename) &&
       migration.name === KNOWN_DRIFT_REMEDIATION_NAME &&
       migration.sql === KNOWN_DRIFT_REMEDIATION_SQL;
     if (
@@ -1501,12 +1510,13 @@ export async function runProductionMigrationPreflight(options: {
       );
     }
     const pendingMigrations = migrations.slice(snapshot.migrations.length);
-    const namedRemediations = pendingMigrations.filter(
-      (migration) => migration.name === KNOWN_DRIFT_REMEDIATION_NAME,
-    );
+    const pendingRemediation = pendingMigrations[0];
     const knownDriftRemediationPending =
-      namedRemediations.length === 1 &&
-      namedRemediations[0]!.sql === KNOWN_DRIFT_REMEDIATION_SQL;
+      pendingMigrations.length === 1 &&
+      pendingRemediation!.version === PENDING_KNOWN_DRIFT_REMEDIATION.version &&
+      pendingRemediation!.filename === PENDING_KNOWN_DRIFT_REMEDIATION.filename &&
+      pendingRemediation!.name === KNOWN_DRIFT_REMEDIATION_NAME &&
+      pendingRemediation!.sql === KNOWN_DRIFT_REMEDIATION_SQL;
     const preflightState = assertSnapshot(
       snapshot,
       migrations.map(({ version, name }) => ({ version, name })),
