@@ -172,6 +172,25 @@ describe("MediaService 與真 PostgreSQL", () => {
     expect(rows[0]).toEqual({ state: "issued", asset_count: 0 });
   });
 
+  it("finalizing ingest 不可在未轉 finalized 時單獨提交 verified asset", async () => {
+    const grant = grantFrom(await serviceFor().beginMediaUpload(owner, beginCommand()));
+    await runtime.unsafe(`
+      update app_private.media_ingests
+      set actual_mime_type = 'image/png', actual_byte_size = $2, image_width = 20, image_height = 30,
+          state = 'finalizing', lease_token = '54000000-0000-4000-8000-000000000001', lease_until = now() + interval '5 minutes'
+      where id = $1
+    `, [grant.ingestId, png().byteLength]);
+
+    await expect(runtime.unsafe(`
+      insert into app_private.media_assets (
+        id, ingest_id, game_id, purpose, original_object_path, original_file_name,
+        actual_mime_type, byte_size, width, height, authority_state, kind, object_key, mime_type
+      ) values ($1, $2, $3, 'gallery_image', $4, 'photo.png', 'image/png', $5, 20, 30, 'verified', 'gallery_image', $4, 'image/png')
+    `, [grant.assetId, grant.ingestId, gameId, grant.objectPath, png().byteLength])).rejects.toThrow("media asset must match its finalized ingest ledger");
+    const rows = await runtime.unsafe<{ asset_count: number }[]>("select count(*)::int as asset_count from app_private.media_assets where ingest_id = $1", [grant.ingestId]);
+    expect(rows[0].asset_count).toBe(0);
+  });
+
   it("實際大小或 MIME 不符時轉 cleanup_pending，且不建立 asset", async () => {
     const service = serviceFor(objects(png(), "image/jpeg"));
     await service.beginMediaUpload(owner, beginCommand());

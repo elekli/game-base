@@ -211,7 +211,7 @@ begin
       and ingest.actual_byte_size = new.byte_size
       and ingest.image_width is not distinct from new.width
       and ingest.image_height is not distinct from new.height
-      and ingest.state in ('finalizing', 'finalized')
+      and ingest.state = 'finalized'
   ) then
     raise exception 'media asset must match its finalized ingest ledger';
   end if;

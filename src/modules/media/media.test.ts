@@ -195,6 +195,24 @@ describe("媒體公開介面", () => {
     })).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
   });
 
+  it.each(["inspect", "read", "commit"] as const)("未知 %s failure 轉成具名 unavailable 且保留重試狀態", async (failure) => {
+    const store = createInMemoryMediaStore({ activeGameIds: [gameId] });
+    const baseObjects = objectStore({ bytes: png(), mimeType: "image/png" });
+    const objectsWithFailure: MediaObjectStore = failure === "inspect"
+      ? { ...baseObjects, inspect: async () => { throw new Error("raw inspect failure"); } }
+      : failure === "read"
+        ? { ...baseObjects, read: () => (async function* () { throw new Error("raw read failure"); })() }
+        : baseObjects;
+    const storeWithFailure = failure === "commit"
+      ? { ...store, completeFinalize: async () => { throw new Error("raw commit failure"); } }
+      : store;
+    const service = createMediaService({ store: storeWithFailure, objects: objectsWithFailure });
+    await service.beginMediaUpload(owner, command());
+
+    await expect(service.finalizeMediaUpload(owner, { idempotencyKey })).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
+    await expect(service.beginMediaUpload(owner, command())).resolves.toEqual({ status: "finalizing" });
+  });
+
   it.each([
     ["PNG", "image/png", png()],
     ["JPEG", "image/jpeg", jpeg()],

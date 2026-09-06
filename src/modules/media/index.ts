@@ -4,6 +4,8 @@ import { assertMediaFileSize } from "./file-size-policy";
 import {
   MediaFileEmptyError,
   MediaFileTooLargeError,
+  MediaFinalizeUnavailableError,
+  MediaOperationError,
   MediaStoredObjectInvalidError,
   MediaUploadIncompleteError,
 } from "./internal/errors";
@@ -50,15 +52,27 @@ export function createMediaService(dependencies: Readonly<{ store: MediaStore; o
       void owner;
       const token = randomUUID();
       const until = new Date(now().getTime() + 5 * 60 * 1000).toISOString();
-      const claim = await dependencies.store.claimFinalize(command.idempotencyKey, { token, until });
-      if (claim.status === "already_finalized") return claim.result;
       try {
+        const claim = await dependencies.store.claimFinalize(command.idempotencyKey, { token, until });
+        if (claim.status === "already_finalized") return claim.result;
         const object = await validateStoredObject(dependencies.objects, claim.ingest);
         return await dependencies.store.completeFinalize(command.idempotencyKey, token, object);
       } catch (error) {
-        if (error instanceof MediaUploadIncompleteError) await dependencies.store.releaseIncomplete(command.idempotencyKey, token);
-        else if (error instanceof MediaStoredObjectInvalidError || error instanceof MediaFileEmptyError || error instanceof MediaFileTooLargeError) await dependencies.store.rejectInvalid(command.idempotencyKey, token);
-        throw error;
+        try {
+          if (error instanceof MediaUploadIncompleteError) {
+            await dependencies.store.releaseIncomplete(command.idempotencyKey, token);
+            throw error;
+          }
+          if (error instanceof MediaStoredObjectInvalidError || error instanceof MediaFileEmptyError || error instanceof MediaFileTooLargeError) {
+            await dependencies.store.rejectInvalid(command.idempotencyKey, token);
+            throw error;
+          }
+        } catch (transitionError) {
+          if (transitionError instanceof MediaOperationError) throw transitionError;
+          throw new MediaFinalizeUnavailableError();
+        }
+        if (error instanceof MediaOperationError) throw error;
+        throw new MediaFinalizeUnavailableError();
       }
     },
   };

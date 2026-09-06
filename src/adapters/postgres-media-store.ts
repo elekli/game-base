@@ -66,6 +66,8 @@ async function readResult(executor: QueryExecutor, ingestId: string): Promise<Me
       asset.byte_size, asset.width, asset.height, asset.removed_at, asset.created_at,
       derivative.spec, derivative.state as derivative_state
     from app_private.media_assets asset
+    join app_private.media_ingests authoritative_ingest
+      on authoritative_ingest.id = asset.ingest_id and authoritative_ingest.state = 'finalized'
     left join app_private.media_derivatives derivative on derivative.asset_id = asset.id
     where asset.ingest_id = ${ingestId} and asset.authority_state = 'verified'
     limit 1
@@ -178,6 +180,7 @@ export class PostgresMediaStore implements MediaStore {
           image_width = ${object.width}, image_height = ${object.height}
         where id = ${ingest.id}
       `);
+      await tx.execute(sql`set constraints app_private.media_assets_valid_references deferred`);
       await tx.execute(sql`
         insert into app_private.media_assets (
           id, ingest_id, game_id, purpose, original_object_path, original_file_name,
