@@ -13,7 +13,9 @@ type ProductionReleaseContract = Readonly<{
   hostedPreview: boolean;
   productionBranch: string;
   productionEnvironment: string;
+  productionSchemaWriter: string;
   repository: string;
+  supabaseGitProductionBranch: string;
   supabaseProjectRef: string;
   supabaseRegion: string;
   vercelGitDeployment: boolean;
@@ -22,6 +24,7 @@ type ProductionReleaseContract = Readonly<{
 }>;
 
 const CONTRACT_PATH = ".github/production-release-contract.json";
+const PRODUCTION_RELEASE_DOC_PATH = "docs/deployment/production-release.md";
 const RLS_POLICY_MANIFEST_PATH = ".github/production-rls-policy-manifest.json";
 const WORKFLOW_PATH = ".github/workflows/production-release.yml";
 const RUNNER_PATH = "scripts/production-migration-runner.ts";
@@ -41,6 +44,10 @@ export async function checkProductionReleaseContract(root: string) {
     await readFile(path.join(root, "vercel.json"), "utf8"),
   ) as { git?: { deploymentEnabled?: boolean } };
   const workflow = await readFile(path.join(root, WORKFLOW_PATH), "utf8");
+  const productionReleaseDoc = await readFile(
+    path.join(root, PRODUCTION_RELEASE_DOC_PATH),
+    "utf8",
+  );
   const runner = await readFile(path.join(root, RUNNER_PATH), "utf8");
   const releaseStateMachine = await readFile(path.join(root, RELEASE_STATE_MACHINE_PATH), "utf8");
   const rlsPolicyManifest = JSON.parse(
@@ -60,6 +67,25 @@ export async function checkProductionReleaseContract(root: string) {
   assertContract(contract.vercelProjectName === "game-base", "Vercel project name does not match the Production binding");
   assertContract(contract.supabaseProjectRef === "wbtyuvufhrhybquzwfip", "Supabase project ref does not match the Production binding");
   assertContract(contract.supabaseRegion === "ap-south-1", "Supabase region does not match the Production binding");
+  assertContract(
+    contract.supabaseGitProductionBranch ===
+      "production-deploy-disabled-use-github-actions",
+    "Supabase Git production mapping must remain on the disabled sentinel",
+  );
+  assertContract(
+    contract.productionSchemaWriter === WORKFLOW_PATH,
+    "Production schema writer must be the protected release workflow",
+  );
+  assertContract(
+    productionReleaseDoc.includes(contract.supabaseGitProductionBranch) &&
+      productionReleaseDoc.includes(
+        `Production schema 的唯一支援寫入者是 \`${contract.productionSchemaWriter}\``,
+      ) &&
+      productionReleaseDoc.includes(
+        "CI 無法查證 Supabase 外部 integration 的實際 mapping",
+      ),
+    "Production release documentation must preserve the Supabase Git sentinel and external-state boundary",
+  );
   assertContract(contract.hostedPreview === false, "Hosted Preview must remain disabled");
   assertContract(contract.vercelGitDeployment === false, "Vercel Git deployment must remain disabled");
   assertContract(

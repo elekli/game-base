@@ -86,10 +86,11 @@ const KNOWN_DRIFT_REMEDIATION_SQL =
 const KNOWN_DRIFT_REMEDIATION_FILENAMES = new Set([
   "0007_revoke_public_platform_trigger_execute.sql",
   "0008_revoke_public_platform_trigger_execute.sql",
+  "0009_revoke_public_platform_trigger_execute.sql",
 ]);
 const PENDING_KNOWN_DRIFT_REMEDIATION = {
-  version: "0008",
-  filename: "0008_revoke_public_platform_trigger_execute.sql",
+  version: "0009",
+  filename: "0009_revoke_public_platform_trigger_execute.sql",
 } as const;
 const INITIAL_LINT_BASELINE = {
   "0001_runtime_security.sql":
