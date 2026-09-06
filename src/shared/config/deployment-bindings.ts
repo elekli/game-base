@@ -28,14 +28,14 @@ export const deploymentBindings: Readonly<
   },
   production: {
     databaseName: "postgres",
-    projectRef: "production-ref",
+    projectRef: "wbtyuvufhrhybquzwfip",
     publishableKeySha256:
-      "852a8617288e4a30f87c03004d9046b4ab736f3b916533f6117be570f364f5b2",
+      "4462e410b46df06f21744e9cafcfc75e7eb8975cab8629ce6360be06d08fe557",
     secretKeySha256:
-      "716e8f38289a86fe6d30e068c627bb9ae60a3a949d9f5282c87b58022f8db461",
-    supavisorHost: "production.pooler.supabase.com",
+      "d44eabeca41cb395b0d615673cc6ba17d762beb16d55380aecf539a551ed93b2",
+    supavisorHost: "aws-0-ap-south-1.pooler.supabase.com",
     supavisorPort: 6543,
-    supavisorUsername: "app_runtime.production-ref",
-    supabaseHostname: "production-ref.supabase.co",
+    supavisorUsername: "app_runtime.wbtyuvufhrhybquzwfip",
+    supabaseHostname: "wbtyuvufhrhybquzwfip.supabase.co",
   },
 };

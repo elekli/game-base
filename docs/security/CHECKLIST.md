@@ -17,6 +17,6 @@
 - [ ] 新產品 table 位於 `app_private`、由 `app_migrator` 建立、啟用 RLS，並以 pgTAP 證明無 policy 時拒絕 runtime 寫入。
 - [ ] `anon`、`authenticated`、`service_role` 無 `app_private` schema usage；Data API 不暴露產品 schema。
 - [ ] Storage bucket 必須 private；瀏覽器只取得短效 signed URL／upload token，永不取得 Supabase secret key。
-- [ ] preview 只連固定測試 Supabase 專案；production 只連正式專案。兩者的 Vercel variables 分開設定。
-- [ ] preview 啟用 Vercel Deployment Protection；production 自訂網域啟用 Cloudflare Access。
+- [ ] CI preview fixture 只連本機 Supabase；Vercel Preview／Development 不含 production credentials，production 只連正式專案。
+- [ ] 沒有隔離 data plane 時 Hosted Preview 與 Vercel Git deployment 維持停用；production 自訂網域啟用 Cloudflare Access。
 - [ ] 直接 `.vercel.app`／origin 呼叫 private route 在任何資料操作前回 401。

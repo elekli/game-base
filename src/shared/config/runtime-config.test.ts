@@ -1,10 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { RuntimeConfigError, parseRuntimeConfig } from "./runtime-config";
+import { deploymentBindings } from "./deployment-bindings";
 import {
   previewRuntimeEnvironment as validPreviewEnvironment,
 } from "../../../tests/fixtures/preview-runtime-environment";
 
 describe("parseRuntimeConfig", () => {
+  it("pins Production to the verified Supabase binding", () => {
+    expect(deploymentBindings.production).toEqual({
+      databaseName: "postgres",
+      projectRef: "wbtyuvufhrhybquzwfip",
+      publishableKeySha256:
+        "4462e410b46df06f21744e9cafcfc75e7eb8975cab8629ce6360be06d08fe557",
+      secretKeySha256:
+        "d44eabeca41cb395b0d615673cc6ba17d762beb16d55380aecf539a551ed93b2",
+      supavisorHost: "aws-0-ap-south-1.pooler.supabase.com",
+      supavisorPort: 6543,
+      supavisorUsername: "app_runtime.wbtyuvufhrhybquzwfip",
+      supabaseHostname: "wbtyuvufhrhybquzwfip.supabase.co",
+    });
+  });
+
   it("accepts a consistently bound preview environment", () => {
     const config = parseRuntimeConfig(validPreviewEnvironment);
 
@@ -75,14 +91,14 @@ describe("parseRuntimeConfig", () => {
 
   const mixedBindings = [
     ["VERCEL_ENV", "production"],
-    ["SUPABASE_PROJECT_REF", "production-ref"],
-    ["SUPABASE_URL", "https://production-ref.supabase.co"],
-    ["SUPAVISOR_HOST", "production.pooler.supabase.com"],
+    ["SUPABASE_PROJECT_REF", "wbtyuvufhrhybquzwfip"],
+    ["SUPABASE_URL", "https://wbtyuvufhrhybquzwfip.supabase.co"],
+    ["SUPAVISOR_HOST", "aws-0-ap-south-1.pooler.supabase.com"],
     ["SUPAVISOR_PORT", "5432"],
-    ["SUPAVISOR_USERNAME", "app_runtime.production-ref"],
+    ["SUPAVISOR_USERNAME", "app_runtime.wbtyuvufhrhybquzwfip"],
     [
       "DATABASE_URL",
-      "postgres://app_runtime.production-ref:fixture@production.pooler.supabase.com:6543/postgres?sslmode=require",
+      "postgres://app_runtime.wbtyuvufhrhybquzwfip:fixture@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?sslmode=require",
     ],
     ["SUPABASE_PUBLISHABLE_KEY", "sb_publishable_production_fixture"],
     ["SUPABASE_SECRET_KEY", "sb_secret_production_fixture"],
@@ -104,21 +120,21 @@ describe("parseRuntimeConfig", () => {
   it("rejects a complete production resource bundle in preview", () => {
     const productionBundleInPreview = {
       ...validPreviewEnvironment,
-      SUPABASE_PROJECT_REF: "production-ref",
-      EXPECTED_SUPABASE_PROJECT_REF: "production-ref",
-      SUPABASE_URL: "https://production-ref.supabase.co",
+      SUPABASE_PROJECT_REF: "wbtyuvufhrhybquzwfip",
+      EXPECTED_SUPABASE_PROJECT_REF: "wbtyuvufhrhybquzwfip",
+      SUPABASE_URL: "https://wbtyuvufhrhybquzwfip.supabase.co",
       SUPABASE_PUBLISHABLE_KEY: "sb_publishable_production_fixture",
       SUPABASE_SECRET_KEY: "sb_secret_production_fixture",
       EXPECTED_SUPABASE_PUBLISHABLE_KEY_SHA256:
-        "852a8617288e4a30f87c03004d9046b4ab736f3b916533f6117be570f364f5b2",
+        "4462e410b46df06f21744e9cafcfc75e7eb8975cab8629ce6360be06d08fe557",
       EXPECTED_SUPABASE_SECRET_KEY_SHA256:
-        "716e8f38289a86fe6d30e068c627bb9ae60a3a949d9f5282c87b58022f8db461",
-      SUPAVISOR_HOST: "production.pooler.supabase.com",
-      EXPECTED_SUPAVISOR_HOST: "production.pooler.supabase.com",
-      SUPAVISOR_USERNAME: "app_runtime.production-ref",
-      EXPECTED_SUPAVISOR_USERNAME: "app_runtime.production-ref",
+        "d44eabeca41cb395b0d615673cc6ba17d762beb16d55380aecf539a551ed93b2",
+      SUPAVISOR_HOST: "aws-0-ap-south-1.pooler.supabase.com",
+      EXPECTED_SUPAVISOR_HOST: "aws-0-ap-south-1.pooler.supabase.com",
+      SUPAVISOR_USERNAME: "app_runtime.wbtyuvufhrhybquzwfip",
+      EXPECTED_SUPAVISOR_USERNAME: "app_runtime.wbtyuvufhrhybquzwfip",
       DATABASE_URL:
-        "postgres://app_runtime.production-ref:fixture@production.pooler.supabase.com:6543/postgres?sslmode=require",
+        "postgres://app_runtime.wbtyuvufhrhybquzwfip:fixture@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?sslmode=require",
     } as const;
 
     expect(() => parseRuntimeConfig(productionBundleInPreview)).toThrow(
