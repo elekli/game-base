@@ -213,7 +213,10 @@ describe("PostgresGameStore 真實交易回滾", () => {
     const snapshot = snapshotFor("980003", "交易回滾測試：封面刷新", "rollback-integration-cover-category", "rollback-integration-cover-contributor", "rollback-refresh-same-cover", 3.2);
     const created = await store.createFromSource(snapshot.ref, snapshot);
 
-    await store.refreshSource(created.game.id, snapshot);
+    const retryOperationId = "71000000-0000-4000-8000-000000000001";
+    await store.refreshSource(created.game.id, snapshot, retryOperationId);
+    await store.refreshSource(created.game.id, snapshot, retryOperationId);
+    await store.refreshSource(created.game.id, snapshot, "71000000-0000-4000-8000-000000000002");
 
     const rows = await runtimeDatabase.unsafe<DatabaseRow[]>(`
       select idempotency_key, external_game_identity_id, source_url
@@ -221,8 +224,8 @@ describe("PostgresGameStore 真實交易回滾", () => {
       where game_id = $1
       order by created_at, id
     `, [created.game.id]);
-    expect(rows).toHaveLength(2);
-    expect(new Set(rows.map((row) => row.idempotency_key)).size).toBe(2);
+    expect(rows).toHaveLength(3);
+    expect(new Set(rows.map((row) => row.idempotency_key)).size).toBe(3);
     expect(rows.every((row) => row.external_game_identity_id === created.game.externalIdentityId)).toBe(true);
     expect(rows.every((row) => row.source_url === snapshot.coverUrl)).toBe(true);
   });
@@ -263,7 +266,7 @@ describe("PostgresGameStore 真實交易回滾", () => {
     const stateBefore = await readRefreshState(before.id, identityId);
 
     await installSourceFailure();
-    await expectDatabaseFailure(store.refreshSource(before.id, newSnapshot), "rollback integration source failure");
+    await expectDatabaseFailure(store.refreshSource(before.id, newSnapshot, "72000000-0000-4000-8000-000000000001"), "rollback integration source failure");
 
     const stateAfter = await readRefreshState(before.id, identityId);
     expect(stateAfter).toEqual(stateBefore);

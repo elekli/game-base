@@ -1,5 +1,5 @@
 begin;
-select plan(20);
+select plan(21);
 
 select has_column('app_private', 'media_ingests', 'idempotency_key', 'ingest 保存全域冪等鍵');
 select has_column('app_private', 'media_ingests', 'reserved_asset_id', 'ingest 預留固定 asset id');
@@ -81,6 +81,12 @@ insert into app_private.media_assets (
   '10000000-0000-4000-8000-000000000001', 'gallery_image',
   'originals/40000000-0000-4000-8000-000000000001/a', 'photo.png', 'image/png', 24, 2, 3,
   'gallery_image', 'originals/40000000-0000-4000-8000-000000000001/a', 'image/png'
+);
+
+select extensions.throws_like(
+  $$update app_private.media_assets set byte_size = 0 where id = '40000000-0000-4000-8000-000000000001'$$,
+  '%violates check constraint%',
+  '權威 asset 不可為零 byte'
 );
 
 insert into app_private.media_derivatives (asset_id, spec, state, kind)

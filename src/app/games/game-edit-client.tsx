@@ -55,6 +55,7 @@ export function GameEditClient({ game }: Props) {
   const linkingRef = useRef(false);
   const addingContributionRef = useRef(false);
   const refreshingRef = useRef(false);
+  const refreshOperationIdRef = useRef<string | null>(null);
   const manualContributions = game.contributors.filter((item) => item.origin === "manual");
   const sourceContributions = game.contributors.filter((item) => item.origin === "source");
   const platformOptions = [...new Set(["Steam", "PS5", "Xbox Series", "Nintendo Switch", ...game.actualPlatforms])];
@@ -149,7 +150,8 @@ export function GameEditClient({ game }: Props) {
     if (refreshingRef.current) return;
     refreshingRef.current = true;
     setIsRefreshing(true);
-    try { setMessage("重新整理中……"); unwrapPrivateAction(await refreshExternalMetadata({ gameId: game.id })); window.location.reload(); }
+    refreshOperationIdRef.current ??= crypto.randomUUID();
+    try { setMessage("重新整理中……"); unwrapPrivateAction(await refreshExternalMetadata({ gameId: game.id, operationId: refreshOperationIdRef.current })); window.location.reload(); }
     catch (error) { setMessage(error instanceof Error ? error.message : "重新整理失敗，舊資料仍可使用。"); }
     finally { refreshingRef.current = false; setIsRefreshing(false); }
   }

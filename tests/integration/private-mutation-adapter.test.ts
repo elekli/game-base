@@ -9,6 +9,7 @@ const gameId = "11111111-1111-4111-8111-111111111111";
 const contributionId = "22222222-2222-4222-8222-222222222222";
 const existingGameId = "33333333-3333-4333-8333-333333333333";
 const requestId = "44444444-4444-4444-8444-444444444444";
+const operationId = "55555555-5555-4555-8555-555555555555";
 const emptyGame = {} as GameRecord;
 
 type TestLibraryService = Pick<LibraryService, "addManualContribution" | "removeManualContribution" | "editGame" | "deletePlatform" | "deleteTag">;
@@ -152,10 +153,19 @@ describe("private mutation adapter", () => {
   it("refreshes source data without returning the updated game", async () => {
     const { adapter, gamesService } = makeSetup();
 
-    const result = await adapter.refreshExternalMetadata({ gameId });
+    const result = await adapter.refreshExternalMetadata({ gameId, operationId });
 
     expect(result).toEqual({ ok: true });
-    expect(gamesService.refreshExternalMetadata).toHaveBeenCalledWith({ gameId });
+    expect(gamesService.refreshExternalMetadata).toHaveBeenCalledWith({ gameId, operationId });
+  });
+
+  it("拒絕缺少呼叫端 operation id 的 refresh", async () => {
+    const { adapter, gamesService } = makeSetup();
+
+    const result = await adapter.refreshExternalMetadata({ gameId });
+
+    expect(result).toEqual({ ok: false, code: "invalid_input", message: "重新整理參數無效。", requestId });
+    expect(gamesService.refreshExternalMetadata).not.toHaveBeenCalled();
   });
 
   it("deletes a shared platform and tag with minimal success payloads", async () => {

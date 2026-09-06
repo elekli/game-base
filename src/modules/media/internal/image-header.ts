@@ -3,7 +3,7 @@ import { MEDIA_MAX_PIXELS } from "./types";
 
 export type ImageHeader = Readonly<{ mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp"; width: number; height: number }>;
 
-class StreamReader {
+export class StreamReader {
   private readonly iterator: AsyncIterator<Uint8Array>;
   private current: Uint8Array<ArrayBufferLike> = new Uint8Array();
   private offset = 0;
@@ -42,10 +42,26 @@ class StreamReader {
   async skip(length: number, visit?: (bytes: Uint8Array) => void): Promise<void> {
     let remaining = length;
     while (remaining > 0) {
-      const size = Math.min(remaining, 8_192);
-      const bytes = await this.exact(size);
-      visit?.(bytes);
+      if (this.pushedBack.length > 0) {
+        const size = Math.min(remaining, this.pushedBack.length);
+        const bytes = Uint8Array.from(this.pushedBack.splice(0, size));
+        this.consumed += size;
+        remaining -= size;
+        visit?.(bytes);
+        continue;
+      }
+      while (this.offset >= this.current.byteLength) {
+        const next = await this.iterator.next();
+        if (next.done) throw new MediaStoredObjectInvalidError();
+        this.current = next.value;
+        this.offset = 0;
+      }
+      const size = Math.min(remaining, this.current.byteLength - this.offset, 8_192);
+      const bytes = this.current.subarray(this.offset, this.offset + size);
+      this.offset += size;
+      this.consumed += size;
       remaining -= size;
+      visit?.(bytes);
     }
   }
 

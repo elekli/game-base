@@ -36,15 +36,16 @@ set idempotency_key = media_ingests.id::text,
 from app_private.games game
 where game.id = media_ingests.game_id;
 
+-- 0006 did not record dimensions or structurally verify original objects.  No
+-- legacy asset can therefore satisfy the 0007 authority contract from DB facts
+-- alone.  Keep its original path on the ingest for cleanup, but fail closed by
+-- removing every unverifiable asset and derivative from the authority ledger.
 update app_private.media_ingests ingest
-set reserved_asset_id = asset.id,
-    actual_mime_type = asset.mime_type,
-    actual_byte_size = asset.byte_size,
-    state = 'finalized',
-    finalized_at = asset.created_at
-from app_private.media_assets asset
-where asset.ingest_id = ingest.id
-  and asset.byte_size between 1 and 52428800;
+set state = 'cleanup_pending'
+where exists (select 1 from app_private.media_assets asset where asset.ingest_id = ingest.id);
+
+delete from app_private.media_derivatives;
+delete from app_private.media_assets;
 
 alter table app_private.media_ingests
   alter column idempotency_key set not null,
@@ -101,16 +102,14 @@ alter table app_private.media_assets
   add column description text,
   add column removed_at timestamptz,
   add column removed_reason text,
-  add column superseded_at timestamptz,
-  add column verification_state text;
+  add column superseded_at timestamptz;
 
 update app_private.media_assets asset
 set game_id = ingest.game_id,
     purpose = case asset.kind when 'source_cover' then 'source_cover' else 'custom_cover' end,
     original_object_path = asset.object_key,
     original_file_name = 'source-cover',
-    actual_mime_type = asset.mime_type,
-    verification_state = 'pending_revalidation'
+    actual_mime_type = asset.mime_type
 from app_private.media_ingests ingest
 where ingest.id = asset.ingest_id;
 
@@ -123,20 +122,13 @@ alter table app_private.media_assets
   alter column original_object_path set not null,
   alter column original_file_name set not null,
   alter column actual_mime_type set not null,
-  alter column verification_state set default 'verified',
-  alter column verification_state set not null,
   add constraint media_assets_ingest_id_fkey foreign key (ingest_id) references app_private.media_ingests(id) on delete restrict,
   add constraint media_assets_game_id_fkey foreign key (game_id) references app_private.games(id) on delete restrict,
   add constraint media_assets_purpose_check check (purpose in ('gallery_image', 'custom_cover', 'attachment', 'source_cover')),
-  add constraint media_assets_verification_state_check check (verification_state in ('verified', 'pending_revalidation')),
-  add constraint media_assets_byte_size_check check (
-    (verification_state = 'verified' and byte_size between 1 and 52428800) or
-    (verification_state = 'pending_revalidation' and byte_size between 0 and 52428800)
-  ),
+  add constraint media_assets_byte_size_check check (byte_size between 1 and 52428800),
   add constraint media_assets_dimensions_check check (
     (purpose = 'attachment' and width is null and height is null) or
-    (purpose <> 'attachment' and verification_state = 'pending_revalidation' and width is null and height is null) or
-    (purpose <> 'attachment' and verification_state = 'verified' and width > 0 and height > 0 and width::bigint * height::bigint <= 100000000)
+    (purpose <> 'attachment' and width > 0 and height > 0 and width::bigint * height::bigint <= 100000000)
   ),
   add constraint media_assets_removal_check check (
     (removed_at is null and removed_reason is null) or

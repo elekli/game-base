@@ -12,7 +12,7 @@ function uuidFromDigest(digest: string): string {
 
 export function beginSourceCoverIngest(operationId: string, gameId: string, externalGameIdentityId: string, sourceUrl: string): SourceCoverIngest {
   if (!isAllowedSourceCoverUrl(sourceUrl)) throw new Error("來源封面網址不在允許清單。");
-  const identity = `${operationId}:${gameId}:${externalGameIdentityId}:${sourceUrl}`;
+  const identity = `${operationId}:${gameId}:${externalGameIdentityId}`;
   const ingestDigest = createHash("sha256").update(`ingest:${identity}`).digest("hex");
   const assetDigest = createHash("sha256").update(`asset:${identity}`).digest("hex");
   const objectDigest = createHash("sha256").update(`object:${identity}`).digest("hex");

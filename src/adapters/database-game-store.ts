@@ -344,8 +344,7 @@ export class PostgresGameStore implements GameStore {
     return game;
   }
 
-  async refreshSource(gameId: string, snapshot: SourceSnapshot): Promise<GameRecord> {
-    const sourceCoverOperationId = randomUUID();
+  async refreshSource(gameId: string, snapshot: SourceSnapshot, sourceCoverOperationId: string): Promise<GameRecord> {
     const run = async (tx: QueryExecutor) => {
       const rows = await tx.execute(sql`select g.external_game_identity_id from app_private.games g where g.id = ${gameId} and g.external_game_identity_id is not null for update`) as Row[];
       if (!rows[0]) throw new SourcePersistenceFailedError();

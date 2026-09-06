@@ -23,7 +23,7 @@ export type GamesService = Readonly<{
   getExternalGameConfirmation(input: Readonly<{ ref: ExternalGameRef }>): Promise<Confirmation>;
   createGameFromExternalSource(input: Readonly<{ ref: ExternalGameRef; confirmationFingerprint: string }>): Promise<CreateGameResult>;
   linkExternalSource(input: Readonly<{ gameId: string; ref: ExternalGameRef; confirmationFingerprint: string }>): Promise<GameRecord>;
-  refreshExternalMetadata(input: Readonly<{ gameId: string }>): Promise<GameRecord>;
+  refreshExternalMetadata(input: Readonly<{ gameId: string; operationId: string }>): Promise<GameRecord>;
   createManualGame(input: Readonly<{ displayName: string; medium: Medium }>): Promise<GameRecord>;
   listGames(query?: string): Promise<readonly GameRecord[]>;
   getGame(id: string): Promise<GameRecord | null>;
@@ -79,11 +79,11 @@ export function createGamesService(catalogs: Readonly<Record<Provider, SourceCat
       if (actual !== expected) throw new SourceContentChangedError({ candidate: { ref, title: snapshot.title, releaseYear: snapshot.releaseYear, coverPreviewUrl: snapshot.coverUrl }, snapshot, fingerprint: actual });
       return store.linkFromSource(gameId, ref, snapshot);
     },
-    async refreshExternalMetadata({ gameId }) {
+    async refreshExternalMetadata({ gameId, operationId }) {
       const game = await store.get(gameId);
       if (!game?.snapshot) throw new SourceNotLinkedError();
       const snapshot = await catalogs[game.snapshot.ref.provider].fetchSnapshot(game.snapshot.ref, "fresh");
-      return store.refreshSource(gameId, snapshot);
+      return store.refreshSource(gameId, snapshot, operationId);
     },
     async createManualGame(input) { return store.createManual(input.displayName, input.medium); },
     async listGames(query) { return store.list(query); },

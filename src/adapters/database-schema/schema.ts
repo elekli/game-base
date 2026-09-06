@@ -293,7 +293,6 @@ export const mediaAssetsInAppPrivate = appPrivate.table("media_assets", {
 	removedAt: timestamp("removed_at", { withTimezone: true, mode: 'string' }),
 	removedReason: text("removed_reason"),
 	supersededAt: timestamp("superseded_at", { withTimezone: true, mode: 'string' }),
-	verificationState: text("verification_state").default('verified').notNull(),
 }, (table) => [
 	index("media_assets_game_id_idx").using("btree", table.gameId.asc().nullsLast().op("uuid_ops")).where(sql`((removed_at IS NULL) AND (superseded_at IS NULL))`),
 	pgPolicy("runtime_media_assets", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),

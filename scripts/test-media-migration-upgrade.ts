@@ -21,25 +21,25 @@ try {
   supabase("migration", "up", "--local");
   const after = postgres(databaseUrl, { max: 1, prepare: false });
   const rows = await after.unsafe<Readonly<Record<string, unknown>>[]>(`
-    select ingest.state as ingest_state, ingest.reserved_asset_id,
-      ingest.external_game_identity_id, ingest.actual_mime_type, ingest.actual_byte_size,
-      asset.id as asset_id, asset.verification_state, asset.width, asset.height,
-      derivative.state as derivative_state, derivative.current_object_path,
-      derivative.object_key as legacy_derivative_path
+    select ingest.id, ingest.state, ingest.external_game_identity_id,
+      exists(select 1 from app_private.media_assets asset where asset.ingest_id = ingest.id) as has_asset
     from app_private.media_ingests ingest
-    join app_private.media_assets asset on asset.ingest_id = ingest.id
-    join app_private.media_derivatives derivative on derivative.asset_id = asset.id
-    where ingest.id = '63000000-0000-4000-8000-000000000001'
+    where ingest.id in (
+      '63000000-0000-4000-8000-000000000001',
+      '63000000-0000-4000-8000-000000000002'
+    )
+    order by ingest.id
+  `);
+  const [{ derivative_count, source_pointer_count }] = await after.unsafe<Readonly<Record<string, unknown>>[]>(`
+    select
+      (select count(*)::int from app_private.media_derivatives) as derivative_count,
+      (select count(*)::int from app_private.external_game_identities where source_cover_asset_id is not null) as source_pointer_count
   `);
   await after.end();
-  const row = rows[0];
-  if (!row || row.ingest_state !== "finalized" || row.reserved_asset_id !== row.asset_id ||
-      row.external_game_identity_id !== "61000000-0000-4000-8000-000000000001" ||
-      row.actual_mime_type !== "image/jpeg" || Number(row.actual_byte_size) !== 123 ||
-      row.verification_state !== "pending_revalidation" || row.width !== null || row.height !== null ||
-      row.derivative_state !== "pending" || row.current_object_path !== null ||
-      row.legacy_derivative_path !== "games/62000000-0000-4000-8000-000000000001/source/legacy.webp") {
-    throw new Error("0007 did not preserve and explicitly reclassify legacy ready media");
+  if (rows.length !== 2 || rows.some((row) => row.state !== "cleanup_pending" || row.has_asset !== false ||
+      row.external_game_identity_id !== "61000000-0000-4000-8000-000000000001") ||
+      Number(derivative_count) !== 0 || Number(source_pointer_count) !== 0) {
+    throw new Error("0007 did not fail closed for unverifiable legacy media");
   }
   console.log(JSON.stringify({ event: "media_migration_upgrade_passed", from: "0006", to: "0007" }));
 } finally {

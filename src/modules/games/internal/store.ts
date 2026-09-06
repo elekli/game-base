@@ -61,7 +61,7 @@ export type GameStore = {
   createManual(displayName: string, medium: Medium): Promise<GameRecord>;
   createFromSource(ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<{ game: GameRecord; created: boolean }>;
   linkFromSource(gameId: string, ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<GameRecord>;
-  refreshSource(gameId: string, snapshot: SourceSnapshot): Promise<GameRecord>;
+  refreshSource(gameId: string, snapshot: SourceSnapshot, operationId: string): Promise<GameRecord>;
   edit(gameId: string, input: GameEditInput): Promise<GameRecord>;
   findContributorMatches(gameId: string, name: string): Promise<readonly ContributorMatch[]>;
   addManualContribution(input: ManualContributionInput | LegacyManualContributionInput): Promise<ManualContributionResult>;
@@ -227,7 +227,8 @@ export class InMemoryGameStore implements GameStore {
     return linked;
   }
 
-  async refreshSource(gameId: string, snapshot: SourceSnapshot): Promise<GameRecord> {
+  async refreshSource(gameId: string, snapshot: SourceSnapshot, operationId: string): Promise<GameRecord> {
+    void operationId;
     const game = this.games.get(gameId);
     if (!game || !game.externalIdentityId) throw new Error("遊戲尚未連結來源。");
     const refreshed = {

@@ -14,7 +14,7 @@ type AddManualContributionSuccess = Readonly<
 const removeContributionSchema = z.object({ gameId: z.uuid(), contributionId: z.uuid() });
 const editGameSchema = z.object({ gameId: z.uuid(), displayName: z.string().trim().max(200).nullable().optional(), actualPlatforms: z.array(z.string().trim().max(100)).max(20).optional(), tags: z.array(z.string().trim().max(100)).max(50).optional(), playerCountNote: z.string().trim().max(500).nullable().optional() });
 const linkExternalSourceSchema = z.object({ gameId: z.uuid(), provider: z.enum(["bgg", "igdb"]), sourceId: z.string(), confirmationFingerprint: z.string().min(1) });
-const gameIdSchema = z.object({ gameId: z.uuid() });
+const refreshExternalMetadataSchema = z.object({ gameId: z.uuid(), operationId: z.uuid() });
 const sharedNameSchema = z.object({ name: z.string().trim().min(1).max(100) });
 
 type AdapterDependencies = Readonly<{
@@ -74,7 +74,7 @@ export function createPrivateMutationAdapter({ getHeaders, getPrivateDependencie
       } });
     },
     refreshExternalMetadata(input) {
-      return boundary({ input, schema: gameIdSchema, inputErrorMessage: "重新整理參數無效。", operation: async (parsed) => {
+      return boundary({ input, schema: refreshExternalMetadataSchema, inputErrorMessage: "重新整理參數無效。", operation: async (parsed) => {
         await gamesService.refreshExternalMetadata(parsed);
         return {};
       } });

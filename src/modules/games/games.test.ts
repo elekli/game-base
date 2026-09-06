@@ -130,7 +130,7 @@ describe("games service", () => {
     await store.edit(created.game.id, { displayName: "收藏名稱", tags: ["合作"] });
     await store.addManualContribution({ kind: "new", gameId: created.game.id, name: "手動作者", entityKind: "person", role: "art", allowDuplicate: false });
     bgg.setSnapshot({ ...confirmation.snapshot, title: "來源更新", aliases: ["新別名"], categories: [{ kind: "category", sourceCategoryId: "9", name: "策略" }] });
-    const refreshed = await service.refreshExternalMetadata({ gameId: created.game.id });
+    const refreshed = await service.refreshExternalMetadata({ gameId: created.game.id, operationId: "55555555-5555-4555-8555-555555555555" });
     expect(refreshed.displayName).toBe("收藏名稱");
     expect(refreshed.sourceNames).toContain("新別名");
     expect(refreshed.tags).toEqual(["合作"]);
@@ -160,7 +160,7 @@ describe("games service", () => {
     const confirmation = await service.getExternalGameConfirmation({ ref });
     const created = await service.createGameFromExternalSource({ ref, confirmationFingerprint: confirmation.fingerprint });
     bgg.setScenario("unavailable");
-    await expect(service.refreshExternalMetadata({ gameId: created.game.id })).rejects.toThrow("來源暫時無法使用");
+    await expect(service.refreshExternalMetadata({ gameId: created.game.id, operationId: "66666666-6666-4666-8666-666666666666" })).rejects.toThrow("來源暫時無法使用");
     expect((await store.get(created.game.id))?.snapshot?.title).toBe(confirmation.snapshot.title);
   });
 });
