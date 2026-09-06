@@ -166,15 +166,16 @@ test("#40 board-only facets apply OR／AND and clear when switching to multiple 
   await page.getByLabel("桌遊").check();
   await page.getByRole("button", { name: "套用篩選" }).click();
   await expect(page).toHaveURL(/medium=board_game/);
-  await expect(page.getByText("合作", { exact: true })).toBeVisible();
-  await expect(page.getByText("策略", { exact: true })).toBeVisible();
-  await page.getByLabel("合作", { exact: true }).check();
-  await page.getByLabel("策略", { exact: true }).check();
+  const sourceCategoryFilters = page.getByRole("group", { name: "來源分類" });
+  await expect(sourceCategoryFilters.getByText("合作", { exact: true })).toBeVisible();
+  await expect(sourceCategoryFilters.getByText("策略", { exact: true })).toBeVisible();
+  await sourceCategoryFilters.getByLabel("合作", { exact: true }).check();
+  await sourceCategoryFilters.getByLabel("策略", { exact: true }).check();
   await page.getByRole("button", { name: "套用篩選" }).click();
   await expect(page.getByRole("heading", { name: "篩選驗收合作" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "篩選驗收策略" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "篩選驗收另一機制" })).toBeVisible();
-  await page.getByLabel("共用機制", { exact: true }).check();
+  await sourceCategoryFilters.getByLabel("共用機制", { exact: true }).check();
   await page.getByRole("button", { name: "套用篩選" }).click();
   await expect(page.getByRole("heading", { name: "篩選驗收合作" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "篩選驗收策略" })).toBeVisible();
@@ -207,4 +208,114 @@ test("#40 board-only facets apply OR／AND and clear when switching to multiple 
   expect(new URL(page.url()).searchParams.get("sort")).toBe("name");
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.screenshot({ path: testInfo.outputPath("library-filters-390.png"), fullPage: true });
+});
+
+test("#41 owner searches and combines actual-platform and free-tag filters on mobile", async ({ page }, testInfo) => {
+  const fixtures = [
+    { name: "#41 Switch 劇情驗收", medium: "video_game", platform: "Nintendo Switch", tags: "#41 共用, #41 劇情向" },
+    { name: "#41 Steam 動作驗收", medium: "video_game", platform: "Steam", tags: "#41 共用, #41 動作" },
+    { name: "#41 派對桌遊驗收", medium: "board_game", platform: null, tags: "#41 派對" },
+  ] as const;
+  for (const fixture of fixtures) {
+    await page.goto("/games/new");
+    await page.getByText("找不到？建立手動條目").click();
+    await page.getByRole("textbox", { name: "遊戲名稱" }).fill(fixture.name);
+    await page.getByRole("combobox").last().selectOption(fixture.medium);
+    await page.getByRole("button", { name: "建立手動條目" }).click();
+    await page.getByRole("link", { name: fixture.name }).last().click();
+    await page.getByText("編輯擁有者資料").click();
+    if (fixture.platform) await page.locator(`input[name="actualPlatforms"][value="${fixture.platform}"]`).check();
+    await page.getByLabel("自由標籤（以逗號分隔）").fill(fixture.tags);
+    await Promise.all([
+      page.waitForEvent("load"),
+      page.getByRole("button", { name: "儲存資料" }).click(),
+    ]);
+    await expect(page.getByRole("heading", { name: fixture.name })).toBeVisible();
+  }
+
+  await page.goto("/?platform=steam&tag=%2341%20%E5%85%B1%E7%94%A8");
+  await expect(page.getByRole("search").getByLabel("Steam")).toBeChecked();
+  await expect(page.getByRole("search").getByLabel("#41 共用")).toBeChecked();
+  await page.getByRole("search").getByRole("button", { name: "套用篩選" }).click();
+  expect(new URL(page.url()).searchParams.get("platform")).toBe("Steam");
+  expect(new URL(page.url()).searchParams.get("tag")).toBe("#41 共用");
+  await page.goto("/");
+  const filters = page.getByRole("search");
+  await filters.getByLabel("Nintendo Switch").check();
+  await filters.getByLabel("Steam").check();
+  await filters.getByLabel("#41 共用").check();
+  await filters.getByRole("button", { name: "套用篩選" }).click();
+  await expect(page.getByRole("heading", { name: "#41 Switch 劇情驗收" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "#41 Steam 動作驗收" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "#41 派對桌遊驗收" })).toHaveCount(0);
+
+  await page.getByRole("search").getByLabel("#41 共用").uncheck();
+  await page.getByRole("search").getByLabel("#41 動作").check();
+  await page.getByRole("search").getByRole("button", { name: "套用篩選" }).click();
+  await expect(page.getByRole("heading", { name: "#41 Switch 劇情驗收" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "#41 Steam 動作驗收" })).toBeVisible();
+
+  await page.getByRole("search").getByLabel("#41 動作").uncheck();
+  await page.getByRole("search").getByLabel("搜尋收藏庫").fill("switch 劇情");
+  await expect(page.getByRole("heading", { name: "#41 Switch 劇情驗收" })).toBeVisible();
+  await expect(page).toHaveURL(/search=switch\+%E5%8A%87%E6%83%85/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: testInfo.outputPath("library-owner-filters-390.png"), fullPage: true });
+
+  await page.getByRole("link", { name: "清除全部條件" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "#41 派對桌遊驗收" })).toBeVisible();
+  await expect(page.getByRole("search").getByLabel("搜尋收藏庫")).toHaveValue("");
+  await expect(page.getByRole("search").locator('input[type="checkbox"]:checked')).toHaveCount(0);
+
+  let releaseFirstSearch!: () => void;
+  let markFirstSearchRequested!: () => void;
+  const firstSearchRequested = new Promise<void>((resolve) => { markFirstSearchRequested = resolve; });
+  const firstSearchCanFinish = new Promise<void>((resolve) => { releaseFirstSearch = resolve; });
+  await page.route("**/*", async (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (requestUrl.searchParams.get("search") === "#41 Steam" && route.request().headers().rsc === "1") {
+      markFirstSearchRequested();
+      await firstSearchCanFinish;
+    }
+    await route.continue();
+  });
+  await page.getByRole("search").getByLabel("搜尋收藏庫").fill("#41 Steam");
+  await firstSearchRequested;
+  await page.getByRole("search").getByLabel("搜尋收藏庫").fill("#41 Switch");
+  releaseFirstSearch();
+  await expect(page).toHaveURL(/search=%2341\+Switch/);
+  await expect(page.getByRole("search").getByLabel("搜尋收藏庫")).toHaveValue("#41 Switch");
+  await expect(page.getByRole("heading", { name: "#41 Switch 劇情驗收" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "#41 Steam 動作驗收" })).toHaveCount(0);
+  await page.unroute("**/*");
+
+  await page.getByRole("link", { name: "清除全部條件" }).click();
+  await page.getByRole("search").getByLabel("搜尋收藏庫").fill("#41");
+  await page.getByRole("search").getByLabel("Steam").check();
+  await expect(page).toHaveURL(/search=%2341/);
+  expect(new URL(page.url()).searchParams.get("platform")).toBe("Steam");
+  await expect(page.getByRole("heading", { name: "#41 Steam 動作驗收" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "#41 Switch 劇情驗收" })).toHaveCount(0);
+
+  await page.getByRole("link", { name: "清除全部條件" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await page.goBack();
+  await expect(page.getByRole("search").getByLabel("搜尋收藏庫")).toHaveValue("#41");
+  await expect(page.getByRole("search").getByLabel("Steam")).toBeChecked();
+  await expect(page.getByRole("heading", { name: "#41 Steam 動作驗收" })).toBeVisible();
+  await page.goForward();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("search").getByLabel("搜尋收藏庫")).toHaveValue("");
+  await expect(page.getByRole("search").locator('input[type="checkbox"]:checked')).toHaveCount(0);
+
+  await page.getByRole("search").getByLabel("Steam").check();
+  await page.getByRole("search").getByRole("button", { name: "套用篩選" }).click();
+  await page.getByRole("search").getByLabel("搜尋收藏庫").fill("不應完成的搜尋");
+  await page.getByRole("link", { name: "清除全部條件" }).click();
+  await page.waitForTimeout(500);
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "#41 派對桌遊驗收" })).toBeVisible();
+  await expect(page.getByRole("search").getByLabel("搜尋收藏庫")).toHaveValue("");
+  await expect(page.getByRole("search").locator('input[type="checkbox"]:checked')).toHaveCount(0);
 });

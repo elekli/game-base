@@ -28,9 +28,23 @@ function sourceCategoriesMatch(game: GameRecord, selected: LibraryGameQuery["sou
   return [...byKind].every(([kind, ids]) => game.snapshot?.categories.some((category) => category.kind === kind && ids.has(category.sourceCategoryId)) ?? false);
 }
 
+function normalized(value: string): string {
+  return value.trim().toLocaleLowerCase("en-US");
+}
+
+function sameDimensionMatches(values: readonly string[], selected: readonly string[] | undefined): boolean {
+  if (!selected || selected.length === 0) return true;
+  const available = new Set(values.map(normalized));
+  return selected.some((value) => available.has(normalized(value)));
+}
+
 export function filterAndSortLibraryGames(games: readonly GameRecord[], query: LibraryGameQuery = {}): readonly GameRecord[] {
   const filtered = games.filter((game) => {
+    const search = normalized(query.search ?? "");
+    if (search && ![game.displayName, ...game.sourceNames, ...game.aliases].some((name) => normalized(name).includes(search))) return false;
     if (query.media?.length && !query.media.includes(game.medium)) return false;
+    if (!sameDimensionMatches(game.actualPlatforms, query.actualPlatforms)) return false;
+    if (!sameDimensionMatches(game.tags, query.tags)) return false;
     if (!sourceCategoriesMatch(game, query.sourceCategories)) return false;
     const weight = game.snapshot?.weight ?? null;
     if (query.weightMin !== undefined && query.weightMin !== null && (weight === null || weight < query.weightMin)) return false;

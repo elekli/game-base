@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cleanSharedNames, normalizeSharedName } from "./internal/names";
 import { clearIncompatibleSourceCategories, filterAndSortGames } from "./internal/filters";
-import type { GameRecord, Medium } from "@/modules/games";
+import type { GameRecord, Medium, SourceSnapshot } from "@/modules/games";
 import { createLibraryService } from ".";
 import { InMemoryGameStore } from "@/modules/games";
 
@@ -68,6 +68,42 @@ describe("library filters", () => {
 });
 
 describe("library service", () => {
+  it("以名稱部分搜尋並將實際平台與自由標籤依同維度 OR、跨維度 AND 篩選", async () => {
+    const store = new InMemoryGameStore();
+    const service = createLibraryService(store);
+    const source: SourceSnapshot = {
+      ref: { provider: "igdb", medium: "video_game", sourceId: "library-search" },
+      canonicalUrl: "https://example.test/library-search",
+      title: "The Legend of Zelda",
+      localizedTitle: "薩爾達傳說",
+      aliases: ["Zelda BOTW"],
+      description: null,
+      releaseYear: null,
+      coverUrl: null,
+      categories: [],
+      contributors: [],
+      minPlayers: null,
+      maxPlayers: null,
+      supportsSolo: "unknown",
+      playtimeMinutes: null,
+      weight: null,
+      strategyRank: null,
+      supportedPlatforms: ["PC"],
+    };
+    const zelda = await store.createFromSource(source.ref, source);
+    const hades = await store.createManual("Hades", "video_game");
+    const party = await store.createManual("派對桌遊", "board_game");
+    await service.editGame(zelda.game.id, { displayName: "曠野之息", actualPlatforms: ["Nintendo Switch"], tags: ["劇情向"] });
+    await service.editGame(hades.id, { actualPlatforms: ["Steam"], tags: ["劇情向", "動作"] });
+    await service.editGame(party.id, { tags: ["派對"] });
+
+    await expect(service.listGames({ search: "zelDA" })).resolves.toMatchObject([{ id: zelda.game.id }]);
+    await expect(service.listGames({ search: "薩爾達" })).resolves.toMatchObject([{ id: zelda.game.id }]);
+    await expect(service.listGames({ actualPlatforms: ["Steam", "Nintendo Switch"], tags: ["劇情向"] })).resolves.toHaveLength(2);
+    await expect(service.listGames({ actualPlatforms: ["Steam"], tags: ["派對", "動作"] })).resolves.toMatchObject([{ id: hades.id }]);
+    await expect(service.listGames({ actualPlatforms: [], tags: [] })).resolves.toHaveLength(3);
+  });
+
   it("將收藏庫查詢交給 adapter，且在多媒介時清除不相容條件", async () => {
     const queries: unknown[] = [];
     const store = {

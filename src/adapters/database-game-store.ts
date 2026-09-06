@@ -116,15 +116,21 @@ export class PostgresGameStore implements GameStore {
   }
 
   async list(query = ""): Promise<readonly GameRecord[]> {
-    const escaped = query.trim().replace(/[\\%_]/g, "\\$&");
-    const needle = `%${escaped}%`;
-    const rows = await this.db.execute(this.selectFrom(sql`where g.trashed_at is null and (g.display_name ilike ${needle} escape '\\' or exists (select 1 from app_private.game_names gn where gn.game_id = g.id and gn.name ilike ${needle} escape '\\')) order by g.display_name asc`)) as Row[];
-    return rows.map(record);
+    return this.listLibraryGames({ search: query });
   }
 
   async listLibraryGames(query: LibraryGameQuery = {}): Promise<readonly GameRecord[]> {
     const clauses: SQL[] = [sql`g.trashed_at is null`];
+    const search = query.search?.trim().replace(/[\\%_]/g, "\\$&");
+    if (search) {
+      const needle = `%${search}%`;
+      clauses.push(sql`(g.display_name ilike ${needle} escape '\\' or exists (select 1 from app_private.game_names gn where gn.game_id = g.id and gn.name ilike ${needle} escape '\\'))`);
+    }
     if (query.media?.length) clauses.push(sql`g.medium in (${sql.join(query.media.map((medium) => sql`${medium}`), sql`, `)})`);
+    const actualPlatforms = uniqueNames(query.actualPlatforms ?? []).map(normalized);
+    if (actualPlatforms.length) clauses.push(sql`exists (select 1 from app_private.game_platforms gp join app_private.platforms p on p.id = gp.platform_id where gp.game_id = g.id and p.normalized_name in (${sql.join(actualPlatforms.map((name) => sql`${name}`), sql`, `)}))`);
+    const tags = uniqueNames(query.tags ?? []).map(normalized);
+    if (tags.length) clauses.push(sql`exists (select 1 from app_private.game_tags gt join app_private.tags t on t.id = gt.tag_id where gt.game_id = g.id and t.normalized_name in (${sql.join(tags.map((name) => sql`${name}`), sql`, `)}))`);
     const selectedByKind = new Map<string, string[]>();
     for (const category of query.sourceCategories ?? []) {
       const ids = selectedByKind.get(category.kind) ?? [];
