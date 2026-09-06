@@ -69,8 +69,11 @@ async function dropFailureInjection(): Promise<void> {
 }
 
 async function cleanTestData(): Promise<void> {
+  await runtimeDatabase.unsafe("delete from app_private.media_derivatives where asset_id in (select asset.id from app_private.media_assets asset join app_private.games game on game.id = asset.game_id where game.display_name like '交易回滾測試：%')");
+  await runtimeDatabase.unsafe("delete from app_private.media_assets where game_id in (select id from app_private.games where display_name like '交易回滾測試：%')");
+  await runtimeDatabase.unsafe("delete from app_private.media_ingests where game_id in (select id from app_private.games where display_name like '交易回滾測試：%')");
   await runtimeDatabase.unsafe("delete from app_private.games where display_name like '交易回滾測試：%'");
-  await runtimeDatabase.unsafe("delete from app_private.external_game_identities where provider = 'bgg' and source_id in ('980001', '980002')");
+  await runtimeDatabase.unsafe("delete from app_private.external_game_identities where provider = 'bgg' and source_id in ('980001', '980002', '980003')");
   await runtimeDatabase.unsafe("delete from app_private.source_categories where source_category_id like 'rollback-integration-%'");
   await runtimeDatabase.unsafe("delete from app_private.contributors where source_provider = 'bgg' and source_contributor_id like 'rollback-integration-%'");
   await runtimeDatabase.unsafe("delete from app_private.platforms where is_system = false and normalized_name like '交易回滾測試平台%'");
@@ -206,6 +209,24 @@ afterAll(async () => {
 });
 
 describe("PostgresGameStore 真實交易回滾", () => {
+  it("相同封面網址的後續 refresh 仍建立新的來源攝取紀錄", async () => {
+    const snapshot = snapshotFor("980003", "交易回滾測試：封面刷新", "rollback-integration-cover-category", "rollback-integration-cover-contributor", "rollback-refresh-same-cover", 3.2);
+    const created = await store.createFromSource(snapshot.ref, snapshot);
+
+    await store.refreshSource(created.game.id, snapshot);
+
+    const rows = await runtimeDatabase.unsafe<DatabaseRow[]>(`
+      select idempotency_key, external_game_identity_id, source_url
+      from app_private.media_ingests
+      where game_id = $1
+      order by created_at, id
+    `, [created.game.id]);
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.idempotency_key)).size).toBe(2);
+    expect(rows.every((row) => row.external_game_identity_id === created.game.externalIdentityId)).toBe(true);
+    expect(rows.every((row) => row.source_url === snapshot.coverUrl)).toBe(true);
+  });
+
   it("link 中途失敗後不留下 identity、來源列、封面匯入或改動 owner data", async () => {
     const game = await store.createManual("交易回滾測試：手動連結", "board_game");
     const before = await store.edit(game.id, {
