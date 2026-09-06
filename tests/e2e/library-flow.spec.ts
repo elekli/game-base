@@ -17,8 +17,10 @@ test("owner can search a source fixture and add it to the library", async ({ pag
   await page.getByRole("button", { name: "同時搜尋" }).click();
 
   await expect(page.getByText("範例桌遊", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "展開確認並加入" }).first().click();
-  await expect(page).toHaveURL(/\/$/);
+  await Promise.all([
+    page.waitForURL(/\/$/),
+    page.getByRole("button", { name: "展開確認並加入" }).first().click(),
+  ]);
   await expect(page.getByText("範例桌遊", { exact: true })).toBeVisible();
 });
 
@@ -65,7 +67,10 @@ test("owner can confirm reuse and creation of same-name contributors on mobile",
   const contributionForm = page.getByRole("heading", { name: "手動貢獻" }).locator("..");
   await contributionForm.getByPlaceholder("人物或組織名稱").fill(contributorName);
   await contributionForm.getByRole("combobox").last().selectOption("design");
-  await contributionForm.getByRole("button", { name: "新增手動貢獻" }).click();
+  await Promise.all([
+    page.waitForEvent("load"),
+    contributionForm.getByRole("button", { name: "新增手動貢獻" }).click(),
+  ]);
   await page.getByText("貢獻關係").click();
   await expect(page.getByText(`${contributorName} · 設計／開發`)).toBeVisible();
   await contributionForm.getByPlaceholder("人物或組織名稱").fill(contributorName);
@@ -73,7 +78,10 @@ test("owner can confirm reuse and creation of same-name contributors on mobile",
   await contributionForm.getByRole("button", { name: "新增手動貢獻" }).click();
   await expect(page.getByText("尚未建立任何新資料")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("contributor-confirmation-390.png"), fullPage: true });
-  await page.getByRole("button", { name: "重用此貢獻者" }).click();
+  await Promise.all([
+    page.waitForEvent("load"),
+    page.getByRole("button", { name: "重用此貢獻者" }).click(),
+  ]);
 
   await page.getByText("貢獻關係").click();
   await expect(page.getByText(`${contributorName} · 設計／開發`)).toBeVisible();
@@ -82,7 +90,10 @@ test("owner can confirm reuse and creation of same-name contributors on mobile",
   await contributionForm.getByRole("combobox").last().selectOption("publisher");
   await contributionForm.getByRole("button", { name: "新增手動貢獻" }).click();
   await expect(page.getByText("仍建立新的同名貢獻者")).toBeVisible();
-  await page.getByRole("button", { name: "仍建立新的同名貢獻者" }).click();
+  await Promise.all([
+    page.waitForEvent("load"),
+    page.getByRole("button", { name: "仍建立新的同名貢獻者" }).click(),
+  ]);
   await page.getByText("貢獻關係").click();
   await expect(page.getByText(`${contributorName} · 發行`)).toBeVisible();
 });
