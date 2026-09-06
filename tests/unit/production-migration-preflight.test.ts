@@ -457,18 +457,25 @@ describe("production migration safety lint", () => {
     );
   });
 
-  it("allows only the named byte-exact grant remediation", async () => {
+  it("allows only the 0007 and 0008 named byte-exact grant remediations", async () => {
     const sql =
       "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n";
     const approved = await migrationFixture({
-      "0001_revoke_public_platform_trigger_execute.sql": sql,
+      "0007_revoke_public_platform_trigger_execute.sql": sql,
+      "0008_revoke_public_platform_trigger_execute.sql": sql,
     });
     const unnamed = await migrationFixture({ "0001_other.sql": sql });
+    const futureCopy = await migrationFixture({
+      "0009_revoke_public_platform_trigger_execute.sql": sql,
+    });
 
     await expect(lintProductionMigrations(approved)).resolves.toEqual({
-      migrationCount: 1,
+      migrationCount: 2,
     });
     await expect(lintProductionMigrations(unnamed)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
+    await expect(lintProductionMigrations(futureCopy)).rejects.toThrow(
       "ProductionMigrationSafetyError",
     );
   });
@@ -1355,12 +1362,12 @@ describe("production migration preflight", () => {
     const root = await migrationFixture({
       "0001_runtime_security.sql": "create schema app_private;",
       "0002_games.sql": "create table app_private.games (id uuid primary key);",
-      "0003_revoke_public_platform_trigger_execute.sql":
+      "0008_revoke_public_platform_trigger_execute.sql":
         "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n",
     });
     const snapshot = healthySnapshot();
     snapshot.migrations.push({
-      version: "0003",
+      version: "0008",
       name: "revoke_public_platform_trigger_execute",
     });
     snapshot.appRuntimeReachableRoles = [
@@ -1483,7 +1490,7 @@ describe("production migration preflight", () => {
     const root = await migrationFixture({
       "0001_runtime_security.sql": "create schema app_private;",
       "0002_games.sql": "create table app_private.games (id uuid primary key);",
-      "0003_revoke_public_platform_trigger_execute.sql":
+      "0008_revoke_public_platform_trigger_execute.sql":
         "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n",
     });
     const snapshot = healthySnapshot();
@@ -1636,7 +1643,7 @@ describe("production migration preflight", () => {
     const root = await migrationFixture({
       "0001_runtime_security.sql": "create schema app_private;",
       "0002_games.sql": "create table app_private.games (id uuid primary key);",
-      "0003_revoke_public_platform_trigger_execute.sql":
+      "0008_revoke_public_platform_trigger_execute.sql":
         "revoke execute on function app_private.prevent_system_platform_mutation() from public; select 1;",
     });
     const snapshot = healthySnapshot();
@@ -1660,14 +1667,14 @@ describe("production migration preflight", () => {
     ).rejects.toThrow("ProductionMigrationSafetyError");
   });
 
-  it("rejects duplicate copies of the one-time remediation", async () => {
+  it("rejects a 0009 copy of the one-time remediation", async () => {
     const remediation =
       "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n";
     const root = await migrationFixture({
       "0001_runtime_security.sql": "create schema app_private;",
       "0002_games.sql": "create table app_private.games (id uuid primary key);",
-      "0003_revoke_public_platform_trigger_execute.sql": remediation,
-      "0004_revoke_public_platform_trigger_execute.sql": remediation,
+      "0008_revoke_public_platform_trigger_execute.sql": remediation,
+      "0009_revoke_public_platform_trigger_execute.sql": remediation,
     });
     const snapshot = healthySnapshot();
     snapshot.unsafeGrantCount = 1;
@@ -1687,19 +1694,19 @@ describe("production migration preflight", () => {
           "postgres://postgres.wbtyuvufhrhybquzwfip:secret@aws-0-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=verify-full",
         connect: async () => session,
       }),
-    ).rejects.toThrow("ProductionMigrationPreflightError");
+    ).rejects.toThrow("ProductionMigrationSafetyError");
   });
 
   it("requires strict post-migration verification and no app_runtime EXECUTE", async () => {
     const root = await migrationFixture({
       "0001_runtime_security.sql": "create schema app_private;",
       "0002_games.sql": "create table app_private.games (id uuid primary key);",
-      "0003_revoke_public_platform_trigger_execute.sql":
+      "0008_revoke_public_platform_trigger_execute.sql":
         "revoke execute on function app_private.prevent_system_platform_mutation() from public;\n",
     });
     const snapshot = healthySnapshot();
     snapshot.migrations.push({
-      version: "0003",
+      version: "0008",
       name: "revoke_public_platform_trigger_execute",
     });
     const session: ReadOnlyDatabaseSession = {
