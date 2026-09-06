@@ -168,7 +168,7 @@ describe("library service", () => {
     });
     const first = await store.createFromSource(snapshot("canonical-first", "舊名稱").ref, snapshot("canonical-first", "舊名稱"));
     await store.createFromSource(snapshot("canonical-second", "舊名稱").ref, snapshot("canonical-second", "舊名稱"));
-    await store.refreshSource(first.game.id, snapshot("canonical-first", "新名稱"));
+    await store.refreshSource(first.game.id, snapshot("canonical-first", "新名稱"), "77777777-7777-4777-8777-777777777778");
 
     await expect(service.listContributorFacets()).resolves.toEqual([{
       contributorId: first.game.contributors[0].contributorId,
