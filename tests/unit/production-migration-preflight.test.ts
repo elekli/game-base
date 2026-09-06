@@ -144,6 +144,183 @@ describe("production migration safety lint", () => {
     });
   });
 
+  it("accepts the exact migrator envelope and tail revokes for newly created overloads", async () => {
+    const root = await migrationFixture({
+      "0001_routines.sql": `
+        grant app_migrator to postgres;
+        set local role app_migrator;
+        create function app_private.lookup_game(uuid) returns uuid language sql as $$ select $1 $$;
+        create function app_private.lookup_game(text) returns text language sql as $$ select $1 $$;
+        create procedure app_private.refresh_game(uuid) language sql as $$ select $1 $$;
+        revoke execute on function app_private.lookup_game(uuid) from public, anon, authenticated, service_role;
+        revoke execute on function app_private.lookup_game(text) from public, anon, authenticated, service_role;
+        revoke execute on procedure app_private.refresh_game(uuid) from public, anon, authenticated, service_role;
+        reset role;
+        revoke app_migrator from postgres;
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).resolves.toEqual({
+      migrationCount: 1,
+    });
+  });
+
+  it.each([
+    ["WITH OPTION", "grant app_migrator to postgres with admin option;\nset local role app_migrator;\nselect 1;\nreset role;\nrevoke app_migrator from postgres;"],
+    ["non-LOCAL SET ROLE", "grant app_migrator to postgres;\nset role app_migrator;\nselect 1;\nreset role;\nrevoke app_migrator from postgres;"],
+    ["extra membership", "grant app_migrator to postgres;\nset local role app_migrator;\ngrant app_runtime to postgres;\nreset role;\nrevoke app_migrator from postgres;"],
+    ["extra SET LOCAL ROLE", "grant app_migrator to postgres;\nset local role app_migrator;\nset local role app_migrator;\nselect 1;\nreset role;\nrevoke app_migrator from postgres;"],
+    ["extra RESET ROLE", "grant app_migrator to postgres;\nset local role app_migrator;\nselect 1;\nreset role;\nreset role;\nrevoke app_migrator from postgres;"],
+    ["missing RESET", "grant app_migrator to postgres;\nset local role app_migrator;\nselect 1;\nrevoke app_migrator from postgres;"],
+    ["missing tail REVOKE", "grant app_migrator to postgres;\nset local role app_migrator;\nselect 1;\nreset role;"],
+    ["order drift", "grant app_migrator to postgres;\nset local role app_migrator;\nselect 1;\nrevoke app_migrator from postgres;\nreset role;"],
+    ["non-outer wrapper", "select 1;\ngrant app_migrator to postgres;\nset local role app_migrator;\nselect 2;\nreset role;\nrevoke app_migrator from postgres;"],
+  ])("rejects migrator envelope near-miss: %s", async (_case, sql) => {
+    const root = await migrationFixture({ "0001_envelope.sql": sql });
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
+  });
+
+  it.each([
+    ["set_config", "select set_config('role', 'postgres', true);"],
+    ["schema-qualified set_config", "select pg_catalog.set_config('role', 'postgres', true);"],
+    ["quoted set_config", "select \"set_config\"('role', 'postgres', true);"],
+    ["SET SESSION AUTHORIZATION", "set session authorization postgres;"],
+    ["RESET SESSION AUTHORIZATION", "reset session authorization;"],
+    [
+      "set_config in a routine body",
+      "create function app_private.unsafe_owner() returns text language plpgsql as $$ begin perform set_config('role', 'postgres', true); return 'x'; end $$;",
+    ],
+  ])("rejects executable owner-bypass SQL: %s", async (_case, body) => {
+    const root = await migrationFixture({
+      "0001_owner_bypass.sql": `grant app_migrator to postgres; set local role app_migrator; ${body} reset role; revoke app_migrator from postgres;`,
+    });
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
+  });
+
+  it.each([
+    ["uppercase prefix", String.raw`select U&"set\005fconfig"('role', 'postgres', true);`],
+    ["lowercase prefix", String.raw`select u&"set\005fconfig"('role', 'postgres', true);`],
+    ["schema-qualified", String.raw`select pg_catalog.U&"set\005fconfig"('role', 'postgres', true);`],
+    [
+      "custom UESCAPE",
+      String.raw`select U&"set!005fconfig" UESCAPE '!'('role', 'postgres', true);`,
+    ],
+    [
+      "routine body",
+      String.raw`create function app_private.unsafe_unicode_owner() returns text language plpgsql as $$ begin perform U&"set\005fconfig"('role', 'postgres', true); return 'x'; end $$;`,
+    ],
+  ])("rejects executable Unicode escaped identifiers: %s", async (_case, body) => {
+    const root = await migrationFixture({
+      "0001_unicode_identifier.sql": `grant app_migrator to postgres; set local role app_migrator; ${body} reset role; revoke app_migrator from postgres;`,
+    });
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
+  });
+
+  it("ignores set_config text in comments and literals", async () => {
+    const root = await migrationFixture({
+      "0001_benign_set_config_text.sql": `
+        -- select set_config('role', 'postgres', true);
+        select 'pg_catalog.set_config(''role'', ''postgres'', true)';
+        select $$ \"set_config\"('role', 'postgres', true) $$;
+        create function app_private.safe_text() returns text language sql as
+          $body$ select 'set_config(''role'', ''postgres'', true)' $body$;
+      `,
+    });
+    await expect(lintProductionMigrations(root)).resolves.toEqual({
+      migrationCount: 1,
+    });
+  });
+
+  it("ignores Unicode escaped identifier text in comments and literals", async () => {
+    const root = await migrationFixture({
+      "0001_benign_unicode_identifier_text.sql": String.raw`
+        -- select U&"set\005fconfig"('role', 'postgres', true);
+        select 'pg_catalog.U&"set\005fconfig"';
+        select $$ U&"set\005fconfig"('role', 'postgres', true) $$;
+      `,
+    });
+    await expect(lintProductionMigrations(root)).resolves.toEqual({
+      migrationCount: 1,
+    });
+  });
+
+  it.each([
+    ["unknown routine", "app_private.other(uuid)", "public, anon, authenticated, service_role"],
+    ["wrong overload", "app_private.lookup_game(text)", "public, anon, authenticated, service_role"],
+    ["wrong schema", "public.lookup_game(uuid)", "public, anon, authenticated, service_role"],
+    ["missing role", "app_private.lookup_game(uuid)", "public, anon, authenticated"],
+    ["extra role", "app_private.lookup_game(uuid)", "public, anon, authenticated, service_role, app_runtime"],
+    ["role order drift", "app_private.lookup_game(uuid)", "anon, public, authenticated, service_role"],
+  ])("rejects routine EXECUTE revoke near-miss: %s", async (_case, identity, roles) => {
+    const root = await migrationFixture({
+      "0001_routine_revoke.sql": `
+        grant app_migrator to postgres;
+        set local role app_migrator;
+        create function app_private.lookup_game(uuid) returns uuid language sql as $$ select $1 $$;
+        revoke execute on function ${identity} from ${roles};
+        reset role;
+        revoke app_migrator from postgres;
+      `,
+    });
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
+  });
+
+  it.each([
+    ["ALL FUNCTIONS", "revoke execute on all functions in schema app_private from public, anon, authenticated, service_role;"],
+    ["kind mismatch", "revoke execute on procedure app_private.lookup_game(uuid) from public, anon, authenticated, service_role;"],
+    ["not at body tail", "revoke execute on function app_private.lookup_game(uuid) from public, anon, authenticated, service_role;\nselect 1;"],
+  ])("rejects non-exact routine revoke form: %s", async (_case, revokeSql) => {
+    const root = await migrationFixture({
+      "0001_routine_revoke.sql": `
+        grant app_migrator to postgres;
+        set local role app_migrator;
+        create function app_private.lookup_game(uuid) returns uuid language sql as $$ select $1 $$;
+        ${revokeSql}
+        reset role;
+        revoke app_migrator from postgres;
+      `,
+    });
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
+  });
+
+  it("does not treat CREATE OR REPLACE as a newly created routine", async () => {
+    const root = await migrationFixture({
+      "0001_existing_routine.sql": `
+        grant app_migrator to postgres;
+        set local role app_migrator;
+        create or replace function app_private.lookup_game(uuid) returns uuid language sql as $$ select $1 $$;
+        revoke execute on function app_private.lookup_game(uuid) from public, anon, authenticated, service_role;
+        reset role;
+        revoke app_migrator from postgres;
+      `,
+    });
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
+  });
+
+  it.each([
+    "drop table app_private.games;",
+    "create procedure app_private.bad() language plpgsql as $$ begin execute 'drop table app_private.games'; end $$;",
+  ])("keeps rejecting unsafe body SQL inside the exact envelope", async (body) => {
+    const root = await migrationFixture({
+      "0001_unsafe_body.sql": `grant app_migrator to postgres; set local role app_migrator; ${body} reset role; revoke app_migrator from postgres;`,
+    });
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
+  });
+
   it.each([
     "drop table app_private.games",
     "drop index app_private.games_title_idx",
