@@ -104,4 +104,46 @@ describe("production migration PostgreSQL catalog checks", () => {
       await database.unsafe("rollback");
     }
   });
+
+  it("rejects runtime column REFERENCES and every column grant option", async () => {
+    const healthy = await snapshot();
+    await database.unsafe("begin");
+    try {
+      await database.unsafe(`
+        set local role app_migrator;
+        grant references (id) on app_private.games to app_runtime;
+        grant select (id) on app_private.games to app_runtime with grant option;
+        reset role;
+      `);
+
+      const polluted = await snapshot();
+      expect(polluted.unexpectedAclCount).toBeGreaterThanOrEqual(
+        healthy.unexpectedAclCount + 2,
+      );
+    } finally {
+      await database.unsafe("rollback");
+    }
+  });
+
+  it("rejects every role-wide app_migrator default ACL", async () => {
+    const healthy = await snapshot();
+    await database.unsafe("begin");
+    try {
+      await database.unsafe(`
+        create role acl_global_probe_role;
+        set local role app_migrator;
+        alter default privileges grant select on tables to public;
+        alter default privileges
+          grant insert on tables to acl_global_probe_role with grant option;
+        reset role;
+      `);
+
+      const polluted = await snapshot();
+      expect(polluted.defaultPrivilegeDriftCount).toBeGreaterThan(
+        healthy.defaultPrivilegeDriftCount,
+      );
+    } finally {
+      await database.unsafe("rollback");
+    }
+  });
 });

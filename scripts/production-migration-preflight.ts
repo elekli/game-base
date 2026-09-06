@@ -324,7 +324,7 @@ select json_build_object(
           privilege.grantee = c.relowner
           or (
             privilege.grantee = (select oid from pg_roles where rolname = 'app_runtime')
-            and privilege.privilege_type in ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES')
+            and privilege.privilege_type in ('SELECT', 'INSERT', 'UPDATE')
             and not privilege.is_grantable
           )
         )
@@ -363,11 +363,16 @@ select json_build_object(
         ('S'::"char", 'USAGE'), ('S'::"char", 'SELECT')
       ) expected(object_type, privilege_type)
     )
-    select count(*) from (
-      (select * from actual_default_acl except all select * from expected_default_acl)
-      union all
-      (select * from expected_default_acl except all select * from actual_default_acl)
-    ) default_acl_difference
+    select
+      (select count(*) from (
+        (select * from actual_default_acl except all select * from expected_default_acl)
+        union all
+        (select * from expected_default_acl except all select * from actual_default_acl)
+      ) default_acl_difference)
+      + (select count(*)
+        from pg_default_acl default_acl
+        join role_oid on default_acl.defaclrole = role_oid.owner_oid
+        where default_acl.defaclnamespace = 0)
   ),
   'unsafeGrantCount', (
     select count(*) from (
