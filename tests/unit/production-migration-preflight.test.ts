@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -1507,6 +1507,128 @@ describe("production migration preflight", () => {
     ).resolves.toMatchObject({
       preflightState: "known-drift-remediation-required",
       pendingMigrationCount: 1,
+    });
+  });
+
+  it("recovers when 0007 is recorded but its REVOKE effect is missing", async () => {
+    const repositoryRoot = process.cwd();
+    const migrationFilenames = [
+      "0001_runtime_security.sql",
+      "0002_games_and_source_identity.sql",
+      "0003_source_snapshot_and_source_cover.sql",
+      "0004_library_curation.sql",
+      "0005_source_refresh.sql",
+      "0006_library_invariants.sql",
+      "0007_revoke_public_platform_trigger_execute.sql",
+      "0008_revoke_public_platform_trigger_execute.sql",
+    ] as const;
+    const root = await migrationFixture(
+      Object.fromEntries(
+        await Promise.all(
+          migrationFilenames.map(async (filename) => [
+            filename,
+            await readFile(
+              path.join(repositoryRoot, "supabase", "migrations", filename),
+              "utf8",
+            ),
+          ]),
+        ),
+      ),
+    );
+    await writeFile(
+      path.join(root, ".github", "production-migration-lint-baseline.json"),
+      await readFile(
+        path.join(
+          repositoryRoot,
+          ".github",
+          "production-migration-lint-baseline.json",
+        ),
+        "utf8",
+      ),
+    );
+    const snapshot = healthySnapshot();
+    snapshot.migrations = [
+      { version: "0001", name: "runtime_security" },
+      { version: "0002", name: "games_and_source_identity" },
+      { version: "0003", name: "source_snapshot_and_source_cover" },
+      { version: "0004", name: "library_curation" },
+      { version: "0005", name: "source_refresh" },
+      { version: "0006", name: "library_invariants" },
+      { version: "0007", name: "revoke_public_platform_trigger_execute" },
+    ];
+    snapshot.unsafeGrantCount = 1;
+    snapshot.knownPublicExecuteDriftCount = 1;
+    snapshot.appRuntimeCanExecuteKnownDriftFunction = true;
+    const session: ReadOnlyDatabaseSession = {
+      async unsafe<T>(sql: string) {
+        return sql.includes("json_build_object") ? ([{ snapshot }] as T[]) : [];
+      },
+      async release() {},
+    };
+    const databaseUrl =
+      "postgres://postgres.wbtyuvufhrhybquzwfip:secret@aws-0-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=verify-full";
+
+    await expect(
+      runProductionMigrationPreflight({
+        root,
+        databaseUrl,
+        connect: async () => session,
+      }),
+    ).resolves.toMatchObject({
+      preflightState: "known-drift-remediation-required",
+      appliedMigrationCount: 7,
+      pendingMigrationCount: 1,
+      pendingMigrations: [
+        {
+          version: "0008",
+          name: "revoke_public_platform_trigger_execute",
+          filename: "0008_revoke_public_platform_trigger_execute.sql",
+        },
+      ],
+    });
+
+    snapshot.unsafeGrantCount = 0;
+    snapshot.knownPublicExecuteDriftCount = 0;
+    snapshot.appRuntimeCanExecuteKnownDriftFunction = false;
+    await expect(
+      runProductionMigrationPreflight({
+        root,
+        phase: "strict",
+        databaseUrl,
+        connect: async () => session,
+      }),
+    ).rejects.toThrow("ProductionMigrationPreflightError");
+
+    snapshot.unsafeGrantCount = 1;
+    snapshot.knownPublicExecuteDriftCount = 1;
+    snapshot.appRuntimeCanExecuteKnownDriftFunction = true;
+    snapshot.migrations.push({
+      version: "0008",
+      name: "revoke_public_platform_trigger_execute",
+    });
+    await expect(
+      runProductionMigrationPreflight({
+        root,
+        phase: "strict",
+        databaseUrl,
+        connect: async () => session,
+      }),
+    ).rejects.toThrow("ProductionMigrationPreflightError");
+
+    snapshot.unsafeGrantCount = 0;
+    snapshot.knownPublicExecuteDriftCount = 0;
+    snapshot.appRuntimeCanExecuteKnownDriftFunction = false;
+    await expect(
+      runProductionMigrationPreflight({
+        root,
+        phase: "strict",
+        databaseUrl,
+        connect: async () => session,
+      }),
+    ).resolves.toMatchObject({
+      preflightState: "strict",
+      appliedMigrationCount: 8,
+      pendingMigrationCount: 0,
     });
   });
 
