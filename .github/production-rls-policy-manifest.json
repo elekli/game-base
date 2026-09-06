@@ -1,0 +1,203 @@
+{
+  "schema": "app_private",
+  "policies": [
+    {
+      "table": "bgg_current_metrics",
+      "name": "runtime_bgg_current_metrics",
+      "validFrom": "0005",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "contributors",
+      "name": "runtime_contributors",
+      "validFrom": "0004",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "external_game_categories",
+      "name": "runtime_external_game_categories",
+      "validFrom": "0003",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "external_game_identities",
+      "name": "runtime_external_identity",
+      "validFrom": "0002",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "external_player_profiles",
+      "name": "runtime_external_player_profiles",
+      "validFrom": "0003",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "external_supported_platforms",
+      "name": "runtime_external_supported_platforms",
+      "validFrom": "0004",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "game_names",
+      "name": "runtime_game_names",
+      "validFrom": "0002",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "game_platforms",
+      "name": "runtime_game_platforms",
+      "validFrom": "0004",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "game_tags",
+      "name": "runtime_game_tags",
+      "validFrom": "0004",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "games",
+      "name": "runtime_games",
+      "validFrom": "0002",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "manual_contributions",
+      "name": "runtime_manual_contributions",
+      "validFrom": "0004",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "media_assets",
+      "name": "runtime_media_assets",
+      "validFrom": "0003",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "media_derivatives",
+      "name": "runtime_media_derivatives",
+      "validFrom": "0003",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "media_ingests",
+      "name": "runtime_media_ingests",
+      "validFrom": "0003",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "platforms",
+      "name": "runtime_platforms",
+      "validFrom": "0004",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "source_categories",
+      "name": "runtime_source_categories",
+      "validFrom": "0003",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "source_contributions",
+      "name": "runtime_source_contributions",
+      "validFrom": "0003",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "tags",
+      "name": "runtime_tags",
+      "validFrom": "0004",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    }
+  ]
+}

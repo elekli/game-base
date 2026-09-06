@@ -1,0 +1,8 @@
+{
+  "0001_runtime_security.sql": "c6bf64ba267281f66cbedfffd6854c3a2eade1e9631587a2e738fee9a544d787",
+  "0002_games_and_source_identity.sql": "75cad41a3f40eed94856405c3905bf17963fc7744cc4877c9a98d3532ed44bdf",
+  "0003_source_snapshot_and_source_cover.sql": "1f29d1009c15d8a033342b35e697ff32430a8fee35464264002779a02e194080",
+  "0004_library_curation.sql": "4beeb1353655f13be7624fe318db730c8fccc63271195704095fc90ba6076769",
+  "0005_source_refresh.sql": "6a00b22139392512a2b81fc0ebb606fe3f15660360c937936ff2f7911c58942a",
+  "0006_library_invariants.sql": "a1d9e8b3ae4e03aacb2b3a78046c3dd5dffdf8a1aa732c62484097b379e88e62"
+}

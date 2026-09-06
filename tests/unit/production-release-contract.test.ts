@@ -23,10 +23,12 @@ describe("production release contract", () => {
     const verification = workflow.indexOf("Verify exact main commit and successful CI");
     const candidateCheckout = workflow.indexOf('git checkout --detach "$COMMIT_SHA"');
     const repositoryScripts = workflow.indexOf("pnpm install --frozen-lockfile");
+    const migrationPreflight = workflow.indexOf("pnpm release:migration:preflight");
 
     expect(trustedCheckout).toBeGreaterThan(-1);
     expect(verification).toBeGreaterThan(trustedCheckout);
     expect(candidateCheckout).toBeGreaterThan(verification);
     expect(repositoryScripts).toBeGreaterThan(candidateCheckout);
+    expect(migrationPreflight).toBeGreaterThan(repositoryScripts);
   });
 });
