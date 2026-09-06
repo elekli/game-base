@@ -1,0 +1,13 @@
+{
+  "repository": "elekli/game-base",
+  "productionBranch": "main",
+  "ciWorkflow": ".github/workflows/ci.yml",
+  "ciCheck": "verify",
+  "productionEnvironment": "Production",
+  "vercelProjectId": "prj_iTlWeDkcKItHTKYIayoNjQQ0vHec",
+  "vercelProjectName": "game-base",
+  "supabaseProjectRef": "wbtyuvufhrhybquzwfip",
+  "supabaseRegion": "ap-south-1",
+  "vercelGitDeployment": false,
+  "hostedPreview": false
+}

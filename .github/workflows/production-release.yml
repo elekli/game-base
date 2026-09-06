@@ -1,0 +1,69 @@
+name: Production Release Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full main commit SHA to release
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  verify-release-candidate:
+    name: Verify release candidate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: Production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      - name: Verify exact main commit and successful CI
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$COMMIT_SHA" in
+            *[!0-9a-f]*|'') echo "commit_sha must be a full lowercase commit SHA" >&2; exit 1 ;;
+          esac
+          test "${#COMMIT_SHA}" -eq 40
+          git fetch --no-tags origin main
+          git cat-file -e "${COMMIT_SHA}^{commit}"
+          git merge-base --is-ancestor "$COMMIT_SHA" origin/main
+          gh api \
+            --header 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${COMMIT_SHA}&branch=main&event=push&status=success&per_page=100" \
+            | jq -e --arg sha "$COMMIT_SHA" '
+                any(.workflow_runs[];
+                  .head_sha == $sha and
+                  .head_branch == "main" and
+                  .event == "push" and
+                  .conclusion == "success")
+              ' >/dev/null
+      - name: Check out verified release commit
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: git checkout --detach "$COMMIT_SHA"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm release:contract:check
+      - name: Stop before deployment until T02A–T03 are implemented
+        run: |
+          echo 'Release candidate verified; production deployment remains intentionally disabled.'
