@@ -1,5 +1,5 @@
 begin;
-select plan(30);
+select plan(38);
 
 select has_column('app_private', 'media_ingests', 'idempotency_key', 'ingest 保存全域冪等鍵');
 select has_column('app_private', 'media_ingests', 'reserved_asset_id', 'ingest 預留固定 asset id');
@@ -183,6 +183,13 @@ select extensions.throws_like(
 );
 
 select extensions.throws_like(
+  $$update app_private.media_assets set superseded_at = now() where id = '40000000-0000-4000-8000-000000000001'$$,
+  '%only source cover may be superseded%',
+  'gallery、custom cover 與 attachment 不可使用來源封面的 superseded 生命週期'
+);
+update app_private.media_assets set superseded_at = null where id = '40000000-0000-4000-8000-000000000001';
+
+select extensions.throws_like(
   $$update app_private.media_assets set removed_at = now(), removed_reason = 'owner_removed' where id = '40000000-0000-4000-8000-000000000001'$$,
   '%media manual cover must reference an active image from the same game%',
   '仍被指向的人工封面不可單獨標成移除'
@@ -194,6 +201,100 @@ select ok((select removed_at is not null from app_private.media_assets where id 
 
 select ok((select count(*) from app_private.media_assets where id = '40000000-0000-4000-8000-000000000001') = 1, '軟移除不刪除權威原檔列');
 select ok((select count(*) from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001') = 1, '軟移除不刪除 derivative 列');
+
+update app_private.games
+set external_game_identity_id = '11000000-0000-4000-8000-000000000001'
+where id = '10000000-0000-4000-8000-000000000001';
+
+insert into app_private.media_ingests (
+  id, idempotency_key, reserved_asset_id, channel, purpose, game_id, external_game_identity_id,
+  original_object_path, original_file_name, declared_mime_type, declared_byte_size,
+  actual_mime_type, actual_byte_size, image_width, image_height, state, lease_token, lease_until,
+  stale_after, source_url, object_key, original_state, thumbnail_state
+) values
+  ('21000000-0000-4000-8000-000000000001', '31000000-0000-4000-8000-000000000001', '41000000-0000-4000-8000-000000000001',
+   'source_fetch', 'source_cover', '10000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000001',
+   'originals/source/old', 'old.png', 'image/png', 24, 'image/png', 24, 2, 3, 'finalizing',
+   '51000000-0000-4000-8000-000000000001', now() + interval '5 minutes', now() + interval '26 hours',
+   'https://example.test/old', 'originals/source/old', 'pending', 'pending'),
+  ('21000000-0000-4000-8000-000000000002', '31000000-0000-4000-8000-000000000002', '41000000-0000-4000-8000-000000000002',
+   'source_fetch', 'source_cover', '10000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000001',
+   'originals/source/new', 'new.png', 'image/png', 24, 'image/png', 24, 2, 3, 'finalizing',
+   '51000000-0000-4000-8000-000000000002', now() + interval '5 minutes', now() + interval '26 hours',
+   'https://example.test/new', 'originals/source/new', 'pending', 'pending');
+set constraints app_private.media_assets_valid_references deferred;
+insert into app_private.media_assets (
+  id, ingest_id, game_id, purpose, original_object_path, original_file_name,
+  actual_mime_type, byte_size, width, height, authority_state, kind, object_key, mime_type
+) values
+  ('41000000-0000-4000-8000-000000000001', '21000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001',
+   'source_cover', 'originals/source/old', 'old.png', 'image/png', 24, 2, 3, 'verified', 'source_cover', 'originals/source/old', 'image/png'),
+  ('41000000-0000-4000-8000-000000000002', '21000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000001',
+   'source_cover', 'originals/source/new', 'new.png', 'image/png', 24, 2, 3, 'verified', 'source_cover', 'originals/source/new', 'image/png');
+update app_private.media_ingests
+set state = 'finalized', lease_token = null, lease_until = null, finalized_at = now()
+where id in ('21000000-0000-4000-8000-000000000001', '21000000-0000-4000-8000-000000000002');
+set constraints app_private.media_assets_valid_references immediate;
+update app_private.external_game_identities
+set source_cover_asset_id = '41000000-0000-4000-8000-000000000001'
+where id = '11000000-0000-4000-8000-000000000001';
+
+select extensions.throws_like(
+  $$update app_private.media_assets set superseded_at = now() where id = '41000000-0000-4000-8000-000000000001'$$,
+  '%current source cover cannot be superseded%',
+  '目前來源封面不可單獨標成 superseded'
+);
+update app_private.media_assets set superseded_at = null where id = '41000000-0000-4000-8000-000000000001';
+
+select extensions.lives_ok(
+  $sql$do $switch$
+  begin
+    set constraints all deferred;
+    update app_private.external_game_identities
+    set source_cover_asset_id = '41000000-0000-4000-8000-000000000002'
+    where id = '11000000-0000-4000-8000-000000000001';
+    update app_private.media_assets set superseded_at = now() where id = '41000000-0000-4000-8000-000000000001';
+    set constraints all immediate;
+  end
+  $switch$$sql$,
+  '同交易切換來源指標後可 supersede 舊來源封面'
+);
+select extensions.throws_like(
+  $$update app_private.external_game_identities set source_cover_asset_id = '41000000-0000-4000-8000-000000000001' where id = '11000000-0000-4000-8000-000000000001'$$,
+  '%media source cover must reference the identity current source image%',
+  '來源封面指標不可重新指向已 superseded 資產'
+);
+select ok(
+  (select source_cover_asset_id = '41000000-0000-4000-8000-000000000002' from app_private.external_game_identities where id = '11000000-0000-4000-8000-000000000001') and
+  (select superseded_at is not null from app_private.media_assets where id = '41000000-0000-4000-8000-000000000001'),
+  '切換後新來源封面是 current，舊來源封面保留為 superseded'
+);
+
+insert into app_private.media_ingests (id, game_id, source_url, object_key, original_state, thumbnail_state)
+values ('22000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000002', 'https://legacy.example/cover', 'legacy/source/cover', 'ready', 'ready');
+insert into app_private.media_assets (id, ingest_id, kind, object_key, mime_type, byte_size)
+values ('42000000-0000-4000-8000-000000000001', '22000000-0000-4000-8000-000000000001', 'source_cover', 'legacy/source/cover', 'image/png', 24);
+insert into app_private.media_derivatives (id, asset_id, kind, object_key, state)
+values ('43000000-0000-4000-8000-000000000001', '42000000-0000-4000-8000-000000000001', 'thumbnail_webp', 'legacy/source/thumb', 'ready');
+delete from app_private.media_ingests where id = '22000000-0000-4000-8000-000000000001';
+select ok(
+  not exists(select 1 from app_private.media_ingests where id = '22000000-0000-4000-8000-000000000001') and
+  not exists(select 1 from app_private.media_assets where id = '42000000-0000-4000-8000-000000000001') and
+  not exists(select 1 from app_private.media_derivatives where id = '43000000-0000-4000-8000-000000000001'),
+  'legacy ingest 維持既有 cascade 刪除語意'
+);
+
+select extensions.throws_like(
+  $$delete from app_private.media_ingests where id = '20000000-0000-4000-8000-000000000001'$$,
+  '%cannot delete finalized media ingest%',
+  'app_runtime 不可刪除 finalized ingest'
+);
+select ok(
+  exists(select 1 from app_private.media_ingests where id = '20000000-0000-4000-8000-000000000001') and
+  exists(select 1 from app_private.media_assets where id = '40000000-0000-4000-8000-000000000001') and
+  exists(select 1 from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001'),
+  '拒絕刪除後 ingest、asset 與 derivative 全數保留'
+);
 
 reset role;
 select * from finish();

@@ -170,6 +170,7 @@ begin
       and asset.game_id = new.id
       and asset.purpose in ('gallery_image', 'custom_cover')
       and asset.removed_at is null
+      and asset.superseded_at is null
   ) then
     raise exception 'media manual cover must reference an active image from the same game';
   end if;
@@ -188,6 +189,8 @@ begin
     where asset.id = new.source_cover_asset_id
       and asset.authority_state = 'verified'
       and asset.purpose = 'source_cover'
+      and asset.removed_at is null
+      and asset.superseded_at is null
       and game.external_game_identity_id = new.id
   ) then
     raise exception 'media source cover must reference the identity current source image';
@@ -199,6 +202,9 @@ $$;
 create function app_private.assert_valid_media_asset_references()
 returns trigger language plpgsql as $$
 begin
+  if new.superseded_at is not null and new.purpose is distinct from 'source_cover' then
+    raise exception 'only source cover may be superseded';
+  end if;
   if new.authority_state = 'verified' and not exists (
     select 1 from app_private.media_ingests ingest
     where ingest.id = new.ingest_id
@@ -218,9 +224,16 @@ begin
   if exists (
     select 1 from app_private.games game
     where game.manual_cover_asset_id = new.id
-      and (new.game_id <> game.id or new.purpose not in ('gallery_image', 'custom_cover') or new.removed_at is not null)
+      and (new.game_id <> game.id or new.purpose not in ('gallery_image', 'custom_cover') or new.removed_at is not null or new.superseded_at is not null)
   ) then
     raise exception 'media manual cover must reference an active image from the same game';
+  end if;
+  if exists (
+    select 1 from app_private.external_game_identities identity
+    where identity.source_cover_asset_id = new.id
+      and (new.authority_state <> 'verified' or new.purpose <> 'source_cover' or new.removed_at is not null or new.superseded_at is not null)
+  ) then
+    raise exception 'current source cover cannot be superseded';
   end if;
   if new.purpose = 'attachment' and exists (select 1 from app_private.media_derivatives derivative where derivative.asset_id = new.id) then
     raise exception 'media attachment cannot have a derivative';
@@ -300,6 +313,16 @@ begin
 end;
 $$;
 
+create function app_private.prevent_finalized_media_ingest_delete()
+returns trigger language plpgsql as $$
+begin
+  if old.state = 'finalized' then
+    raise exception 'cannot delete finalized media ingest';
+  end if;
+  return old;
+end;
+$$;
+
 create function app_private.prevent_finalized_media_asset_delete()
 returns trigger language plpgsql as $$
 begin
@@ -365,6 +388,10 @@ create trigger media_ingests_prevent_finalized_authority_update
 before update on app_private.media_ingests
 for each row execute function app_private.prevent_finalized_media_ingest_authority_update();
 
+create trigger media_ingests_prevent_finalized_delete
+before delete on app_private.media_ingests
+for each row execute function app_private.prevent_finalized_media_ingest_delete();
+
 create index media_ingests_finalize_candidates_idx on app_private.media_ingests (state, lease_until);
 create index media_ingests_cleanup_candidates_idx on app_private.media_ingests (state, stale_after);
 create index media_assets_game_id_idx on app_private.media_assets (game_id) where removed_at is null and superseded_at is null;
@@ -384,6 +411,7 @@ revoke execute on function app_private.assert_valid_media_asset_references() fro
 revoke execute on function app_private.assert_image_media_derivative() from public, anon, authenticated, service_role;
 revoke execute on function app_private.protect_finalized_media_ingest() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_finalized_media_ingest_authority_update() from public, anon, authenticated, service_role;
+revoke execute on function app_private.prevent_finalized_media_ingest_delete() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_finalized_media_asset_delete() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_system_platform_mutation() from public;
 
