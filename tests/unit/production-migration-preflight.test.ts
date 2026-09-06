@@ -709,6 +709,9 @@ describe("production migration preflight", () => {
       migrationCount: 2,
       appliedMigrationCount: 2,
       pendingMigrationCount: 0,
+      pendingMigrations: [],
+      pendingSetSha256:
+        "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       preflightState: "strict",
       roleChecks: "passed",
       objectOwnerChecks: "passed",
@@ -777,6 +780,17 @@ describe("production migration preflight", () => {
     ).resolves.toMatchObject({
       appliedMigrationCount: 2,
       pendingMigrationCount: 1,
+      pendingMigrations: [
+        {
+          version: "0003",
+          name: "notes",
+          filename: "0003_notes.sql",
+          sha256:
+            "768e23f487b82431badbd568c5d73b856518f57a2143ce3af744576031b6fb07",
+        },
+      ],
+      pendingSetSha256:
+        "0c6f10ee229a0951382f378fc903c80ffa834a05ae5f4e7cfcae96618273be48",
     });
     expect(statements.at(-1)).toBe("rollback");
   });
@@ -1593,6 +1607,30 @@ describe("production migration preflight", () => {
         connect: async () => session,
       }),
     ).rejects.toThrow("ProductionMigrationPreflightError");
+  });
+
+  it("recovery verification keeps strict safety checks while allowing a newer repository tail", async () => {
+    const root = await migrationFixture({
+      "0001_runtime_security.sql": "create schema app_private;",
+      "0002_games.sql": "create table app_private.games (id uuid primary key);",
+      "0003_future.sql": "create table app_private.future (id uuid primary key);",
+    });
+    const snapshot = healthySnapshot();
+    const session: ReadOnlyDatabaseSession = {
+      async unsafe<T>(sql: string) { return sql.includes("json_build_object") ? ([{ snapshot }] as T[]) : []; },
+      async release() {},
+    };
+    const options = {
+      root,
+      phase: "recovery" as const,
+      databaseUrl: "postgres://postgres.wbtyuvufhrhybquzwfip:secret@aws-0-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=verify-full",
+      connect: async () => session,
+    };
+    await expect(runProductionMigrationPreflight(options)).resolves.toMatchObject({
+      preflightState: "strict", appliedMigrationCount: 2, pendingMigrationCount: 1,
+    });
+    snapshot.unsafeGrantCount = 1;
+    await expect(runProductionMigrationPreflight(options)).rejects.toThrow("ProductionMigrationPreflightError");
   });
 });
 

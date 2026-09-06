@@ -3,9 +3,26 @@ name: Production Release Gate
 on:
   workflow_dispatch:
     inputs:
-      commit_sha:
-        description: Full main commit SHA to release
+      mode:
+        description: Apply migrations or recover only the ledger
         required: true
+        type: choice
+        options: [apply, ledger-recovery]
+      commit_sha:
+        description: Apply candidate SHA or ledger-recovery source SHA
+        required: true
+        type: string
+      pending_migrations_json:
+        description: Canonical JSON array of every pending migration filename
+        required: true
+        type: string
+      source_run_id:
+        description: Required only for ledger-recovery
+        required: false
+        type: string
+      source_run_attempt:
+        description: Required only for ledger-recovery
+        required: false
         type: string
 
 permissions:
@@ -18,43 +35,54 @@ concurrency:
 
 jobs:
   verify-release-candidate:
-    name: Verify release candidate
+    name: Verify release candidate without Production secrets
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment:
-      name: Production
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      candidate_sha: ${{ steps.candidate.outputs.candidate_sha }}
+      source_sha: ${{ steps.candidate.outputs.source_sha }}
+      execution_sha: ${{ steps.candidate.outputs.execution_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
-      - name: Verify exact main commit and successful CI
+      - name: Verify exact current main commit and successful CI
+        id: candidate
         env:
           COMMIT_SHA: ${{ inputs.commit_sha }}
+          RELEASE_MODE: ${{ inputs.mode }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ inputs.source_run_attempt }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          case "$COMMIT_SHA" in
-            *[!0-9a-f]*|'') echo "commit_sha must be a full lowercase commit SHA" >&2; exit 1 ;;
-          esac
-          test "${#COMMIT_SHA}" -eq 40
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
           git fetch --no-tags origin main
-          git cat-file -e "${COMMIT_SHA}^{commit}"
-          git merge-base --is-ancestor "$COMMIT_SHA" origin/main
-          gh api \
-            --header 'Accept: application/vnd.github+json' \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${COMMIT_SHA}&branch=main&event=push&status=success&per_page=100" \
-            | jq -e --arg sha "$COMMIT_SHA" '
-                any(.workflow_runs[];
-                  .head_sha == $sha and
-                  .head_branch == "main" and
-                  .event == "push" and
-                  .conclusion == "success")
-              ' >/dev/null
+          execution_sha="$(git rev-parse origin/main)"
+          candidate_sha=""
+          source_sha=""
+          if [ "$RELEASE_MODE" = apply ]; then
+            test "$execution_sha" = "$COMMIT_SHA"
+            candidate_sha="$COMMIT_SHA"
+          else
+            [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ && "$SOURCE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || exit 1
+            source_sha="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/attempts/${SOURCE_RUN_ATTEMPT}" --jq .head_sha)"
+            test "$COMMIT_SHA" = "$source_sha"
+            git merge-base --is-ancestor "$source_sha" "$execution_sha"
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${execution_sha}&branch=main&event=push&status=success&per_page=100" |
+            jq -e --arg sha "$execution_sha" 'any(.workflow_runs[]; .head_sha == $sha and .head_branch == "main" and .event == "push" and .conclusion == "success")' >/dev/null
+          echo "candidate_sha=$candidate_sha" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "execution_sha=$execution_sha" >> "$GITHUB_OUTPUT"
       - name: Check out verified release commit
         env:
-          COMMIT_SHA: ${{ inputs.commit_sha }}
-        run: git checkout --detach "$COMMIT_SHA"
+          EXECUTION_SHA: ${{ steps.candidate.outputs.execution_sha }}
+        run: git checkout --detach "$EXECUTION_SHA"
       - uses: pnpm/action-setup@v4
         with:
           version: 10.30.3
@@ -64,11 +92,117 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm release:contract:check
-      - name: Run read-only Production migration preflight
+      - name: Validate pending input syntax without Production access
+        env:
+          PENDING_INPUT: ${{ inputs.pending_migrations_json }}
+        run: pnpm release:migration:plan -- plan-from-input "$PENDING_INPUT" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/expected-plan.json"
+
+  mutate-production:
+    name: Apply migration and preserve commit-bound ledger
+    needs: verify-release-candidate
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    environment:
+      name: Production
+    env:
+      CANDIDATE_SHA: ${{ needs.verify-release-candidate.outputs.candidate_sha }}
+      SOURCE_SHA: ${{ needs.verify-release-candidate.outputs.source_sha }}
+      EXECUTION_SHA: ${{ needs.verify-release-candidate.outputs.execution_sha }}
+      PENDING_INPUT: ${{ inputs.pending_migrations_json }}
+      RELEASE_MODE: ${{ inputs.mode }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      SOURCE_RUN_ATTEMPT: ${{ inputs.source_run_attempt }}
+      RELEASE_LEDGER_DIRECTORY: .github/production-migration-ledger
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.verify-release-candidate.outputs.execution_sha }}
+      - name: Confirm pinned execution is still current main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$EXECUTION_SHA"
+          test "$(git rev-parse origin/main)" = "$EXECUTION_SHA"
+      - name: Configure release temp paths
+        run: |
+          set -euo pipefail
+          echo "RELEASE_PLAN_PATH=$RUNNER_TEMP/preflight.json" >> "$GITHUB_ENV"
+          echo "RELEASE_EVIDENCE_PATH=$RUNNER_TEMP/evidence/migration-release.json" >> "$GITHUB_ENV"
+          echo "RELEASE_STATE_PATH=$RUNNER_TEMP/release-state.json" >> "$GITHUB_ENV"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install protected CA file
         env:
           PRODUCTION_MIGRATION_CA_CERT: ${{ secrets.PRODUCTION_MIGRATION_CA_CERT }}
-          PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
-        run: pnpm release:migration:preflight -- --baseline-ref origin/main
-      - name: Stop before deployment until T02B–T03 are implemented
         run: |
-          echo 'Release candidate and migration preflight verified; production deployment remains intentionally disabled.'
+          set -euo pipefail
+          umask 077
+          cert="$RUNNER_TEMP/production-ca.pem"
+          printf '%s' "$PRODUCTION_MIGRATION_CA_CERT" > "$cert"
+          echo "PGSSLROOTCERT=$cert" >> "$GITHUB_ENV"
+      - name: Download source-run evidence for recovery
+        if: inputs.mode == 'ledger-recovery'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]] || exit 1
+          [[ "$SOURCE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || exit 1
+          mkdir -p "$RUNNER_TEMP/source-plan"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/attempts/${SOURCE_RUN_ATTEMPT}" > "$RUNNER_TEMP/source-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/attempts/${SOURCE_RUN_ATTEMPT}/jobs?per_page=100" > "$RUNNER_TEMP/source-jobs.json"
+          artifact_name="production-migration-plan-${SOURCE_RUN_ID}-${SOURCE_RUN_ATTEMPT}"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts?per_page=100" |
+            jq -e --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0] else error("artifact identity mismatch") end' > "$RUNNER_TEMP/source-artifact.json"
+          artifact_id="$(jq -r .id "$RUNNER_TEMP/source-artifact.json")"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$RUNNER_TEMP/source-plan.zip"
+          unzip -q "$RUNNER_TEMP/source-plan.zip" -d "$RUNNER_TEMP/source-plan"
+      - name: Persist exact migration plan
+        if: inputs.mode == 'apply'
+        env:
+          PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
+        run: pnpm release:migration:run -- preflight
+      - uses: actions/upload-artifact@v4
+        if: inputs.mode == 'apply'
+        with:
+          name: production-migration-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RELEASE_PLAN_PATH }}
+          retention-days: 90
+          if-no-files-found: error
+      - name: Authorize exact migration attempt
+        if: inputs.mode == 'apply'
+        run: pnpm release:migration:run -- authorize
+      - name: Apply and strict-verify exact migration suffix
+        if: inputs.mode == 'apply'
+        env:
+          PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
+        run: pnpm release:migration:run -- apply
+      - name: Create sanitized evidence and ledger
+        env:
+          PRODUCTION_MIGRATION_DATABASE_URL: ${{ inputs.mode == 'ledger-recovery' && secrets.PRODUCTION_MIGRATION_DATABASE_URL || '' }}
+          SOURCE_RUN_PATH: ${{ runner.temp }}/source-run.json
+          SOURCE_JOBS_PATH: ${{ runner.temp }}/source-jobs.json
+          SOURCE_ARTIFACT_PATH: ${{ runner.temp }}/source-artifact.json
+          SOURCE_ARTIFACT_ZIP_PATH: ${{ runner.temp }}/source-plan.zip
+          SOURCE_PLAN_PATH: ${{ runner.temp }}/source-plan/preflight.json
+        run: pnpm release:migration:run -- ${{ inputs.mode == 'apply' && 'record' || 'recovery' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-migration-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence/migration-release.json
+          retention-days: 90
+          if-no-files-found: error
+      - name: Open ledger pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm release:migration:run -- publish-ledger

@@ -8,9 +8,9 @@ feature branch → PR → required CI／verify → main
                                              ▼
                                protected Production environment
                                              │
-                                  唯讀 production migration preflight
+                                  migration release state machine
                                              │
-                                  T02B／T03 完成前停止，不部署
+                                      不執行 app deploy
                                              │
                          指定同一 commit 的 Vercel CLI deployment
 ```
@@ -20,7 +20,7 @@ feature branch → PR → required CI／verify → main
 - `.github/workflows/production-release.yml` 是 repository 支援的唯一 production 發布入口。它要求完整 commit SHA、確認該 commit 屬於 `main`，且 `.github/workflows/ci.yml` 對同一 SHA 的 `main` push run 成功，並進入受保護的 `Production` Environment。
 - Production job 必須先 checkout trusted `main` workflow 版本，再驗證指定 SHA 存在、屬於 `origin/main` 且 exact CI run 成功；只有全部成立後才可 `git checkout --detach` 該 SHA，之後才能執行其 `package.json`／repository scripts。不可把 candidate checkout 提前，否則未合併 commit 會在未來具 secrets 的 Production Environment 取得不必要執行面。
 - GitHub `Production` Environment 使用 custom deployment branch policy，server-side allowlist 唯一項目是 `main`；job 的 `github.ref == 'refs/heads/main'` 只是縱深防禦，不能取代 Environment policy。這確保未來即使新增其他 protected branch，其修改過的 workflow 也不能進入 Production Environment。
-- T02A 已接入受保護的唯讀 production migration preflight；T02B、T03 尚未完成，因此 workflow 在 preflight 後明確停止，不呼叫 Vercel deploy、不套 migration。現有 `PRODUCTION_MIGRATION_DATABASE_URL` 建立時使用 `sslmode=require`，只能加密而不驗證伺服器憑證；在換成 `sslmode=verify-full` 並新增 Supabase Dashboard 下載的 `PRODUCTION_MIGRATION_CA_CERT` 前，preflight 會 fail closed。不得以手動 Dashboard deployment 繞過這個停發狀態。
+- T02A 唯讀 preflight 與 T02B migration apply／strict／ledger gate 已接入受保護的 `Production` Environment；T03 app deployment 尚未完成，因此此 workflow 只管理 migration，不呼叫 Vercel deploy。`PRODUCTION_MIGRATION_DATABASE_URL` 必須使用 `sslmode=verify-full`，並搭配 Supabase Dashboard 下載的 `PRODUCTION_MIGRATION_CA_CERT`；任一缺失都 fail closed。不得以手動 Dashboard deployment 繞過停發狀態。
 - Production credentials 只可存在 GitHub `Production` Environment secrets 或 Vercel Production scope。Vercel Preview／Development、repository variables、workflow log 與 artifact 都不得包含這些值。
 
 Vercel Hobby project 的 owner 仍可直接從 Dashboard 或本機 CLI 建立 production deployment；repository 無法在 Vercel 帳號層絕對撤銷這項 owner 能力。這是殘餘風險，不是第二條支援路徑：owner 不得手動部署，操作證據以 Vercel activity log 稽核。若未來 Vercel 提供適用方案的細緻 deployment policy，應把這項人工禁令改為平台強制。
@@ -35,7 +35,7 @@ T01 只要求 Vercel Production scope 已有 `SUPABASE_PUBLISHABLE_KEY`（encryp
 2. `gh api repos/elekli/game-base/environments/Production`：確認 required reviewer、禁止管理員 bypass，以及只允許 protected branch。
 3. `vercel project inspect game-base` 與 Vercel project API：確認 project ID 符合契約、Git integration 未連接；再執行 `pnpm release:settings:check` 核對 Production-only key scope、type 與可安全核對的 fingerprint。
 4. 只列 Vercel environment variable 的 key、target 與 type；若任何 credential target 包含 Preview 或 Development，立即停止發布並移除錯誤 scope。禁止要求 API 回傳解密值。
-5. 執行 `pnpm release:contract:check` 與 `pnpm release:migration:preflight`。後者先以 `BEGIN TRANSACTION READ ONLY` 鎖定唯讀交易，再核對 repository migration history、角色、grants、RLS、private bucket 與正式專案 binding；無論成功或失敗都 rollback。RLS 必須與 `.github/production-rls-policy-manifest.json` 對 `app_private` 聲明的 policy name、permissiveness、command、roles、`USING`、`WITH CHECK` 完全相同；缺少、額外或條件漂移都停止發布。每個政策 revision 以 `validFrom` 與 `validUntilExclusive` 表示生效區間：新增政策時建立末端為 `null` 的 revision；替換既有政策時，在同一支 migration 把舊 revision 的末端與新 revision 的起點設成該版本。相同 table／name 的 revision 不得重疊或留空檔。套用前只比對 production 已套用 tail 當時有效的 revision，strict verification 則比對目標 commit 最新 tail，避免 pending 政策變更卡死套用流程。`storage` schema 不納入應用政策固定清單，僅由獨立的 bucket 與 `storage.objects` RLS 檢查覆蓋，避免把 Supabase 管理的系統政策誤判成應用漂移。T02B／T03 完成前任何 production release 都必須在此停止。
+5. 執行 `pnpm release:contract:check`，並由受保護 workflow 的 orchestrator 執行 production migration preflight。Preflight 先以 `BEGIN TRANSACTION READ ONLY` 鎖定唯讀交易，再核對 repository migration history、角色、grants、RLS、private bucket 與正式專案 binding；無論成功或失敗都 rollback。RLS 必須與 `.github/production-rls-policy-manifest.json` 對 `app_private` 聲明的 policy name、permissiveness、command、roles、`USING`、`WITH CHECK` 完全相同；缺少、額外或條件漂移都停止發布。每個政策 revision 以 `validFrom` 與 `validUntilExclusive` 表示生效區間：新增政策時建立末端為 `null` 的 revision；替換既有政策時，在同一支 migration 把舊 revision 的末端與新 revision 的起點設成該版本。相同 table／name 的 revision 不得重疊或留空檔。套用前只比對 production 已套用 tail 當時有效的 revision，strict verification 則比對目標 commit 最新 tail，避免 pending 政策變更卡死套用流程。`storage` schema 不納入應用政策固定清單，僅由獨立的 bucket 與 `storage.objects` RLS 檢查覆蓋，避免把 Supabase 管理的系統政策誤判成應用漂移。T03 完成前不可把 migration 成功誤當成 app 已部署。
 
 `app_runtime` 可經 membership-level `INHERIT`、`SET ROLE` 或 `ADMIN OPTION` 遞迴到達的角色，必須與 `.github/production-runtime-role-reachability-allowlist.json` 的 `appRuntimeReachableRoles` 完全相同；目前固定清單為空。PostgreSQL 17 的 membership-level `INHERIT TRUE` 即使搭配 role-level `NOINHERIT`，仍視為權限可達；任何未核准角色都必須停止發布。固定清單將來若因平台必要條件新增角色，仍不得容許 `app_migrator`、superuser、`BYPASSRLS`、`CREATEROLE` 或 `CREATEDB`；應只提交角色名稱，不記錄密碼或其他秘密。
 
@@ -71,6 +71,18 @@ reset role
         │
 revoke app_migrator from postgres
 ```
+
+### Production migration ledger
+
+`production-release.yml` 的 `apply` 模式只接受當下 `origin/main` 的完整小寫 SHA，以及按檔名排序、無空白的 canonical JSON pending filename array。無 secrets 的 candidate job 先驗 SHA、main push CI、release contract 與輸入語法；通過後才進入 `Production` Environment 等待人工核准。Mutation job 由可注入、具動態狀態測試的 TypeScript orchestrator 執行兩次 read-only preflight：第一次產生並上傳包含固定來源 actor／requestedAt 的 canonical plan；upload 成功後，唯一的 `Authorize exact migration attempt` step 以零 DB 存取核對 plan 與 source release identity，形成該次 run／attempt 已獲核准並進入嘗試邊界的 marker；第二次 preflight 才在 apply 緊鄰前重讀 Production，與該 plan 精確比對 migration identities、bytes 與 pending-set hash，再重查 `origin/main`。Artifact upload 期間只要 DB pending set 或 main 漂移，就必須在 Supabase CLI 零呼叫前停止。CLI 固定為 `2.116.0` 且只開放 migration up；CA 寫入權限 `0600` 的 runner temp file，透過 `PGSSLROOTCERT` 傳入，連線仍須由 URL 維持 `sslmode=verify-full`。
+
+GitHub workflow concurrency 只能序列化 release runs，無法鎖住合併到 `main`，也無法讓 GitHub 與 PostgreSQL 成為原子交易。因此，帶 migration 的 PR 在最後一次 preflight／apply 臨界區必須依 repository 操作程序全域序列化；workflow 的最後 main recheck 是縱深防禦，不宣稱消除跨系統 TOCTOU。
+
+Apply 命令即使回傳失敗也可能已部分或全部前進，因此 orchestrator 無條件執行 strict read-only diagnosis，並以 strict exact-target 結果為權威：strict 通過時，CLI 正常退出分類為 `applied-and-verified`，CLI throw 則分類為 `verified-after-ambiguous-apply`，兩者都可進入 record；strict 失敗時，不論 CLI outcome 都停止且不得產生成功 ledger。唯一具名的 `Apply and strict-verify exact migration suffix` step 只負責 mutation 與 strict，確認目標後即退出；下一個 `Create sanitized evidence and ledger` step 才從固定來源 plan 產生 record／state。如此 apply 已 commit 後 process 被終止，或後續本機寫檔、evidence upload、PR 失敗時，仍可安全 recovery。本 workflow 不含 Vercel deploy、database reset、db push 或 migration repair。
+
+Git-tracked ledger 與 evidence 都包含 commit、migration identities 與 pending-set hash、來源 operator、來源 UTC time、source release run／attempt、`strict-exact-target` success basis、result，以及固定 recovery action：成功後帳本缺失使用 `ledger-recovery`，資料庫不相容只能 `forward-fix`，且 `never-reset`。它只宣稱 strict 已確認目標狀態，不宣稱 Supabase CLI 的 exit outcome。Ledger 的 `evidenceSha256` 是實際上傳 `evidenceText` 完整 bytes 的 SHA-256；evidence artifact 保存 90 天。Ledger 由 workflow 建立獨立 branch 與 PR，不直推 `main`。
+
+若已進入 attempt boundary，但 mutation step 因 failure／cancelled／process kill 或後續 record、evidence artifact、ledger PR 失敗而缺帳，改用 `ledger-recovery` 並提供原 workflow run ID 與 run attempt。恢復候選由該來源 run 推導，可為 current main 的祖先，不要求仍等於 current main。流程精確核對 repository、workflow path、event、head SHA、attempt、job API 的 `run_attempt`、唯一 mutation job、唯一成功 attempt marker，以及不重複且 conclusion 為 success／failure／cancelled／skipped 的 mutation step；它不靠 mutation step conclusion 宣稱資料庫成功，而是再驗 GitHub artifact archive digest、source commit 與 current main 的 migration bytes、pending-set hash、Production history 已包含來源 migration set 的 prefix，並保持 role／grant／RLS／private bucket 的 strict 安全檢查。若 mutation 根本未使 DB 達到目標，prefix／strict 必須 fail。Ledger identity 固定由來源 release run＋attempt、candidate 與 pending-set hash 組成，evidence 的 actor／time 只取自來源 plan，normal 與 recovery 重建的 record 及同一 source identity 的重跑都逐 byte 相同；deterministic branch／file 已存在時必須 fetch 並逐 byte 核對。OPEN PR 必須非 draft、base／head／title 契約相同，且 branch ledger 逐 byte 相同；MERGED PR 必須在 main 找到相同 ledger；CLOSED 未合併一律停止；無 PR 時 main 已有 ledger 也因缺 canonical publication evidence 而停止，且禁止 force push。Recovery 只重建 evidence／ledger，不再次執行 migration。
 
 證據只能記錄 commit SHA、check 名稱／結論、environment 名稱、project ID、非秘密 variable key／scope、配額百分比、時間與具名結果。禁止記錄 JWT、key、token、database URL、密碼、私有 payload 或 production dump。
 
