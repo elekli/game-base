@@ -1,5 +1,5 @@
 begin;
-select plan(28);
+select plan(30);
 
 select has_column('app_private', 'media_ingests', 'idempotency_key', 'ingest 保存全域冪等鍵');
 select has_column('app_private', 'media_ingests', 'reserved_asset_id', 'ingest 預留固定 asset id');
@@ -131,6 +131,40 @@ select extensions.throws_like(
   '%cannot detach verified asset referenced by finalized ingest%',
   '不可先降級 finalized verified asset 再繞過 DELETE guard'
 );
+
+select extensions.throws_like(
+  $sql$do $attack$
+  begin
+    set constraints all deferred;
+    update app_private.media_ingests set actual_mime_type = 'image/jpeg' where id = '20000000-0000-4000-8000-000000000001';
+    update app_private.media_assets set actual_mime_type = 'image/jpeg' where id = '40000000-0000-4000-8000-000000000001';
+    set constraints all immediate;
+  end
+  $attack$$sql$,
+  '%finalized media ingest authority fields are immutable%',
+  '即使延後所有 constraint 並同步修改 asset，finalized ingest 權威欄位仍不可變'
+);
+set constraints all deferred;
+update app_private.media_ingests set actual_mime_type = 'image/png' where id = '20000000-0000-4000-8000-000000000001';
+update app_private.media_assets set actual_mime_type = 'image/png' where id = '40000000-0000-4000-8000-000000000001';
+set constraints all immediate;
+
+select extensions.throws_like(
+  $sql$do $attack$
+  begin
+    set constraints all deferred;
+    update app_private.media_assets set original_file_name = 'rewritten.png' where id = '40000000-0000-4000-8000-000000000001';
+    update app_private.media_ingests set original_file_name = 'rewritten.png' where id = '20000000-0000-4000-8000-000000000001';
+    set constraints all immediate;
+  end
+  $attack$$sql$,
+  '%finalized media asset authority fields are immutable%',
+  '即使延後所有 constraint 並同步修改 ingest，verified asset 權威欄位仍不可變'
+);
+set constraints all deferred;
+update app_private.media_assets set original_file_name = 'photo.png' where id = '40000000-0000-4000-8000-000000000001';
+update app_private.media_ingests set original_file_name = 'photo.png' where id = '20000000-0000-4000-8000-000000000001';
+set constraints all immediate;
 
 select extensions.throws_like(
   $$update app_private.media_derivatives set state = 'ready' where asset_id = '40000000-0000-4000-8000-000000000001'$$,

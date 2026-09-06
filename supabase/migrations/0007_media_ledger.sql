@@ -269,6 +269,37 @@ begin
 end;
 $$;
 
+create function app_private.prevent_finalized_media_ingest_authority_update()
+returns trigger language plpgsql as $$
+begin
+  if old.state = 'finalized' and (
+    new.id is distinct from old.id or
+    new.idempotency_key is distinct from old.idempotency_key or
+    new.reserved_asset_id is distinct from old.reserved_asset_id or
+    new.channel is distinct from old.channel or
+    new.purpose is distinct from old.purpose or
+    new.game_id is distinct from old.game_id or
+    new.external_game_identity_id is distinct from old.external_game_identity_id or
+    new.original_object_path is distinct from old.original_object_path or
+    new.original_file_name is distinct from old.original_file_name or
+    new.declared_mime_type is distinct from old.declared_mime_type or
+    new.declared_byte_size is distinct from old.declared_byte_size or
+    new.actual_mime_type is distinct from old.actual_mime_type or
+    new.actual_byte_size is distinct from old.actual_byte_size or
+    new.image_width is distinct from old.image_width or
+    new.image_height is distinct from old.image_height or
+    new.state is distinct from old.state or
+    new.finalized_at is distinct from old.finalized_at or
+    new.source_url is distinct from old.source_url or
+    new.object_key is distinct from old.object_key or
+    new.created_at is distinct from old.created_at
+  ) then
+    raise exception 'finalized media ingest authority fields are immutable';
+  end if;
+  return new;
+end;
+$$;
+
 create function app_private.prevent_finalized_media_asset_delete()
 returns trigger language plpgsql as $$
 begin
@@ -281,6 +312,20 @@ begin
     end if;
     if new.id is distinct from old.id or new.ingest_id is distinct from old.ingest_id or new.authority_state is distinct from old.authority_state then
       raise exception 'cannot detach verified asset referenced by finalized ingest';
+    end if;
+    if new.game_id is distinct from old.game_id or
+       new.purpose is distinct from old.purpose or
+       new.original_object_path is distinct from old.original_object_path or
+       new.original_file_name is distinct from old.original_file_name or
+       new.actual_mime_type is distinct from old.actual_mime_type or
+       new.byte_size is distinct from old.byte_size or
+       new.width is distinct from old.width or
+       new.height is distinct from old.height or
+       new.kind is distinct from old.kind or
+       new.object_key is distinct from old.object_key or
+       new.mime_type is distinct from old.mime_type or
+       new.created_at is distinct from old.created_at then
+      raise exception 'finalized media asset authority fields are immutable';
     end if;
   end if;
   if tg_op = 'DELETE' then return old; end if;
@@ -313,8 +358,12 @@ before delete on app_private.media_assets
 for each row execute function app_private.prevent_finalized_media_asset_delete();
 
 create trigger media_assets_prevent_finalized_detach
-before update of id, ingest_id, authority_state on app_private.media_assets
+before update on app_private.media_assets
 for each row execute function app_private.prevent_finalized_media_asset_delete();
+
+create trigger media_ingests_prevent_finalized_authority_update
+before update on app_private.media_ingests
+for each row execute function app_private.prevent_finalized_media_ingest_authority_update();
 
 create index media_ingests_finalize_candidates_idx on app_private.media_ingests (state, lease_until);
 create index media_ingests_cleanup_candidates_idx on app_private.media_ingests (state, stale_after);
@@ -334,6 +383,7 @@ revoke execute on function app_private.assert_valid_source_cover_pointer() from 
 revoke execute on function app_private.assert_valid_media_asset_references() from public, anon, authenticated, service_role;
 revoke execute on function app_private.assert_image_media_derivative() from public, anon, authenticated, service_role;
 revoke execute on function app_private.protect_finalized_media_ingest() from public, anon, authenticated, service_role;
+revoke execute on function app_private.prevent_finalized_media_ingest_authority_update() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_finalized_media_asset_delete() from public, anon, authenticated, service_role;
 revoke execute on function app_private.prevent_system_platform_mutation() from public;
 
