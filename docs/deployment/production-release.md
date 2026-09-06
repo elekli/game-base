@@ -58,6 +58,20 @@ T02B 套用 repository 的 versioned pending migrations 後，必須在 deploy �
 
 CI 另執行 `pnpm release:migrations:lint -- --baseline-ref origin/main`，拒絕把 drop、truncate、欄位型別變更、constraint／domain 收緊、收緊 `NOT NULL` 或 rename 混入一般 migration，也拒絕未具名核准的 `CREATE／ALTER ROLE`、`CREATE／ALTER USER`、`GRANT`、`REVOKE`，以及同一 PR 新增或修改 legacy hash baseline。唯一現有例外是具名且逐 byte 相同的 PUBLIC trigger EXECUTE 修復。任何可執行 SQL 的 `RENAME` action 都一律拒絕，不依 table、view、sequence、index、type 或其他物件種類列舉；comment、string literal 內的文字仍由 lexer 排除。首次建立的 baseline 只能等於程式內固定的 `0001`–`0006` 精確 hash；合併後一律以 trusted `origin/main` 為準。除此之外，trusted main 已追蹤的每一支 migration 都必須逐 byte 保持不變且不得刪除；CI 與 production preflight 都在開啟 DB 連線前檢查。baseline 真的需要變更時，必須先有獨立受控流程與人工裁決，不能與被豁免的 DDL 同一 PR。新 `CREATE FUNCTION／PROCEDURE` 的 `AS` body 只接受單一 dollar-quoted literal；standard、`E''`、`U&''`、bit／hex 或相鄰 literal 一律拒絕，dollar body 仍遞迴拒絕 dynamic `EXECUTE`。作者應改寫為單一具名 dollar quote，不由 linter 猜測 PostgreSQL 的 escape／串接語意。這些相容性破壞必須先規劃 expand／migrate／contract 發布，不得以註解、`DO`／dynamic `EXECUTE` 或直接在 Production 執行 SQL 繞過。
 
+新 migration 若需由 `app_migrator` 擁有 schema 物件，只容許以下最外層且順序精確的 envelope；`GRANT` 不得帶 option，且只有 wrapper 本身可使用 `SET LOCAL ROLE`／`RESET ROLE`。Body 內任何頂層 `SET`／`RESET` statement，以及任何可執行的 `set_config(...)` 呼叫（含 `pg_catalog.set_config` 與 quoted `"set_config"`）一律拒絕。所有可執行的 `U&"..."` Unicode escaped identifier 也採 fail-closed 拒絕，不嘗試局部解碼；comment、string 與單純 dollar literal 中的同名文字不算可執行呼叫，routine dollar body 則遞迴檢查。中間仍套用全部 destructive DDL 與 dynamic SQL 規則。新建於 `app_private` 的 FUNCTION／PROCEDURE 可在 body 尾端逐支撤銷預設 EXECUTE，但 object kind、完整名稱與參數型別 signature 必須對應同檔較早建立的 routine，角色與順序必須精確為 `public, anon, authenticated, service_role`。不接受 `ALL FUNCTIONS`、既有或未知 routine、其他 schema、重複撤銷、額外角色或 body 中段的撤銷。
+
+```text
+grant app_migrator to postgres
+        │
+set local role app_migrator
+        │
+migration body ──► 新建 app_private routine ──► 尾端逐支精確 REVOKE EXECUTE
+        │
+reset role
+        │
+revoke app_migrator from postgres
+```
+
 證據只能記錄 commit SHA、check 名稱／結論、environment 名稱、project ID、非秘密 variable key／scope、配額百分比、時間與具名結果。禁止記錄 JWT、key、token、database URL、密碼、私有 payload 或 production dump。
 
 ## Supabase Free 方案容量與暫停

@@ -623,7 +623,13 @@ export function formatProductionMigrationFailure(error: unknown) {
 }
 
 type SqlToken = Readonly<{
-  kind: "word" | "identifier" | "string" | "dollar" | "symbol";
+  kind:
+    | "word"
+    | "identifier"
+    | "unicode-identifier"
+    | "string"
+    | "dollar"
+    | "symbol";
   value: string;
 }>;
 
@@ -687,6 +693,32 @@ function lexSql(sql: string): SqlToken[] {
       tokens.push({ kind: "string", value: sql.slice(start, index) });
       continue;
     }
+    const unicodeIdentifier =
+      (char === "u" || char === "U") &&
+      sql[index + 1] === "&" &&
+      sql[index + 2] === '"';
+    if (unicodeIdentifier) {
+      const start = index;
+      index += 3;
+      let closed = false;
+      while (index < sql.length) {
+        if (sql[index] === '"' && sql[index + 1] === '"') {
+          index += 2;
+        } else if (sql[index] === '"') {
+          index += 1;
+          closed = true;
+          break;
+        } else {
+          index += 1;
+        }
+      }
+      if (!closed) fail();
+      tokens.push({
+        kind: "unicode-identifier",
+        value: sql.slice(start, index),
+      });
+      continue;
+    }
     if (char === '"') {
       const start = index;
       index += 1;
@@ -730,19 +762,145 @@ function lexSql(sql: string): SqlToken[] {
   return tokens;
 }
 
+function splitSqlStatements(tokens: readonly SqlToken[]) {
+  const statements: SqlToken[][] = [];
+  let start = 0;
+  for (let index = 0; index <= tokens.length; index += 1) {
+    if (index < tokens.length && tokens[index]?.value !== ";") continue;
+    const statement = tokens.slice(start, index);
+    if (statement.length > 0) statements.push(statement);
+    start = index + 1;
+  }
+  return statements;
+}
+
+function isExactWordStatement(
+  statement: readonly SqlToken[],
+  words: readonly string[],
+) {
+  return (
+    statement.length === words.length &&
+    statement.every(
+      (token, index) => token.kind === "word" && token.value === words[index],
+    )
+  );
+}
+
+function matchingParenIndex(tokens: readonly SqlToken[], openIndex: number) {
+  let depth = 0;
+  for (let index = openIndex; index < tokens.length; index += 1) {
+    if (tokens[index]?.value === "(") depth += 1;
+    if (tokens[index]?.value === ")") depth -= 1;
+    if (depth === 0) return index;
+  }
+  return -1;
+}
+
+function routineIdentityKey(tokens: readonly SqlToken[], kindIndex: number) {
+  const schema = tokens[kindIndex + 1];
+  const dot = tokens[kindIndex + 2];
+  const name = tokens[kindIndex + 3];
+  const open = tokens[kindIndex + 4];
+  if (
+    schema?.kind !== "word" ||
+    schema.value !== "app_private" ||
+    dot?.value !== "." ||
+    (name?.kind !== "word" && name?.kind !== "identifier") ||
+    open?.value !== "("
+  ) {
+    return null;
+  }
+  const closeIndex = matchingParenIndex(tokens, kindIndex + 4);
+  if (closeIndex < 0) return null;
+  const identity = tokens.slice(kindIndex, closeIndex + 1);
+  return identity.map((token) => `${token.kind}:${token.value}`).join("|");
+}
+
+function createdRoutineIdentity(statement: readonly SqlToken[]) {
+  if (statement[0]?.value !== "create") return null;
+  const kindIndex = statement.findIndex(
+    (token, index) =>
+      index > 0 &&
+      token.kind === "word" &&
+      (token.value === "function" || token.value === "procedure"),
+  );
+  return kindIndex !== 1 ? null : routineIdentityKey(statement, kindIndex);
+}
+
+function revokedRoutineIdentity(statement: readonly SqlToken[]) {
+  if (
+    statement[0]?.value !== "revoke" ||
+    statement[1]?.value !== "execute" ||
+    statement[2]?.value !== "on" ||
+    (statement[3]?.value !== "function" && statement[3]?.value !== "procedure")
+  ) {
+    return null;
+  }
+  const identity = routineIdentityKey(statement, 3);
+  const closeIndex = matchingParenIndex(statement, 7);
+  if (!identity || closeIndex < 0) return null;
+  const suffix = statement.slice(closeIndex + 1);
+  return isExactWordStatement(
+    suffix.filter((token) => token.value !== ","),
+    ["from", "public", "anon", "authenticated", "service_role"],
+  ) &&
+    suffix.length === 8 &&
+    suffix[2]?.value === "," &&
+    suffix[4]?.value === "," &&
+    suffix[6]?.value === ","
+    ? identity
+    : null;
+}
+
+function isSetConfigCall(statement: readonly SqlToken[]) {
+  return statement.some((token, index) => {
+    const identifier =
+      token.kind === "identifier"
+        ? token.value.slice(1, -1).replaceAll('""', '"')
+        : token.value;
+    return (
+      (token.kind === "word" || token.kind === "identifier") &&
+      identifier === "set_config" &&
+      statement[index + 1]?.value === "("
+    );
+  });
+}
+
 function containsForbiddenMigrationSql(sql: string) {
   const tokens = lexSql(sql);
   for (const token of tokens) {
+    if (token.kind === "unicode-identifier") return true;
     if (token.kind === "word" && token.value === "do") return true;
   }
-  let statementStart = 0;
-  for (let index = 0; index <= tokens.length; index += 1) {
-    if (index < tokens.length && tokens[index]?.value !== ";") continue;
-    const statement = tokens.slice(statementStart, index);
-    statementStart = index + 1;
+  const statements = splitSqlStatements(tokens);
+  const allowedStatements = new Set<number>();
+  const hasExactMigratorEnvelope =
+    statements.length >= 5 &&
+    isExactWordStatement(statements[0]!, ["grant", "app_migrator", "to", "postgres"]) &&
+    isExactWordStatement(statements[1]!, ["set", "local", "role", "app_migrator"]) &&
+    isExactWordStatement(statements.at(-2)!, ["reset", "role"]) &&
+    isExactWordStatement(statements.at(-1)!, ["revoke", "app_migrator", "from", "postgres"]);
+  if (hasExactMigratorEnvelope) {
+    allowedStatements.add(0).add(1).add(statements.length - 2).add(statements.length - 1);
+  }
+  const createdRoutines = new Set(
+    statements.map(createdRoutineIdentity).filter((identity) => identity !== null),
+  );
+  let revokeTail = hasExactMigratorEnvelope ? statements.length - 3 : statements.length - 1;
+  while (revokeTail >= 0) {
+    const identity = revokedRoutineIdentity(statements[revokeTail]!);
+    if (!identity) break;
+    if (!createdRoutines.delete(identity)) return true;
+    allowedStatements.add(revokeTail);
+    revokeTail -= 1;
+  }
+  for (const [statementIndex, statement] of statements.entries()) {
+    if (allowedStatements.has(statementIndex)) continue;
+    if (isSetConfigCall(statement)) return true;
     const words = statement
       .filter((token) => token.kind === "word")
       .map((token) => token.value);
+    if (words[0] === "set" || words[0] === "reset") return true;
     const alterIndex = words.indexOf("alter");
     const renameIndex = words.indexOf("rename", alterIndex + 1);
     if (
