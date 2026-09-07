@@ -135,6 +135,16 @@ describe("production release contract", () => {
       releaseSmokeDeploymentBindingsSha256:
         "dd9041ce7ef885a4aab4cd555c418b84f9c1867dfc5849fd2510ae2398891948",
       productionSmokeModel: "scripts/production-smoke-canary.ts",
+      productionSmokePersistenceMigration:
+        "supabase/migrations/0015_production_smoke_canary.sql",
+      productionSmokePersistenceMigrationSha256:
+        "ecc8b4b53f319f877a3e5dc50d9690e1a36d94d5ee123d81d33a4eb1820687f8",
+      productionSmokePersistencePgtap:
+        "supabase/tests/0015_production_smoke_canary.pgtap.sql",
+      productionSmokePersistencePgtapSha256:
+        "f1cc8366f5dafa9b9aa28fa7334c9a2e4ffa555e6e62b7e0f09d7d31eb8998e3",
+      productionSmokeRunnerStatus:
+        "fail-closed-pending-principal-db-storage-route-and-live-runner",
       productionRestoreModel: "scripts/production-restore-drill.ts",
       productionRestoreEvidenceSchema:
         ".github/production-restore-drill-evidence.schema.json",

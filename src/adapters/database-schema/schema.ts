@@ -372,6 +372,20 @@ export const platformsInAppPrivate = appPrivate.table("platforms", {
 	pgPolicy("runtime_platforms", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
+export const productionSmokeCanariesInAppPrivate = appPrivate.table("production_smoke_canaries", {
+	id: uuid().notNull(),
+	identity: text().notNull(),
+	generation: text().notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	actionSequence: bigint("action_sequence", { mode: "number" }).notNull(),
+	payloadSha256: text("payload_sha256").notNull(),
+	phase: text().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+}, (table) => [
+	pgPolicy("migrator_production_smoke_canaries_all", { as: "permissive", for: "all", to: ["app_migrator"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
 export const sourceCategoriesInAppPrivate = appPrivate.table("source_categories", {
 	id: uuid().defaultRandom().notNull(),
 	provider: text().notNull(),

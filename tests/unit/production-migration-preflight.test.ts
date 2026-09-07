@@ -112,8 +112,9 @@ function healthySnapshot(): ProductionDatabaseSnapshot {
     knownPublicExecuteDriftCount: 0,
     appRuntimeCanExecuteKnownDriftFunction: false,
     appRuntimeDirectExecuteGrantCount: 0,
-    missingRuntimeGrantCount: 0,
+    runtimeGrantDriftCount: 0,
     rlsDisabledCount: 0,
+    productionSmokeSecurityDriftCount: 0,
     rlsPolicies: [
       {
         table: "games",
@@ -163,6 +164,51 @@ describe("production migration safety lint", () => {
     await expect(lintProductionMigrations(root)).resolves.toEqual({
       migrationCount: 1,
     });
+  });
+
+  it("accepts least-privilege ACLs only for a table and routines created in the same migration", async () => {
+    const root = await migrationFixture({
+      "0001_private_api.sql": `
+        grant app_migrator to postgres;
+        set local role app_migrator;
+        create table app_private.private_state (id uuid primary key);
+        revoke all on app_private.private_state from public, anon, authenticated, service_role, app_runtime;
+        create function app_private.read_private_state() returns bigint language sql as $$ select count(*) from app_private.private_state $$;
+        grant execute on function app_private.read_private_state() to app_runtime;
+        revoke execute on function app_private.read_private_state() from public, anon, authenticated, service_role;
+        reset role;
+        revoke app_migrator from postgres;
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).resolves.toEqual({
+      migrationCount: 1,
+    });
+  });
+
+  it.each([
+    [
+      "pre-existing table revoke",
+      "revoke all on app_private.existing_state from public, anon, authenticated, service_role, app_runtime;",
+    ],
+    [
+      "pre-existing routine grant",
+      "grant execute on function app_private.existing_state() to app_runtime;",
+    ],
+  ])("rejects a least-privilege ACL that targets a %s", async (_name, acl) => {
+    const root = await migrationFixture({
+      "0001_unrelated_acl.sql": `
+        grant app_migrator to postgres;
+        set local role app_migrator;
+        ${acl}
+        reset role;
+        revoke app_migrator from postgres;
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
   });
 
   it.each([
@@ -1198,6 +1244,8 @@ describe("production migration preflight", () => {
     ["recursive reverse membership", "unexpectedInboundMembershipCount"],
     ["unexpected object ACL", "unexpectedAclCount"],
     ["default privilege drift", "defaultPrivilegeDriftCount"],
+    ["runtime grant drift", "runtimeGrantDriftCount"],
+    ["production smoke security drift", "productionSmokeSecurityDriftCount"],
   ] as const)("rejects %s", async (_case, field) => {
     const root = await migrationFixture({
       "0001_runtime_security.sql": "create schema app_private;",

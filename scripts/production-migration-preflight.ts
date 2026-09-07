@@ -55,8 +55,9 @@ export type ProductionDatabaseSnapshot = {
   knownPublicExecuteDriftCount: number;
   appRuntimeCanExecuteKnownDriftFunction: boolean;
   appRuntimeDirectExecuteGrantCount: number;
-  missingRuntimeGrantCount: number;
+  runtimeGrantDriftCount: number;
   rlsDisabledCount: number;
+  productionSmokeSecurityDriftCount: number;
   rlsPolicies: RlsPolicyIdentity[];
   bucketExists: boolean;
   bucketIsPrivate: boolean;
@@ -369,7 +370,16 @@ select json_build_object(
             and not privilege.is_grantable
             and (
               (c.relkind = 'S' and privilege.privilege_type in ('USAGE', 'SELECT'))
-              or (c.relkind <> 'S' and privilege.privilege_type in ('SELECT', 'INSERT', 'UPDATE', 'DELETE'))
+              or (
+                c.relkind <> 'S'
+                and c.relname in ('media_cleanup_jobs', 'media_reconciliation_runs')
+                and privilege.privilege_type in ('SELECT', 'INSERT', 'UPDATE')
+              )
+              or (
+                c.relkind <> 'S'
+                and c.relname not in ('media_cleanup_jobs', 'media_reconciliation_runs', 'production_smoke_canaries')
+                and privilege.privilege_type in ('SELECT', 'INSERT', 'UPDATE', 'DELETE')
+              )
             )
           )
         )
@@ -387,6 +397,17 @@ select json_build_object(
             and procedure.pronargs = 0
             and privilege.privilege_type = 'EXECUTE'
             and not privilege.is_grantable
+          )
+          or (
+            privilege.grantee = (select oid from pg_roles where rolname = 'app_runtime')
+            and privilege.privilege_type = 'EXECUTE'
+            and not privilege.is_grantable
+            and procedure.oid = any(array[
+              to_regprocedure('app_private.inspect_production_smoke_canary()'),
+              to_regprocedure('app_private.claim_production_smoke_canary(text,text,text,bigint)'),
+              to_regprocedure('app_private.transition_production_smoke_canary(text,text,text,bigint,text,bigint,text)'),
+              to_regprocedure('app_private.cleanup_production_smoke_canary(text,text,text,bigint,text)')
+            ])
           )
         )
       union all
@@ -545,16 +566,27 @@ select json_build_object(
       and privilege.grantee = (select oid from pg_roles where rolname = 'app_runtime')
       and privilege.privilege_type = 'EXECUTE'
   ),
-  'missingRuntimeGrantCount', (
+  'runtimeGrantDriftCount', (
     select
       case when has_schema_privilege('app_runtime', 'app_private', 'USAGE') then 0 else 1 end
       + count(*) filter (
           where c.relkind in ('r', 'p')
+            and c.relname not in ('media_cleanup_jobs', 'media_reconciliation_runs', 'production_smoke_canaries')
             and (
               not has_table_privilege('app_runtime', c.oid, 'SELECT')
               or not has_table_privilege('app_runtime', c.oid, 'INSERT')
               or not has_table_privilege('app_runtime', c.oid, 'UPDATE')
               or not has_table_privilege('app_runtime', c.oid, 'DELETE')
+            )
+        )
+      + count(*) filter (
+          where c.relkind in ('r', 'p')
+            and c.relname in ('media_cleanup_jobs', 'media_reconciliation_runs')
+            and (
+              not has_table_privilege('app_runtime', c.oid, 'SELECT')
+              or not has_table_privilege('app_runtime', c.oid, 'INSERT')
+              or not has_table_privilege('app_runtime', c.oid, 'UPDATE')
+              or has_table_privilege('app_runtime', c.oid, 'DELETE')
             )
         )
       + count(*) filter (
@@ -570,6 +602,58 @@ select json_build_object(
   'rlsDisabledCount', (
     select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'app_private' and c.relkind in ('r', 'p') and not c.relrowsecurity
+  ),
+  'productionSmokeSecurityDriftCount', (
+    with expected_routine(signature, definition_sha256) as (
+      values
+        ('app_private.inspect_production_smoke_canary()', '867969b79dd5f5a2dff6e497f11be6dd8d58fe33f6f8503204e6e573c287cc0f'),
+        ('app_private.claim_production_smoke_canary(text,text,text,bigint)', '92e8b6223d4bc65349356e1ae594e1ef7f84e5affd907365b1bb61c67dafcf66'),
+        ('app_private.transition_production_smoke_canary(text,text,text,bigint,text,bigint,text)', 'a386e7925593d0c03aadcb8b6edbe41111f5037538136f96e978688535d9dd16'),
+        ('app_private.cleanup_production_smoke_canary(text,text,text,bigint,text)', '3c6e784835a82c383fd631bb8955b9be7faf3d51782d4a7c4f3562ff1af04998')
+    ),
+    routine_drift as (
+      select count(*) as drift_count
+      from expected_routine expected
+      left join pg_proc procedure on procedure.oid = to_regprocedure(expected.signature)
+      left join pg_roles owner on owner.oid = procedure.proowner
+      where procedure.oid is null
+        or owner.rolname is distinct from 'app_migrator'
+        or not procedure.prosecdef
+        or procedure.proconfig is distinct from array['search_path=pg_catalog, app_private']::text[]
+        or encode(extensions.digest(convert_to(pg_get_functiondef(procedure.oid), 'UTF8'), 'sha256'), 'hex') is distinct from expected.definition_sha256
+        or not has_function_privilege('app_runtime', procedure.oid, 'EXECUTE')
+        or exists (
+          select 1
+          from aclexplode(coalesce(procedure.proacl, acldefault('f', procedure.proowner))) privilege
+          left join pg_roles granted_role on granted_role.oid = privilege.grantee
+          where privilege.privilege_type = 'EXECUTE'
+            and (privilege.grantee = 0 or granted_role.rolname in ('anon', 'authenticated', 'service_role'))
+        )
+    ),
+    table_drift as (
+      select case
+        when table_relation.oid is null then 1
+        when table_owner.rolname is distinct from 'app_migrator'
+          or not table_relation.relrowsecurity
+          or not table_relation.relforcerowsecurity
+          or has_table_privilege('app_runtime', table_relation.oid, 'SELECT')
+          or has_table_privilege('app_runtime', table_relation.oid, 'INSERT')
+          or has_table_privilege('app_runtime', table_relation.oid, 'UPDATE')
+          or has_table_privilege('app_runtime', table_relation.oid, 'DELETE')
+        then 1 else 0
+      end as drift_count
+      from (values (to_regclass('app_private.production_smoke_canaries'))) expected_table(oid)
+      left join pg_class table_relation on table_relation.oid = expected_table.oid
+      left join pg_roles table_owner on table_owner.oid = table_relation.relowner
+    )
+    select case
+      when exists (
+        select 1 from supabase_migrations.schema_migrations
+        where version = '0015' and name = 'production_smoke_canary'
+      )
+      then (select drift_count from routine_drift) + (select drift_count from table_drift)
+      else 0
+    end
   ),
   'rlsPolicies', coalesce((
     select json_agg(json_build_object(
@@ -924,6 +1008,61 @@ function revokedRoutineIdentity(statement: readonly SqlToken[]) {
     : null;
 }
 
+function grantedRoutineIdentity(statement: readonly SqlToken[]) {
+  if (
+    statement[0]?.value !== "grant" ||
+    statement[1]?.value !== "execute" ||
+    statement[2]?.value !== "on" ||
+    (statement[3]?.value !== "function" && statement[3]?.value !== "procedure")
+  ) {
+    return null;
+  }
+  const identity = routineIdentityKey(statement, 3);
+  const closeIndex = matchingParenIndex(statement, 7);
+  if (!identity || closeIndex < 0) return null;
+  return isExactWordStatement(statement.slice(closeIndex + 1), ["to", "app_runtime"])
+    ? identity
+    : null;
+}
+
+function createdTableIdentity(statement: readonly SqlToken[]) {
+  if (
+    statement[0]?.value !== "create" ||
+    statement[1]?.value !== "table" ||
+    statement[2]?.kind !== "word" ||
+    statement[3]?.value !== "." ||
+    statement[4]?.kind !== "word"
+  ) {
+    return null;
+  }
+  return `${statement[2].value}.${statement[4].value}`;
+}
+
+function revokedNewTableIdentity(statement: readonly SqlToken[]) {
+  if (
+    statement[0]?.value !== "revoke" ||
+    statement[1]?.value !== "all" ||
+    statement[2]?.value !== "on" ||
+    statement[3]?.kind !== "word" ||
+    statement[4]?.value !== "." ||
+    statement[5]?.kind !== "word"
+  ) {
+    return null;
+  }
+  const suffix = statement.slice(6);
+  return isExactWordStatement(
+    suffix.filter((token) => token.value !== ","),
+    ["from", "public", "anon", "authenticated", "service_role", "app_runtime"],
+  ) &&
+    suffix.length === 10 &&
+    suffix[2]?.value === "," &&
+    suffix[4]?.value === "," &&
+    suffix[6]?.value === "," &&
+    suffix[8]?.value === ","
+    ? `${statement[3].value}.${statement[5].value}`
+    : null;
+}
+
 function isExactMediaReconciliationDeleteRevoke(statement: readonly SqlToken[]) {
   return statement.map((token) => token.value).join(" ") ===
     "revoke delete on app_private . media_reconciliation_runs , app_private . media_cleanup_jobs from app_runtime , anon , authenticated , service_role";
@@ -974,6 +1113,24 @@ function containsForbiddenMigrationSql(
   const createdRoutines = new Set(
     statements.map(createdRoutineIdentity).filter((identity) => identity !== null),
   );
+  const createdRoutineIndexes = new Map(
+    statements.flatMap((statement, index) => {
+      const identity = createdRoutineIdentity(statement);
+      return identity === null ? [] : [[identity, index] as const];
+    }),
+  );
+  const revokedRoutineIndexes = new Map(
+    statements.flatMap((statement, index) => {
+      const identity = revokedRoutineIdentity(statement);
+      return identity === null ? [] : [[identity, index] as const];
+    }),
+  );
+  const createdTableIndexes = new Map(
+    statements.flatMap((statement, index) => {
+      const identity = createdTableIdentity(statement);
+      return identity === null ? [] : [[identity, index] as const];
+    }),
+  );
   let revokeTail = hasExactMigratorEnvelope ? statements.length - 3 : statements.length - 1;
   while (revokeTail >= 0) {
     const identity = revokedRoutineIdentity(statements[revokeTail]!);
@@ -981,6 +1138,31 @@ function containsForbiddenMigrationSql(
     if (!createdRoutines.delete(identity)) return true;
     allowedStatements.add(revokeTail);
     revokeTail -= 1;
+  }
+  for (const [statementIndex, statement] of statements.entries()) {
+    const tableIdentity = revokedNewTableIdentity(statement);
+    const tableCreateIndex = tableIdentity
+      ? createdTableIndexes.get(tableIdentity)
+      : undefined;
+    if (tableCreateIndex !== undefined && tableCreateIndex < statementIndex) {
+      allowedStatements.add(statementIndex);
+    }
+
+    const routineIdentity = grantedRoutineIdentity(statement);
+    const routineCreateIndex = routineIdentity
+      ? createdRoutineIndexes.get(routineIdentity)
+      : undefined;
+    const routineRevokeIndex = routineIdentity
+      ? revokedRoutineIndexes.get(routineIdentity)
+      : undefined;
+    if (
+      routineCreateIndex !== undefined &&
+      routineRevokeIndex !== undefined &&
+      routineCreateIndex < statementIndex &&
+      statementIndex < routineRevokeIndex
+    ) {
+      allowedStatements.add(statementIndex);
+    }
   }
   for (const [statementIndex, statement] of statements.entries()) {
     if (allowedStatements.has(statementIndex)) continue;
@@ -1433,9 +1615,10 @@ function assertSnapshot(
   const strictGrantsPass =
     snapshot.unsafeGrantCount === 0 &&
     snapshot.knownPublicExecuteDriftCount === 0 &&
-    snapshot.missingRuntimeGrantCount === 0 &&
+    snapshot.runtimeGrantDriftCount === 0 &&
     snapshot.unexpectedAclCount === 0 &&
     snapshot.defaultPrivilegeDriftCount === 0 &&
+    snapshot.productionSmokeSecurityDriftCount === 0 &&
     !snapshot.appRuntimeCanExecuteKnownDriftFunction &&
     snapshot.appRuntimeDirectExecuteGrantCount === 0;
   const knownDriftIsRepairable =
@@ -1443,9 +1626,10 @@ function assertSnapshot(
     knownDriftRemediationPending &&
     snapshot.unsafeGrantCount === 1 &&
     snapshot.knownPublicExecuteDriftCount === 1 &&
-    snapshot.missingRuntimeGrantCount === 0 &&
+    snapshot.runtimeGrantDriftCount === 0 &&
     snapshot.unexpectedAclCount === 0 &&
     snapshot.defaultPrivilegeDriftCount === 0 &&
+    snapshot.productionSmokeSecurityDriftCount === 0 &&
     snapshot.appRuntimeCanExecuteKnownDriftFunction &&
     snapshot.appRuntimeDirectExecuteGrantCount === 0;
   const grantsPass = strictGrantsPass || knownDriftIsRepairable;
@@ -1493,7 +1677,7 @@ function assertSnapshot(
     !rolesPass && "roles",
     !objectOwnershipPass && "object-owners",
     !grantsPass &&
-      `grants(unsafe=${snapshot.unsafeGrantCount},missing=${snapshot.missingRuntimeGrantCount})`,
+      `grants(unsafe=${snapshot.unsafeGrantCount},runtimeDrift=${snapshot.runtimeGrantDriftCount},smokeSecurity=${snapshot.productionSmokeSecurityDriftCount})`,
     !rlsPass && "rls",
     !bucketPass && "private-bucket",
   ].filter(Boolean);

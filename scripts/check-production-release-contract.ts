@@ -35,6 +35,10 @@ type ProductionReleaseContract = Readonly<{
   productionSmokeContractSha256: string;
   productionSmokeModel: string;
   productionSmokeModelSha256: string;
+  productionSmokePersistenceMigration: string;
+  productionSmokePersistenceMigrationSha256: string;
+  productionSmokePersistencePgtap: string;
+  productionSmokePersistencePgtapSha256: string;
   productionSmokeRunner: string;
   productionSmokeRunnerSha256: string;
   productionSmokeRunnerStatus: string;
@@ -431,8 +435,10 @@ export async function checkProductionReleaseContract(root: string) {
   await assertPinnedArtifact(root, contract.productionDeploymentModel, "scripts/production-deployment-release.ts", contract.productionDeploymentModelSha256, "production deployment model");
   await assertPinnedArtifact(root, contract.productionSmokeContract, ".github/production-smoke-contract.json", contract.productionSmokeContractSha256, "smoke contract");
   await assertPinnedArtifact(root, contract.productionSmokeModel, "scripts/production-smoke-canary.ts", contract.productionSmokeModelSha256, "smoke model");
+  await assertPinnedArtifact(root, contract.productionSmokePersistenceMigration, "supabase/migrations/0015_production_smoke_canary.sql", contract.productionSmokePersistenceMigrationSha256, "smoke persistence migration");
+  await assertPinnedArtifact(root, contract.productionSmokePersistencePgtap, "supabase/tests/0015_production_smoke_canary.pgtap.sql", contract.productionSmokePersistencePgtapSha256, "smoke persistence pgTAP");
   await assertPinnedArtifact(root, contract.productionSmokeRunner, "scripts/production-smoke-runner.ts", contract.productionSmokeRunnerSha256, "smoke runner");
-  assertContract(contract.productionSmokeRunnerStatus === "fail-closed-pending-principal-route-and-schema", "smoke runner status must remain fail closed");
+  assertContract(contract.productionSmokeRunnerStatus === "fail-closed-pending-principal-db-storage-route-and-live-runner", "smoke runner status must enumerate every unresolved live dependency");
   await assertReleaseSmokeAuthArtifactsPinned(root, contract);
   await assertPinnedArtifact(root, contract.productionRestoreModel, "scripts/production-restore-drill.ts", contract.productionRestoreModelSha256, "restore model");
   await assertPinnedArtifact(root, contract.productionRestoreEvidenceSchema, ".github/production-restore-drill-evidence.schema.json", contract.productionRestoreEvidenceSchemaSha256, "restore evidence schema");
@@ -447,6 +453,8 @@ export async function checkProductionReleaseContract(root: string) {
       contract.vercelRestTransportSha256,
       contract.productionSmokeContractSha256,
       contract.productionSmokeModelSha256,
+      contract.productionSmokePersistenceMigrationSha256,
+      contract.productionSmokePersistencePgtapSha256,
       contract.productionSmokeRunnerSha256,
       contract.releaseSmokeRouteSha256,
       contract.releaseSmokeHandlerSha256,
@@ -463,6 +471,8 @@ export async function checkProductionReleaseContract(root: string) {
       "1c10b85c3dd0d8b8712193edc33c3d1812bf8cc5f981e3adcc4f257da0ad3e65",
       "4394d99c7888e4048b5e7e48206d2b1f3b24bb367531becf0978de6fad0ca269",
       "5aacb6018c3a94ed2532c90817d3c82a97a03ef2e08d9f2f1b1931d8f2e36fe6",
+      "ecc8b4b53f319f877a3e5dc50d9690e1a36d94d5ee123d81d33a4eb1820687f8",
+      "f1cc8366f5dafa9b9aa28fa7334c9a2e4ffa555e6e62b7e0f09d7d31eb8998e3",
       "1b62169b8e2078522de549691eac8a4dfab5a3dcff6297623bbc6dcc40bde21d",
       "99594c244e4fc78c00d4d282b9fafb3974fe1b96760248fa07db1665c5461428",
       "7e85a4fc08c429cbb9b1e8c9f825eb31882d75e8c6da1f9020706e2aecd162f4",
@@ -748,7 +758,19 @@ export async function checkProductionReleaseContract(root: string) {
   assertContract(
     rlsPolicyManifest.schema === "app_private" &&
       Array.isArray(rlsPolicyManifest.policies) &&
-      rlsPolicyManifest.policies.length > 0,
+      rlsPolicyManifest.policies.some((policy) =>
+        JSON.stringify(policy) === JSON.stringify({
+          table: "production_smoke_canaries",
+          name: "migrator_production_smoke_canaries_all",
+          validFrom: "0015",
+          validUntilExclusive: null,
+          permissiveness: "PERMISSIVE",
+          command: "ALL",
+          roles: ["app_migrator"],
+          using: "true",
+          withCheck: "true",
+        }),
+      ),
     "release must own a non-empty app_private RLS policy manifest",
   );
   assertContract(
