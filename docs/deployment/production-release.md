@@ -73,9 +73,23 @@ Promotion 前的任何失敗都讓 D0 繼續接收流量。Promotion 結果不�
 
 公開 artifact 只能符合 `.github/production-deployment-evidence.schema.json`。該 schema 採欄位 allowlist 與 `additionalProperties: false`，只容許 commit、migration tail、deployment identity、domain、時間、結果、bounded attempt count、具名 smoke check 與 request ID；不得包含 token、authorization header、連線字串、request／response payload 或私有資料。
 
-此切片不完成 #58 acceptance。開始 PR B 前仍須具備並核對：Production 自訂網域與 Cloudflare Access application；GitHub `Production` Environment secrets `VERCEL_TOKEN`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET`；variables `VERCEL_ORG_ID`、`VERCEL_PROJECT_ID`、`PRODUCTION_CUSTOM_DOMAIN`；以及只服務 release-smoke route 的最小權限身分裁決。PR B 才能建立受保護 application workflow、live adapter 與有界 smoke；PR C 再加入只輸出到受保護暫存位置的 logical dump／本機 restore 演練。未滿足這些前提時不得把 `productionDeploymentEnabled` 改為 `true`。
+此切片不完成 #58 acceptance。啟用 live deployment 前仍須具備並核對：Production 自訂網域與 Cloudflare Access application；GitHub `Production` Environment secrets `VERCEL_TOKEN`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET`；variables `VERCEL_ORG_ID`、`VERCEL_PROJECT_ID`、`PRODUCTION_CUSTOM_DOMAIN`；以及只服務 release-smoke route 的最小權限身分裁決。後續 deployment 切片才能建立受保護 application workflow、live adapter 與有界 smoke；復原切片再加入只輸出到受保護暫存位置的 logical dump／本機 restore 演練。未滿足這些前提時不得把 `productionDeploymentEnabled` 改為 `true`。
 
-Vercel CLI `59.11.7` 的 registry metadata 宣告 Node.js `>= 18`，且已確認具有 `deploy --prod --skip-domain`、`promote` 與 `rollback`；但 2026-09-07 以本 repository 的 `pnpm audit --audit-level high` 檢查其完整 dependency graph 時，新增 1 項 critical 與 18 項 high vulnerabilities。抽查仍可取得的 `55.0.0`、`56.5.0`、`57.0.0`、`58.11.0` 與 `59.11.7` 都未達零 critical／high；其中 `undici` 修補需要跨 major override，不能假設相容。因此 `.github/vercel-deployment-adapter-evaluation.json` 將 `59.11.7` 只記為 deployment candidate，不把它加入 dependency，也不建立 `deploy`／`promote`／`rollback` package script 或 workflow。既有 `release:settings:check` 仍從 `PATH` 呼叫本機 global Vercel CLI 做唯讀 project／environment settings 查詢；目前解析到的版本未受 repository pin 或 audit 保護，屬歷史殘餘風險，不得稱為安全，也不是 deployment adapter。PR B 必須把該唯讀查詢一併改採 Vercel 官方 REST API，或重新驗證一個 exact CLI version 的完整 dependency graph 為零 critical／high，才可解除 `blocked-security-audit`。
+Vercel CLI `59.11.7` 的 registry metadata 宣告 Node.js `>= 18`，且已確認具有 `deploy --prod --skip-domain`、`promote` 與 `rollback`；但 2026-09-07 以本 repository 的 `pnpm audit --audit-level high` 檢查其完整 dependency graph 時，新增 1 項 critical 與 18 項 high vulnerabilities。抽查仍可取得的 `55.0.0`、`56.5.0`、`57.0.0`、`58.11.0` 與 `59.11.7` 都未達零 critical／high；其中 `undici` 修補需要跨 major override，不能假設相容。因此 `.github/vercel-deployment-adapter-evaluation.json` 將 `59.11.7` 只記為 deployment candidate，不把它加入 dependency，也不建立 `deploy`／`promote`／`rollback` package script 或 workflow。`release:settings:check` 的 Vercel 唯讀查詢已改由 repository-owned `scripts/vercel-read-only-rest-client.ts` 使用 Node 原生 `fetch` 呼叫官方 REST API，不再從 `PATH` 執行 global Vercel CLI。這只移除 settings inspection 的 CLI 供應鏈風險；deployment adapter 仍未實作且維持 `blocked-security-audit`，不得建立、promote 或 rollback deployment。
+
+唯讀 adapter 固定使用 `https://api.vercel.com`、`Authorization: Bearer <VERCEL_TOKEN>`、`teamId` query 與 10 秒 timeout，且只開放官方文件列出的三個 `GET` endpoint：`/v10/projects/{id}/env`、`/v1/projects/{id}/env/{var-id}`、`/v9/projects/{id}`。non-2xx、timeout、network failure、malformed JSON 與 response shape 漂移都以具名錯誤停止，不記錄 Authorization、response body 或 environment value。流程如下：
+
+```text
+release:settings:check
+  ├─ gh subprocess ───────────────→ GitHub protection／Environment metadata
+  ├─ Supabase CLI subprocess ─────→ current API key fingerprints
+  └─ repository Vercel REST client
+       ├─ GET project env list ───→ key／target／type／id
+       ├─ GET allowlisted env id ─→ encrypted readable value only
+       └─ GET project ────────────→ identity／Git connection state
+```
+
+參考：[Vercel REST API 基本規則](https://vercel.com/docs/rest-api)、[讀取 project environment variables](https://vercel.com/docs/rest-api/projects/retrieve-the-environment-variables-of-a-project-by-id-or-name)、[讀取單一可解密 environment variable](https://vercel.com/docs/rest-api/projects/retrieve-the-decrypted-value-of-an-environment-variable-of-a-project-by-id)、[讀取 project](https://vercel.com/docs/rest-api/projects/find-a-project-by-id-or-name)。
 
 Vercel Hobby project 的 owner 仍可直接從 Dashboard 或本機 CLI 建立 production deployment；repository 無法在 Vercel 帳號層絕對撤銷這項 owner 能力。這是殘餘風險，不是第二條支援路徑：owner 不得手動部署，操作證據以 Vercel activity log 稽核。若未來 Vercel 提供適用方案的細緻 deployment policy，應把這項人工禁令改為平台強制。
 
@@ -90,8 +104,8 @@ T01 只要求 Vercel Production scope 已有 `SUPABASE_PUBLISHABLE_KEY`（encryp
 1. `gh api repos/elekli/game-base/branches/main/protection`：確認 required check 為 `verify`、PR required、`enforce_admins.enabled` 為 `true`。
 2. `gh api repos/elekli/game-base/environments/Production`：確認 required reviewer、禁止管理員 bypass，以及只允許 protected branch。
 3. 在 Supabase Dashboard 核對 GitHub integration 的 production branch mapping 精確為 `production-deploy-disabled-use-github-actions`，並以 GitHub branch API 確認 repository 不存在該 branch；任一不符都停止發布。
-4. `vercel project inspect game-base` 與 Vercel project API：確認 project ID 符合契約、Git integration 未連接；再執行 `pnpm release:settings:check` 核對 Production-only key scope、type 與可安全核對的 fingerprint。
-5. 只列 Vercel environment variable 的 key、target 與 type；若任何 credential target 包含 Preview 或 Development，立即停止發布並移除錯誤 scope。禁止要求 API 回傳解密值。
+4. 設定 `VERCEL_TOKEN` 後執行 `pnpm release:settings:check`；repository-owned REST adapter 會確認 project ID 符合契約、Git integration 未連接，並核對 Production-only key scope、type 與可安全核對的 fingerprint。不得另行呼叫 global Vercel CLI。
+5. Environment list request 不帶 `decrypt` query，只取得 key、target、type 與 id。只有固定 allowlist 內的 encrypted binding 可透過單一 variable endpoint 讀值供本機比對；`SUPABASE_SECRET_KEY` 等 sensitive variable 永不要求解密、輸出或記錄。若任何 credential target 包含 Preview 或 Development，立即停止發布並移除錯誤 scope。
 6. 執行 `pnpm release:contract:check`，並由受保護 workflow 的 orchestrator 執行 production migration preflight。Preflight 先以 `BEGIN TRANSACTION READ ONLY` 鎖定唯讀交易，再核對 repository migration history、角色、grants、RLS、private bucket 與正式專案 binding；無論成功或失敗都 rollback。RLS 必須與 `.github/production-rls-policy-manifest.json` 對 `app_private` 聲明的 policy name、permissiveness、command、roles、`USING`、`WITH CHECK` 完全相同；缺少、額外或條件漂移都停止發布。每個政策 revision 以 `validFrom` 與 `validUntilExclusive` 表示生效區間：新增政策時建立末端為 `null` 的 revision；替換既有政策時，在同一支 migration 把舊 revision 的末端與新 revision 的起點設成該版本。相同 table／name 的 revision 不得重疊或留空檔。套用前只比對 production 已套用 tail 當時有效的 revision，strict verification 則比對目標 commit 最新 tail，避免 pending 政策變更卡死套用流程。`storage` schema 不納入應用政策固定清單，僅由獨立的 bucket 與 `storage.objects` RLS 檢查覆蓋，避免把 Supabase 管理的系統政策誤判成應用漂移。T03 完成前不可把 migration 成功誤當成 app 已部署。
 
 `app_runtime` 可經 membership-level `INHERIT`、`SET ROLE` 或 `ADMIN OPTION` 遞迴到達的角色，必須與 `.github/production-runtime-role-reachability-allowlist.json` 的 `appRuntimeReachableRoles` 完全相同；目前固定清單為空。PostgreSQL 17 的 membership-level `INHERIT TRUE` 即使搭配 role-level `NOINHERIT`，仍視為權限可達；任何未核准角色都必須停止發布。固定清單將來若因平台必要條件新增角色，仍不得容許 `app_migrator`、superuser、`BYPASSRLS`、`CREATEROLE` 或 `CREATEDB`；應只提交角色名稱，不記錄密碼或其他秘密。

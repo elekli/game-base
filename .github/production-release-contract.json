@@ -10,6 +10,8 @@
   "vercelDeploymentCliCandidateVersion": "59.11.7",
   "vercelDeploymentCliStatus": "blocked-security-audit",
   "vercelDeploymentAdapterEvaluation": ".github/vercel-deployment-adapter-evaluation.json",
+  "vercelSettingsReadAdapter": "scripts/vercel-read-only-rest-client.ts",
+  "vercelSettingsReadStatus": "ready-official-rest-read-only",
   "productionDeploymentWriter": ".github/workflows/production-application-release.yml",
   "productionDeploymentModel": "scripts/production-deployment-release.ts",
   "productionDeploymentStatus": "blocked-external-prerequisites-and-deployment-adapter",

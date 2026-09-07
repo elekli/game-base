@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+
+import { describe, expect, it, vi } from "vitest";
 
 import {
   checkLiveProductionSettings,
   readJsonSafely,
+  readLiveSettings,
 } from "../../scripts/check-live-production-settings";
 
 const encrypted = (key: string, value: string) => ({
@@ -189,5 +192,93 @@ describe("live production settings", () => {
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toBe("無法安全讀取 production 設定。");
     expect(JSON.stringify(thrown)).not.toContain(secret);
+  });
+
+  it("reads Vercel through REST while retaining the GitHub and Supabase command runner", async () => {
+    const publishable = "sb_publishable_fixture";
+    const secret = "sb_secret_fixture";
+    const commandRunner = vi.fn((command: string, args: string[]) => {
+      if (command === "pnpm") {
+        return JSON.stringify([
+          { api_key: publishable, type: "publishable" },
+          { api_key: secret, type: "secret" },
+        ]);
+      }
+      if (args.at(-1)?.endsWith("deployment-branch-policies")) {
+        return JSON.stringify({ branch_policies: [{ name: "main" }] });
+      }
+      if (args.at(-1)?.endsWith("/secrets")) {
+        return JSON.stringify({
+          secrets: [{ name: "PRODUCTION_MIGRATION_DATABASE_URL" }],
+        });
+      }
+      if (args.at(-1)?.endsWith("/protection")) {
+        return JSON.stringify({ required_pull_request_reviews: {} });
+      }
+      return JSON.stringify({ name: "Production" });
+    });
+    const readableVariableKeys = [
+      "EXPECTED_SUPABASE_PROJECT_REF",
+      "EXPECTED_SUPABASE_PUBLISHABLE_KEY_SHA256",
+      "EXPECTED_SUPABASE_SECRET_KEY_SHA256",
+      "EXPECTED_SUPAVISOR_HOST",
+      "EXPECTED_SUPAVISOR_USERNAME",
+      "SUPABASE_PROJECT_REF",
+      "SUPABASE_PUBLISHABLE_KEY",
+      "SUPABASE_URL",
+      "SUPAVISOR_HOST",
+      "SUPAVISOR_PORT",
+      "SUPAVISOR_USERNAME",
+    ];
+    const environmentVariables = readableVariableKeys.map((key) => ({
+      id: `${key}-id`,
+      key,
+      target: ["production"],
+      type: "encrypted",
+    }));
+    const vercelClient = {
+      getProject: vi.fn(async () => ({
+        gitRepository: null,
+        id: "project-id",
+        link: null,
+        name: "game-base",
+      })),
+      getProjectEnvironmentVariable: vi.fn(
+        async (_projectId: string, variableId: string) => ({
+          value:
+            variableId === "SUPABASE_PUBLISHABLE_KEY-id"
+              ? publishable
+              : variableId === "SUPABASE_PROJECT_REF-id"
+                ? "wbtyuvufhrhybquzwfip"
+                : `fixture-${variableId}`,
+        }),
+      ),
+      listProjectEnvironmentVariables: vi.fn(async () => environmentVariables),
+    };
+
+    const settings = await readLiveSettings({ commandRunner, vercelClient });
+
+    expect(
+      commandRunner.mock.calls.map(([command]) => command),
+    ).not.toContain("vercel");
+    expect(commandRunner.mock.calls.map(([command]) => command)).toContain("gh");
+    expect(commandRunner.mock.calls.map(([command]) => command)).toContain("pnpm");
+    expect(vercelClient.listProjectEnvironmentVariables).toHaveBeenCalledOnce();
+    expect(vercelClient.getProjectEnvironmentVariable).toHaveBeenCalledTimes(11);
+    expect(vercelClient.getProject).toHaveBeenCalledOnce();
+    expect(settings.vercelEnvironmentVariables).toContainEqual({
+      key: "SUPABASE_PUBLISHABLE_KEY",
+      target: ["production"],
+      type: "encrypted",
+      value: publishable,
+      valueSha256: createHash("sha256").update(publishable).digest("hex"),
+    });
+    expect(settings.vercelEnvironmentVariables).toContainEqual({
+      key: "SUPABASE_PROJECT_REF",
+      target: ["production"],
+      type: "encrypted",
+      value: "wbtyuvufhrhybquzwfip",
+      valueSha256: undefined,
+    });
   });
 });

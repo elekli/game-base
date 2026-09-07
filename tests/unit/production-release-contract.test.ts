@@ -22,6 +22,14 @@ describe("production release contract", () => {
       required?: unknown;
       properties?: Record<string, unknown>;
     };
+    const vercelSettingsReadAdapter = await readFile(
+      "scripts/vercel-read-only-rest-client.ts",
+      "utf8",
+    );
+    const liveSettingsChecker = await readFile(
+      "scripts/check-live-production-settings.ts",
+      "utf8",
+    );
 
     expect(contract).toMatchObject({
       vercelTeamId: "team_vpaufHhAabxSup7QLCbCGwlF",
@@ -29,6 +37,8 @@ describe("production release contract", () => {
       vercelDeploymentCliStatus: "blocked-security-audit",
       vercelDeploymentAdapterEvaluation:
         ".github/vercel-deployment-adapter-evaluation.json",
+      vercelSettingsReadAdapter: "scripts/vercel-read-only-rest-client.ts",
+      vercelSettingsReadStatus: "ready-official-rest-read-only",
       productionDeploymentWriter:
         ".github/workflows/production-application-release.yml",
       productionDeploymentModel: "scripts/production-deployment-release.ts",
@@ -55,6 +65,18 @@ describe("production release contract", () => {
     expect(packageJson.devDependencies).not.toHaveProperty("vercel");
     expect(Object.values(packageJson.scripts ?? {}).join("\n")).not.toMatch(
       /(?:pnpm\s+(?:dlx|exec)|npx)\s+vercel|\bvercel\s+(?:deploy|promote|rollback)\b/,
+    );
+    expect(packageJson.scripts?.["release:settings:check"]).toBe(
+      "tsx scripts/check-live-production-settings.ts --live",
+    );
+    expect(vercelSettingsReadAdapter).not.toMatch(
+      /method:\s*"(?:POST|PUT|PATCH|DELETE)"/,
+    );
+    expect(vercelSettingsReadAdapter).not.toMatch(
+      /\/deployments|\/promote|\/rollback/,
+    );
+    expect(liveSettingsChecker).not.toMatch(
+      /readJsonSafely\("vercel"|execFile(?:Sync)?\("vercel"/,
     );
     expect(evidenceSchema.additionalProperties).toBe(false);
     expect(evidenceSchema.required).toContain("executionSha");
