@@ -300,7 +300,7 @@ describe("MediaService 與真 PostgreSQL", () => {
       .rejects.toBeInstanceOf(MediaUploadIdempotencyConflictError);
   });
 
-  it("finalize 建立單一 asset 與 pending derivative，回應遺失後重播同一結果", async () => {
+  it("finalize 建立單一 asset 與 pending derivative，但自訂封面需由明確指令套用", async () => {
     const service = serviceFor();
     const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand({ purpose: "custom_cover" })));
 
@@ -311,14 +311,16 @@ describe("MediaService 與真 PostgreSQL", () => {
     expect(replay).toEqual(first);
     expect(beginReplay).toEqual({ status: "already_finalized", result: first });
     expect(first.asset.id).toBe(grant.assetId);
-    const rows = await runtime.unsafe<{ asset_count: number; derivative_count: number; manual_cover_asset_id: string }[]>(`
+    const rows = await runtime.unsafe<{ asset_count: number; derivative_count: number; manual_cover_asset_id: string | null }[]>(`
       select
         (select count(*)::int from app_private.media_assets where ingest_id = $1) as asset_count,
         (select count(*)::int from app_private.media_derivatives where asset_id = $2) as derivative_count,
         manual_cover_asset_id
       from app_private.games where id = $3
     `, [grant.ingestId, grant.assetId, gameId]);
-    expect(rows[0]).toEqual({ asset_count: 1, derivative_count: 1, manual_cover_asset_id: grant.assetId });
+    expect(rows[0]).toEqual({ asset_count: 1, derivative_count: 1, manual_cover_asset_id: null });
+    await expect(service.selectManualCover(owner, { gameId, assetId: grant.assetId }))
+      .resolves.toEqual({ manualCoverAssetId: grant.assetId });
     await expect(runtime.unsafe("update app_private.media_derivatives set spec = null where asset_id = $1", [grant.assetId]))
       .rejects.toThrow("verified media derivative identity fields are immutable");
     await expect(runtime.unsafe("update app_private.media_derivatives set authority_state = 'legacy_unverified' where asset_id = $1", [grant.assetId]))

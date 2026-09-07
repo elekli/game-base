@@ -4,6 +4,7 @@ export type MediaBatchFile = Readonly<{
   idempotencyKey: string;
   file: Blob & Readonly<{ name: string; type: string; size: number; lastModified?: number }>;
   purpose: "gallery_image" | "custom_cover" | "attachment";
+  identity: string;
   status: MediaBatchStatus;
   uploadedBytes: number;
   error: string | null;
@@ -25,10 +26,9 @@ export type MediaBatchUploader = (input: Readonly<{
 
 type Listener = (files: readonly MediaBatchFile[]) => void;
 export type MediaBatchIdentityStore = Readonly<{
-  find(file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"]): string | null;
-  remember(file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"], idempotencyKey: string): void;
-  forget?(file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"], idempotencyKey: string): void;
-  discard?(file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"]): void;
+  find(identity: string, occurrence: number): string | null;
+  remember(identity: string, idempotencyKey: string): void;
+  forget?(identity: string, idempotencyKey: string): void;
 }>;
 
 export function createSessionMediaIdentityStore(namespace: string): MediaBatchIdentityStore {
@@ -39,44 +39,48 @@ export function createSessionMediaIdentityStore(namespace: string): MediaBatchId
     warned = true;
     console.warn("media_upload_identity_persistence_unavailable");
   };
-  const signature = (file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"]) => JSON.stringify([namespace, purpose, file.name, file.size, file.type, file.lastModified ?? null]);
-  const read = (): Record<string, string> => {
+  const storageKey = (identity: string) => JSON.stringify([namespace, identity]);
+  const fallbackValues = (id: string) => [...fallback.entries()]
+    .filter(([key]) => key.startsWith(`${id}:`))
+    .sort(([left], [right]) => Number(left.slice(id.length + 1)) - Number(right.slice(id.length + 1)))
+    .map(([, value]) => value);
+  const read = (): Record<string, string[]> => {
     try {
       const parsed = JSON.parse(sessionStorage.getItem("puizeru:media-upload-identities") ?? "{}") as Record<string, unknown>;
       return Object.fromEntries(Object.entries(parsed).flatMap(([key, value]) => {
-        if (typeof value === "string") return [[key, value]];
-        if (Array.isArray(value) && value.length === 1 && typeof value[0] === "string") return [[key, value[0]]];
+        if (typeof value === "string") return [[key, [value]]];
+        if (Array.isArray(value) && value.every((item) => typeof item === "string")) return [[key, value]];
         return [];
       }));
     }
-    catch { warnUnavailable(); return Object.fromEntries(fallback); }
+    catch { warnUnavailable(); return {}; }
   };
   return {
-    find(file, purpose) { return read()[signature(file, purpose)] ?? fallback.get(signature(file, purpose)) ?? null; },
-    remember(file, purpose, key) {
-      const id = signature(file, purpose);
-      fallback.set(id, key);
-      try { sessionStorage.setItem("puizeru:media-upload-identities", JSON.stringify({ ...read(), [id]: key })); } catch { warnUnavailable(); }
+    find(identity, occurrence) { const id = storageKey(identity); return read()[id]?.[occurrence] ?? fallback.get(`${id}:${occurrence}`) ?? null; },
+    remember(identity, key) {
+      const id = storageKey(identity);
+      const existing = read()[id] ?? fallbackValues(id);
+      if (existing.includes(key)) return;
+      fallback.set(`${id}:${existing.length}`, key);
+      try { sessionStorage.setItem("puizeru:media-upload-identities", JSON.stringify({ ...read(), [id]: [...existing, key] })); } catch { warnUnavailable(); }
     },
-    forget(file, purpose, key) {
-      const id = signature(file, purpose);
-      if (fallback.get(id) === key) fallback.delete(id);
+    forget(identity, key) {
+      const id = storageKey(identity);
+      for (const candidate of [...fallback.keys()]) if (fallback.get(candidate) === key) fallback.delete(candidate);
       try {
         const stored = read();
-        if (stored[id] === key) delete stored[id];
-        sessionStorage.setItem("puizeru:media-upload-identities", JSON.stringify(stored));
-      } catch { warnUnavailable(); }
-    },
-    discard(file, purpose) {
-      const id = signature(file, purpose);
-      fallback.delete(id);
-      try {
-        const stored = read();
-        delete stored[id];
+        const remaining = (stored[id] ?? []).filter((candidate) => candidate !== key);
+        if (remaining.length) stored[id] = remaining; else delete stored[id];
         sessionStorage.setItem("puizeru:media-upload-identities", JSON.stringify(stored));
       } catch { warnUnavailable(); }
     },
   };
+}
+
+async function contentIdentity(file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"]): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return JSON.stringify([purpose, file.name, file.size, file.type, file.lastModified ?? null, hash]);
 }
 
 /**
@@ -123,7 +127,7 @@ export function createMediaBatchUpload(input: Readonly<{
       }), cancellation]);
       if (cancelled) update(item.idempotencyKey, { status: "cancelled" });
       else {
-        input.identityStore?.forget?.(item.file, item.purpose, item.idempotencyKey);
+        input.identityStore?.forget?.(item.identity, item.idempotencyKey);
         update(item.idempotencyKey, { status: "succeeded", assetId: result.assetId, thumbnailState: result.thumbnailState });
       }
     } catch (error) {
@@ -154,20 +158,19 @@ export function createMediaBatchUpload(input: Readonly<{
   };
 
   return {
-    add(selected: readonly MediaBatchFile["file"][], purpose: MediaBatchFile["purpose"] = "gallery_image") {
-      const activeKeys = new Set(files.filter((item) => ["queued", "uploading", "processing"].includes(item.status)).map((item) => item.idempotencyKey));
-      const signatures = selected.map((file) => JSON.stringify([purpose, file.name, file.size, file.type, file.lastModified ?? null]));
-      const ambiguous = new Set(signatures.filter((signature, index) => signatures.indexOf(signature) !== index || signatures.lastIndexOf(signature) !== index));
-      if (ambiguous.size) console.warn("media_upload_identity_ambiguous");
-      files = [...files, ...selected.flatMap((file) => {
-        const signature = JSON.stringify([purpose, file.name, file.size, file.type, file.lastModified ?? null]);
-        const persistIdentity = !ambiguous.has(signature);
-        if (!persistIdentity) input.identityStore?.discard?.(file, purpose);
-        const idempotencyKey = (persistIdentity ? input.identityStore?.find(file, purpose) : null) ?? createId(file, purpose);
+    async add(selected: readonly MediaBatchFile["file"][], purpose: MediaBatchFile["purpose"] = "gallery_image") {
+      const activeKeys = new Set(files.map((item) => item.idempotencyKey));
+      const prepared: Array<Readonly<{ file: MediaBatchFile["file"]; identity: string }>> = [];
+      for (const file of selected) prepared.push({ file, identity: await contentIdentity(file, purpose) });
+      const occurrences = new Map<string, number>();
+      files = [...files, ...prepared.flatMap(({ file, identity }) => {
+        const occurrence = occurrences.get(identity) ?? 0;
+        occurrences.set(identity, occurrence + 1);
+        const idempotencyKey = input.identityStore?.find(identity, occurrence) ?? createId(file, purpose);
         if (activeKeys.has(idempotencyKey)) return [];
         activeKeys.add(idempotencyKey);
-        if (persistIdentity) input.identityStore?.remember(file, purpose, idempotencyKey);
-        return [{ idempotencyKey, file, purpose, status: "queued" as const, uploadedBytes: 0,
+        input.identityStore?.remember(identity, idempotencyKey);
+        return [{ idempotencyKey, identity, file, purpose, status: "queued" as const, uploadedBytes: 0,
           error: null, assetId: null, thumbnailState: null }];
       })];
       emit();

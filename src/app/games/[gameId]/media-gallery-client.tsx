@@ -57,7 +57,7 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
   const [galleryError, setGalleryError] = useState("");
   const [uploadSummary, setUploadSummary] = useState("");
   const [busy, setBusy] = useState(false);
-  const [undoAssetId, setUndoAssetId] = useState<string | null>(null);
+  const [undoAssetIds, setUndoAssetIds] = useState<readonly string[]>([]);
   const [preview, setPreview] = useState<Readonly<{ url: string; name: string; download: () => Promise<void> }> | null>(null);
   const galleryLoad = useRef<Promise<boolean> | null>(null);
   const [batch] = useState(() => createMediaBatchUpload({
@@ -121,18 +121,36 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
 
   async function chooseFiles(selected: FileList | null) {
     if (!selected?.length) return;
-    const candidates = purpose === "custom_cover" ? [...selected].slice(0, 1) : [...selected];
+    const selectedPurpose = purpose;
+    const candidates = selectedPurpose === "custom_cover" ? [...selected].slice(0, 1) : [...selected];
     const accepted = candidates.filter((file) => {
       if (file.size > 0 && file.size <= MEDIA_MAX_BYTES) return true;
       setMessage(file.size === 0 ? `${file.name} 是空檔案。` : `${file.name} 超過 50 MB 上限。`);
       return false;
     });
     if (!accepted.length) return;
-    batch.add(accepted, purpose);
-    setMessage("批次已開始；離開頁面前請等候原檔保存完成。");
-    await batch.start();
-    await loadGallery();
-    if (purpose === "custom_cover") router.refresh();
+    const existingKeys = new Set(batch.snapshot().map((item) => item.idempotencyKey));
+    try {
+      setMessage("正在確認檔案內容……");
+      await batch.add(accepted, selectedPurpose);
+      setMessage("批次已開始；離開頁面前請等候原檔保存完成。");
+      await batch.start();
+      if (selectedPurpose === "custom_cover") {
+        const uploaded = batch.snapshot().find((item) => !existingKeys.has(item.idempotencyKey) && item.status === "succeeded" && item.assetId);
+        if (uploaded?.assetId) {
+          const applied = await action(
+            () => post(`/api/private/media/games/${gameId}/cover`, { mode: "manual", assetId: uploaded.assetId }),
+            "正在套用自訂封面……",
+            () => router.refresh(),
+          );
+          if (!applied) await loadGallery();
+          return;
+        }
+      }
+      await loadGallery();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "無法確認檔案內容，請重新選取。");
+    }
   }
 
   async function action(run: () => Promise<void>, pending: string, onCommitted?: () => void) {
@@ -172,7 +190,7 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
       () => post(`/api/private/media/assets/${item.asset.id}/remove`),
       "正在移除媒體……",
       () => {
-        setUndoAssetId(item.asset.id);
+        setUndoAssetIds((current) => [...current.filter((assetId) => assetId !== item.asset.id), item.asset.id]);
         setGallery((current) => current ? {
           ...current,
           manualCoverAssetId: current.manualCoverAssetId === item.asset.id ? null : current.manualCoverAssetId,
@@ -184,6 +202,7 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
   }
 
   const failedCount = files.filter((file) => file.status === "failed").length;
+  const undoAssetId = undoAssetIds.at(-1) ?? null;
   const images = gallery?.items.filter((item) => item.asset.purpose !== "attachment") ?? [];
   const attachments = gallery?.items.filter((item) => item.asset.purpose === "attachment") ?? [];
 
@@ -218,7 +237,7 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
     </div>
 
     <div className="border-t border-emerald-950/10 px-4 py-6 sm:px-6"><h3 className="text-lg font-semibold">遊戲附件</h3>{attachments.length === 0 ? <p className="mt-3 text-sm text-stone-600">尚未加入規則書或玩家輔助檔案。</p> : <div className="mt-3 space-y-3">{attachments.map((item) => <AttachmentCard key={item.asset.id} item={item} busy={busy} save={(body) => action(() => post(`/api/private/media/assets/${item.asset.id}/metadata`, body), "正在儲存附件說明……")} download={() => download(item)} remove={() => remove(item)} />)}</div>}</div>
-    {undoAssetId && <div role="status" className="fixed inset-x-4 bottom-4 z-40 flex min-h-12 items-center justify-between gap-3 rounded-xl bg-amber-100 px-4 text-sm text-amber-950 shadow-xl sm:left-auto sm:w-96">媒體已移除。<button className="font-semibold underline" onClick={() => void action(() => post(`/api/private/media/assets/${undoAssetId}/restore`), "正在還原媒體……", () => setUndoAssetId(null))}>立即還原</button></div>}
+    {undoAssetId && <div role="status" className="fixed inset-x-4 bottom-4 z-40 flex min-h-12 items-center justify-between gap-3 rounded-xl bg-amber-100 px-4 text-sm text-amber-950 shadow-xl sm:left-auto sm:w-96">已移除 {undoAssetIds.length} 個媒體。<button className="font-semibold underline" onClick={() => void action(() => post(`/api/private/media/assets/${undoAssetId}/restore`), "正在還原媒體……", () => setUndoAssetIds((current) => current.filter((assetId) => assetId !== undoAssetId)))}>立即還原</button></div>}
     {preview && <div role="dialog" aria-modal="true" aria-label={`${preview.name} 原檔預覽`} className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/75 p-4"><div className="max-h-full w-full max-w-lg overflow-auto rounded-2xl bg-white p-4"><Image unoptimized src={preview.url} alt={preview.name} width={1200} height={900} className="max-h-[70vh] w-full object-contain" /><div className="mt-3 grid grid-cols-2 gap-2"><button className="min-h-11 rounded-xl border" onClick={() => setPreview(null)}>關閉預覽</button><button className="min-h-11 rounded-xl bg-emerald-900 text-white" onClick={() => void preview.download()}>下載原檔</button></div></div></div>}
   </section>;
 }

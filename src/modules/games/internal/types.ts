@@ -103,6 +103,7 @@ export type GameRecord = Readonly<{
   playerCountNote: string | null;
   coverIngestState: "pending" | "ready" | "failed" | null;
   coverAssetId?: string | null;
+  coverThumbnailState?: "pending" | "processing" | "ready" | "failed" | null;
   trashedAt: string | null;
   externalIdentityId: string | null;
   snapshot: SourceSnapshot | null;

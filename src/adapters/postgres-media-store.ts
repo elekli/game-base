@@ -222,9 +222,6 @@ export class PostgresMediaStore implements MediaStore {
           on conflict (asset_id, kind) do nothing
         `);
       }
-      if (ingest.purpose === "custom_cover") {
-        await tx.execute(sql`update app_private.games set manual_cover_asset_id = ${ingest.reservedAssetId} where id = ${ingest.gameId}`);
-      }
       await tx.execute(sql`
         update app_private.media_ingests
         set state = 'finalized', lease_token = null, lease_until = null, finalized_at = now(),
