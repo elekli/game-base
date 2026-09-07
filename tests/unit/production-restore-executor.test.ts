@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -66,6 +66,9 @@ describe("production restore executor", () => {
     const commandRunner = vi.fn(async (invocation: ProductionRestoreCommandInvocation) => {
       invocations.push(invocation);
       if (invocation.purpose === "dump-source") {
+        const preparedDump = await stat(dumpPath);
+        expect(preparedDump.size).toBe(0);
+        expect(preparedDump.mode & 0o777).toBe(0o600);
         await writeFile(dumpPath, "bounded-production-data", { mode: 0o600 });
       }
       if (invocation.purpose === "verify-integrity") {

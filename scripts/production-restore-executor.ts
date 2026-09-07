@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readFile, rm, stat } from "node:fs/promises";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 
 import postgres from "postgres";
@@ -309,6 +309,8 @@ export function createProductionRestoreExecutor({
       if (action.kind === "dump-source") {
         assertInside(action.outputPath, runnerTempDir);
         assertInside(action.environment.PGSSLROOTCERT, runnerTempDir);
+        await rm(action.outputPath, { force: true });
+        await writeFile(action.outputPath, "", { flag: "wx", mode: action.outputMode });
         const containerDumpPath = `/runner/${basename(action.outputPath)}`;
         const containerCaPath = `/runner/${basename(action.environment.PGSSLROOTCERT)}`;
         const runDump = async (snapshotId: string) => {
