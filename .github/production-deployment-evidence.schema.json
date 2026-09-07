@@ -20,7 +20,7 @@
     "executionSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
     "releaseIdentity": { "type": "string", "pattern": "^production:[a-f0-9]{40}$" },
     "sourceManifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-    "canaryContractVersion": { "const": 1 },
+    "canaryContractVersion": { "const": 2 },
     "releaseKind": { "enum": ["code-only", "migration-bearing"] },
     "migrationTail": { "type": "string", "pattern": "^[0-9]{4,}$" },
     "baselineDeploymentId": { "type": "string", "pattern": "^dpl_[A-Za-z0-9]+$" },
@@ -38,9 +38,10 @@
     "smoke": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["outcome", "requestIds"],
+      "required": ["outcome", "generation", "requestIds"],
       "properties": {
         "outcome": { "enum": ["passed", "failed"] },
+        "generation": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
         "requestIds": {
           "type": "array", "maxItems": 16, "uniqueItems": true,
           "items": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" }

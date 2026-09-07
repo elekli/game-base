@@ -147,6 +147,7 @@ export type ProductionDeploymentPhase =
 type ReleaseContext = Readonly<{
   executionSha: string;
   releaseKind: ProductionReleaseKind;
+  smokeGeneration: string;
   sourceManifestSha256: string;
 }>;
 
@@ -216,6 +217,7 @@ export type ProductionDeploymentEvent =
 const FULL_SHA = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const DEPLOYMENT_ID = /^dpl_[A-Za-z0-9]+$/;
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 function failed(
   release: ProductionDeploymentRelease,
   failure: ProductionDeploymentFailure,
@@ -306,6 +308,9 @@ export function createProductionDeploymentRelease(
     throw new ProductionDeploymentReleaseError(
       "source manifest SHA-256 is invalid",
     );
+  }
+  if (!UUID_V4.test(context.smokeGeneration)) {
+    throw new ProductionDeploymentReleaseError("smoke generation is invalid");
   }
   return {
     ...context,
@@ -480,6 +485,7 @@ export function transitionProductionDeploymentRelease(
       if (event.deploymentId === release.stagedDeploymentId) {
         const smokeCanary = createProductionSmokeCanary({
           executionSha: release.executionSha,
+          generation: release.smokeGeneration,
         });
         return {
           ...release,
@@ -557,6 +563,12 @@ export function transitionProductionDeploymentRelease(
             phase: "inspecting-before-rollback",
             next: inspectCurrent("before-rollback"),
           };
+        }
+        if (
+          smokeCanary.phase === "manual-recovery-required" ||
+          smokeCanary.next.kind === "stop"
+        ) {
+          return manualRecovery(release, "smoke-cleanup-unverified");
         }
         return {
           ...release,

@@ -29,7 +29,9 @@ describe("production release contract", () => {
       required?: unknown;
       properties: {
         smoke: {
+          required?: string[];
           properties: {
+            generation: unknown;
             requestIds: unknown;
           };
         };
@@ -98,6 +100,8 @@ describe("production release contract", () => {
       productionDeploymentWriter:
         ".github/workflows/production-application-release.yml",
       productionDeploymentModel: "scripts/production-deployment-release.ts",
+      productionDeploymentModelSha256:
+        "e491156ff423e03872d95175236f86f3cde936b3254fe81d706e53776a96d093",
       productionDeploymentStatus:
         "blocked-external-prerequisites-and-staging-safety-verification",
       vercelDeploymentAdapter: "scripts/vercel-deployment-rest-adapter.ts",
@@ -150,7 +154,7 @@ describe("production release contract", () => {
       productionDeploymentEvidenceSchema:
         ".github/production-deployment-evidence.schema.json",
       productionDeploymentEvidenceSchemaSha256:
-        "4c0a1f5fa6b1ddd54f090e66b24bf11d90b0a6fe1d87dd587d43c23e99a41f8b",
+        "6f6296eb86e4eabf2138bac2ef0bb48151dded0b1883d1324b1cc93edc900018",
       productionDeploymentSourceManifestBuilderSha256:
         "2d6e5c5f805cf8a39ae186bebf63535bf128039d9b1b52ea6f478e879df90a67",
       productionDeploymentSourceManifestSchemaSha256:
@@ -158,9 +162,9 @@ describe("production release contract", () => {
       vercelDeploymentAdapterSha256:
         "e95dbbcd680c012ff5c56dc0aa5886a89b0ad9ef368f02a79ee27e31458cd014",
       productionSmokeContractSha256:
-        "30301fbfa2b15ca5a0e33a65fcb68998ce5bbf112e9499baca21ca1ef9b37166",
+        "4394d99c7888e4048b5e7e48206d2b1f3b24bb367531becf0978de6fad0ca269",
       productionSmokeModelSha256:
-        "f2062c6830759da1bcf7799156c2231b348fad20f105f1a72851d01d838f7d84",
+        "5aacb6018c3a94ed2532c90817d3c82a97a03ef2e08d9f2f1b1931d8f2e36fe6",
       productionRestoreModelSha256:
         "4bedd522a39f3792141ebb79d83a6b3d461c3a53e5ce28f1bbfd4c6de4323ae8",
       productionRestoreEvidenceSchemaSha256:
@@ -188,6 +192,17 @@ describe("production release contract", () => {
     expect(evidenceSchema.required).toContain("stagedDeploymentId");
     expect(evidenceSchema.required).toContain("releaseIdentity");
     expect(evidenceSchema.required).toContain("sourceManifestSha256");
+    expect(evidenceSchema.properties.canaryContractVersion).toEqual({ const: 2 });
+    expect(evidenceSchema.properties.smoke.required).toEqual([
+      "outcome",
+      "generation",
+      "requestIds",
+    ]);
+    expect(evidenceSchema.properties.smoke.properties.generation).toEqual({
+      type: "string",
+      pattern:
+        "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    });
     expect(evidenceSchema.properties.smoke.properties.requestIds).toEqual({
       type: "array",
       maxItems: 16,
