@@ -8,6 +8,7 @@ export type {
   MediaPurpose,
   MediaService,
   MediaUploadResult,
+  OriginalMediaRead,
   UploadGrant,
 } from "./contracts";
 
@@ -19,6 +20,9 @@ export {
   MediaGameUnavailableError,
   MediaOperationError,
   MediaStoredObjectInvalidError,
+  MediaAssetUnavailableError,
+  MediaStorageUnavailableError,
+  MediaReadUnavailableError,
   MediaUploadIdempotencyConflictError,
   MediaUploadIncompleteError,
 } from "./internal/errors";

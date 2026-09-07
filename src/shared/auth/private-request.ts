@@ -7,6 +7,7 @@ import { getRequestId } from "@/shared/observability/request-id";
 import { serializeBootstrapLogEvent } from "@/shared/observability/structured-log";
 import { SourceIdentityConflictError, SourceOperationError } from "@/modules/games/internal/errors";
 import { LibraryConflictError } from "@/modules/library/internal/errors";
+import { MediaOperationError } from "@/modules/media/internal/errors";
 
 type PrivateRequestDependencies<Result extends object> = Readonly<{
   operation: (owner: OwnerIdentity) => Promise<Result>;
@@ -79,6 +80,14 @@ export async function handlePrivateRequest<Result extends object>(
         ? { existingGameId: error.gameId, existingIsTrashed: error.trashed }
         : {};
       return safeErrorResponse(status, error.message, requestId, error.retryAfterSeconds === null ? {} : { "retry-after": String(error.retryAfterSeconds) }, conflictBody);
+    }
+    if (error instanceof MediaOperationError) {
+      const status = error.code === "media_file_empty" || error.code === "media_file_too_large" || error.code === "media_stored_object_invalid" ? 400
+        : error.code === "media_asset_unavailable" ? 404
+          : error.code === "media_upload_idempotency_conflict" || error.code === "media_game_unavailable" || error.code === "media_upload_incomplete" ? 409
+            : 503;
+      if (status >= 500) await observeFailureWithoutChangingResponse(requestId, () => dependencies.onUnhandledFailure({ errorCode: error.code, requestId }));
+      return safeErrorResponse(status, error.message, requestId);
     }
     if (error instanceof AccessDeniedError) {
       await observeFailureWithoutChangingResponse(requestId, () =>

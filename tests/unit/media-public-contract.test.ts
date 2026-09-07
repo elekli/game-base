@@ -12,7 +12,7 @@ type UploadGrant = Extract<BeginMediaUploadResult, Readonly<{ status: "upload_gr
 type PublicRuntimeExport = keyof typeof import("@/modules/media");
 
 const grantHidesObjectPath: HasKey<UploadGrant, "objectPath"> = false;
-const uploadCapabilityIsExecutable: UploadGrant["uploadUrl"] = "https://storage.example.test/upload/signed-capability";
+const uploadCapabilityIsExecutable: UploadGrant["upload"]["endpoint"] = "https://storage.example.test/upload/resumable/sign";
 const assetHidesObjectPath: HasKey<MediaAsset, "originalObjectPath"> = false;
 const publicEntryHidesComposition: Extract<PublicRuntimeExport, "createMediaService" | "createInMemoryMediaStore"> extends never ? true : false = true;
 const hiddenInternalTypes: [MediaStore, MediaObjectStore, MediaIngest] | null = null;

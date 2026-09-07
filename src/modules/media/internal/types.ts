@@ -11,6 +11,7 @@ export type ImageMediaPurpose = Exclude<MediaPurpose, "attachment">;
 
 export type MediaObjectStore = Readonly<{
   createUploadGrant(path: string): Promise<Readonly<{ uploadUrl: string; token: string; expiresAt: string }>>;
+  createOriginalReadGrant(path: string, fileName: string, expiresInSeconds: 60): Promise<Readonly<{ url: string; expiresAt: string }>>;
   inspect(path: string): Promise<Readonly<{ path: string; byteSize: number; mimeType: string }> | null>;
   read(path: string): AsyncIterable<Uint8Array>;
 }>;
@@ -55,4 +56,5 @@ export type MediaStore = Readonly<{
   releaseIncomplete(idempotencyKey: string, leaseToken: string): Promise<void>;
   rejectInvalid(idempotencyKey: string, leaseToken: string): Promise<void>;
   completeFinalize(idempotencyKey: string, leaseToken: string, object: ValidatedMediaObject): Promise<MediaUploadResult>;
+  findReadableOriginal(assetId: string): Promise<Readonly<{ path: string; fileName: string }> | null>;
 }>;

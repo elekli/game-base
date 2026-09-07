@@ -231,4 +231,21 @@ export class PostgresMediaStore implements MediaStore {
       return result;
     });
   }
+
+  async findReadableOriginal(assetId: string): Promise<Readonly<{ path: string; fileName: string }> | null> {
+    const rows = await this.db.execute(sql`
+      select asset.original_object_path, asset.original_file_name
+      from app_private.media_assets asset
+      join app_private.media_ingests ingest on ingest.id = asset.ingest_id
+      join app_private.games game on game.id = asset.game_id
+      where asset.id = ${assetId}
+        and asset.authority_state = 'verified'
+        and asset.removed_at is null
+        and asset.superseded_at is null
+        and ingest.state = 'finalized'
+        and game.trashed_at is null
+      limit 1
+    `) as Row[];
+    return rows[0] ? { path: String(rows[0].original_object_path), fileName: String(rows[0].original_file_name) } : null;
+  }
 }

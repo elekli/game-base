@@ -17,10 +17,25 @@ export type UploadGrant = Readonly<{
   status: "upload_grant";
   ingestId: string;
   assetId: string;
-  uploadUrl: string;
-  token: string;
+  upload: Readonly<{
+    protocol: "tus";
+    endpoint: string;
+    headers: Readonly<{ "x-signature": string }>;
+    metadata: Readonly<{ bucketName: "game-media"; objectName: string; contentType: string; cacheControl: "0" }>;
+    declaredByteSize: number;
+    maxByteSize: number;
+    chunkSize: 6291456;
+    retryDelays: readonly [0, 3000, 5000, 10000, 20000];
+    uploadDataDuringCreation: true;
+    resumeFromPreviousUpload: true;
+    removeFingerprintOnSuccess: true;
+    upsert: false;
+    fingerprint: string;
+  }>;
   expiresAt: string;
 }>;
+
+export type OriginalMediaRead = Readonly<{ status: "original_read"; url: string; expiresAt: string; disposition: "attachment" }>;
 
 export type MediaAsset = Readonly<{
   id: string;
@@ -55,4 +70,5 @@ export type FinalizeMediaUploadResult = MediaUploadResult | Readonly<{ status: "
 export type MediaService = Readonly<{
   beginMediaUpload(owner: OwnerIdentity, command: BeginMediaUploadCommand): Promise<BeginMediaUploadResult>;
   finalizeMediaUpload(owner: OwnerIdentity, command: FinalizeMediaUploadCommand): Promise<FinalizeMediaUploadResult>;
+  issueOriginalRead(owner: OwnerIdentity, query: Readonly<{ assetId: string }>): Promise<OriginalMediaRead>;
 }>;

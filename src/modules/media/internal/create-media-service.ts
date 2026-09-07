@@ -9,6 +9,9 @@ import {
   MediaOperationError,
   MediaStoredObjectInvalidError,
   MediaUploadIncompleteError,
+  MediaAssetUnavailableError,
+  MediaStorageUnavailableError,
+  MediaReadUnavailableError,
 } from "./errors";
 import { identifyAttachmentMime, validateRasterImage } from "./image-header";
 import type { MediaIngest, MediaObjectStore, MediaStore, ValidatedMediaObject } from "./types";
@@ -48,8 +51,29 @@ export function createMediaService(dependencies: Readonly<{ store: MediaStore; o
         const { ingest } = begun;
         await dependencies.store.renewGrant(ingest.idempotencyKey, ingest.originalObjectPath, staleAfter);
         const grant = await dependencies.objects.createUploadGrant(ingest.originalObjectPath);
-        return { status: "upload_grant", ingestId: ingest.id, assetId: ingest.reservedAssetId, ...grant };
+        return {
+          status: "upload_grant",
+          ingestId: ingest.id,
+          assetId: ingest.reservedAssetId,
+          upload: {
+            protocol: "tus",
+            endpoint: grant.uploadUrl,
+            headers: { "x-signature": grant.token },
+            metadata: { bucketName: "game-media", objectName: ingest.originalObjectPath, contentType: normalizeMime(ingest.declaredMimeType), cacheControl: "0" },
+            declaredByteSize: ingest.declaredByteSize,
+            maxByteSize: 52_428_800,
+            chunkSize: 6_291_456,
+            retryDelays: [0, 3_000, 5_000, 10_000, 20_000],
+            uploadDataDuringCreation: true,
+            resumeFromPreviousUpload: true,
+            removeFingerprintOnSuccess: true,
+            upsert: false,
+            fingerprint: `puizeru:${ingest.id}:${ingest.originalObjectPath}`,
+          },
+          expiresAt: grant.expiresAt,
+        };
       } catch (error) {
+        if (error instanceof MediaStorageUnavailableError) throw new MediaBeginUnavailableError();
         if (error instanceof MediaOperationError) throw error;
         throw new MediaBeginUnavailableError();
       }
@@ -78,9 +102,22 @@ export function createMediaService(dependencies: Readonly<{ store: MediaStore; o
           if (transitionError instanceof MediaOperationError) throw transitionError;
           throw new MediaFinalizeUnavailableError();
         }
+        if (error instanceof MediaStorageUnavailableError) throw new MediaFinalizeUnavailableError();
         if (error instanceof MediaOperationError) throw error;
         throw new MediaFinalizeUnavailableError();
       }
+    },
+    async issueOriginalRead(owner, query) {
+      void owner;
+      let original: Awaited<ReturnType<MediaStore["findReadableOriginal"]>>;
+      try {
+        original = await dependencies.store.findReadableOriginal(query.assetId);
+      } catch { throw new MediaReadUnavailableError(); }
+      if (!original) throw new MediaAssetUnavailableError();
+      try {
+        const grant = await dependencies.objects.createOriginalReadGrant(original.path, original.fileName, 60);
+        return { status: "original_read", ...grant, disposition: "attachment" };
+      } catch (error) { throw error instanceof MediaOperationError ? error : new MediaStorageUnavailableError(); }
     },
   };
 }
