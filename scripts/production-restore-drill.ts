@@ -124,7 +124,7 @@ export type ProductionRestoreExecutorResult =
   | Readonly<{ outcome: "failed"; safeDetail: string }>;
 
 export type ProductionRestoreLocalExecutor = Readonly<{
-  kind: "fake-local";
+  kind: "fake-local" | "native-local";
   execute(action: Exclude<ProductionRestoreAction, { kind: "stop" }>): Promise<ProductionRestoreExecutorResult>;
 }>;
 
