@@ -8,6 +8,7 @@ import { MAX_PRODUCTION_SOURCE_BLOB_BYTES } from "../../scripts/production-deplo
 import {
   VercelDeploymentIdentityAmbiguousError,
   VercelDeploymentMutationDisabledError,
+  VercelDeploymentRequestContractError,
   VercelDeploymentValidationError,
   VercelStagedProductionSafetyUnverifiedError,
   buildCreateVercelDeploymentRequest,
@@ -153,8 +154,8 @@ describe("Vercel deployment REST adapter contract", () => {
         releaseIdentity: RELEASE_IDENTITY,
         sourceManifestArtifact: SOURCE_ARTIFACT,
         stagedProductionSafetyVerified: true,
-      }),
-    ).toThrow(VercelStagedProductionSafetyUnverifiedError);
+      } as Parameters<typeof buildCreateVercelDeploymentRequest>[0]),
+    ).toThrow(VercelDeploymentRequestContractError);
   });
 
   it("derives create files, commit, and digest only from a verified canonical artifact", () => {

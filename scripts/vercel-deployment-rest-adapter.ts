@@ -191,15 +191,13 @@ export function buildCreateVercelDeploymentRequest(input: Readonly<{
   projectName: string;
   releaseIdentity: string;
   sourceManifestArtifact: CanonicalProductionDeploymentSourceManifest;
-  stagedProductionSafetyVerified?: true;
 }>): never {
   if (
     !isRecord(input) ||
-    (Object.keys(input).length !== 3 && Object.keys(input).length !== 4) ||
+    Object.keys(input).length !== 3 ||
     !Object.hasOwn(input, "projectName") ||
     !Object.hasOwn(input, "releaseIdentity") ||
-    !Object.hasOwn(input, "sourceManifestArtifact") ||
-    (input.stagedProductionSafetyVerified !== undefined && input.stagedProductionSafetyVerified !== true)
+    !Object.hasOwn(input, "sourceManifestArtifact")
   ) {
     throw new VercelDeploymentRequestContractError();
   }
@@ -217,7 +215,6 @@ export function buildCreateVercelDeploymentRequest(input: Readonly<{
   ) {
     throw new VercelDeploymentRequestContractError();
   }
-  void verifiedSource;
   throw new VercelStagedProductionSafetyUnverifiedError();
 }
 
@@ -443,88 +440,6 @@ export function parseReadyVercelProductionDeployment(
   return { deploymentId: deployment.deploymentId, url: deployment.url };
 }
 
-export type VercelDeploymentRestAdapter = Readonly<{
-  getCurrentProductionDeployment(customDomain: string, projectId: string): Promise<unknown>;
-  ensureStagedDeployment(input: Readonly<{
-    projectName: string;
-    projectId: string;
-    commitSha: string;
-    releaseIdentity: string;
-    sourceManifestArtifact: CanonicalProductionDeploymentSourceManifest;
-    readFileBytes(file: ProductionDeploymentSourceManifestFile): Promise<Uint8Array>;
-  }>): Promise<Readonly<{ deploymentId: string; source: "created" | "reused" }>>;
-  getDeployment(deploymentId: string): Promise<unknown>;
-  promote(deploymentId: string, projectId: string): Promise<void>;
-  rollback(deploymentId: string, projectId: string): Promise<void>;
-}>;
-
-export type VercelDeploymentRestTransport = Readonly<{
-  getJson(path: string, query?: Readonly<Record<string, string | number>>): Promise<unknown>;
-  postJson(path: string, body?: unknown, headers?: Readonly<Record<string, string>>): Promise<unknown>;
-  postBytes(path: string, body: Uint8Array, headers: Readonly<Record<string, string>>): Promise<unknown>;
-}>;
-
-export function createVercelDeploymentRestAdapter(input?: Readonly<{
-  liveMutationsEnabled: boolean;
-  stagedProductionSafetyVerified: boolean;
-  transport: VercelDeploymentRestTransport;
-}>): VercelDeploymentRestAdapter {
-  void input;
+export function createVercelDeploymentRestAdapter(): never {
   throw new VercelDeploymentMutationDisabledError();
-
-  /* return {
-    async getCurrentProductionDeployment(customDomain, projectId) {
-      const request = buildGetVercelProductionAliasRequest({ customDomain, projectId });
-      const alias = await input.transport.getJson(request.path, request.query);
-      const id = parseVercelProductionAlias(alias, { customDomain, projectId });
-      return input.transport.getJson(buildGetVercelDeploymentRequest(id).path);
-    },
-    async ensureStagedDeployment({ projectName, projectId, commitSha, releaseIdentity, sourceManifestArtifact, readFileBytes }) {
-      validateIdentity({ projectId, commitSha, releaseIdentity, sourceManifestSha256: sourceManifestArtifact.sourceManifestSha256 });
-      const pages: unknown[] = [];
-      let until: number | undefined;
-      for (let page = 0; page < MAX_PAGES; page += 1) {
-        const request = buildListVercelProductionDeploymentsRequest({ commitSha, projectId, until });
-        const response = await input.transport.getJson(request.path, request.query);
-        pages.push({ requestUntil: until, response });
-        const pagination = isRecord(response) && isRecord(response.pagination) ? response.pagination : undefined;
-        if (pagination?.next === null) break;
-        const next = pagination?.next;
-        if (!Number.isSafeInteger(next) || (next as number) < 0) {
-          throw new VercelDeploymentMalformedResponseError();
-        }
-        until = next as number;
-        if (page === MAX_PAGES - 1) throw new VercelDeploymentMalformedResponseError();
-      }
-      const reusable = resolveReusableVercelProductionDeployment({
-        expected: { commitSha, projectId, releaseIdentity, sourceManifestSha256: sourceManifestArtifact.sourceManifestSha256 },
-        pages,
-      });
-      if (reusable.kind === "reuse") return { deploymentId: reusable.deployment.deploymentId, source: "reused" };
-      for (const file of sourceManifestArtifact.manifest.files) {
-        const bytes = await readFileBytes(file);
-        const upload = buildUploadVercelFileRequest(bytes, file);
-        await input.transport.postBytes(upload.path, upload.body!, upload.headers!);
-      }
-      const create = buildCreateVercelDeploymentRequest({ projectName, releaseIdentity, sourceManifestArtifact, stagedProductionSafetyVerified: true });
-      const created = await input.transport.postJson(create.path, create.body);
-      const parsed = parseDeployment(created);
-      if (!matchesIdentity(parsed, { commitSha, projectId, releaseIdentity, sourceManifestSha256: sourceManifestArtifact.sourceManifestSha256 })) {
-        throw new VercelDeploymentValidationError();
-      }
-      return { deploymentId: parsed.deploymentId, source: "created" };
-    },
-    async getDeployment(deploymentId) {
-      const request = buildGetVercelDeploymentRequest(deploymentId);
-      return input.transport.getJson(request.path);
-    },
-    async promote(deploymentId, projectId) {
-      const request = buildPromoteVercelDeploymentRequest({ deploymentId, projectId });
-      await input.transport.postJson(request.path);
-    },
-    async rollback(deploymentId, projectId) {
-      const request = buildRollbackVercelDeploymentRequest({ deploymentId, projectId });
-      await input.transport.postJson(request.path);
-    },
-  }; */
 }

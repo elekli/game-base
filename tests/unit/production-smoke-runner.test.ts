@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createProductionSmokeRunner, ProductionSmokePrerequisiteError, ProductionSmokeResponseError } from "../../scripts/production-smoke-runner";
-
-const action = { kind: "write-canary-row", rowId: "7355773e-c3b5-4e5d-9f07-55ac0e22f384", identity: `release-smoke-v1:${"a".repeat(40)}`, payloadSha256: "b".repeat(64) } as const;
+import {
+  createProductionSmokeRunner,
+  ProductionSmokePrerequisiteError,
+} from "../../scripts/production-smoke-runner";
 const input = { principalStatus: "approved" as const, routeAndSchemaStatus: "approved" as const, customDomain: "game.example.com", cfAccessClientId: "id", cfAccessClientSecret: "secret" };
 
 describe("production smoke runner", () => {

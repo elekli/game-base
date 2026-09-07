@@ -137,7 +137,7 @@ describe("production release contract", () => {
       productionDeploymentSourceManifestSchemaSha256:
         "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
       vercelDeploymentAdapterSha256:
-        "6743392c693efd09207da8ab94c68fcfd9d4cb8c94a2d943fb08b956392c782e",
+        "e95dbbcd680c012ff5c56dc0aa5886a89b0ad9ef368f02a79ee27e31458cd014",
       productionSmokeContractSha256:
         "30301fbfa2b15ca5a0e33a65fcb68998ce5bbf112e9499baca21ca1ef9b37166",
       productionSmokeModelSha256:
