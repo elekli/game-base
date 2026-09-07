@@ -59,7 +59,7 @@
   "productionRestoreModel": "scripts/production-restore-drill.ts",
   "productionRestoreModelSha256": "96604eb799d32eefff62297efafe8e18cca595cc6d4505083f60ead85402f028",
   "productionRestoreExecutor": "scripts/production-restore-executor.ts",
-  "productionRestoreExecutorSha256": "6e19b32435954852b13fe1777d4d4a0aae8218242366ec2821fa894f5d1baeb2",
+  "productionRestoreExecutorSha256": "bdeb49c6fa4f0d67e9b2135454c85e44b658729484e815db43e38fe4fbed53d5",
   "productionRestoreIntegrityChecker": "scripts/check-production-restore-integrity.ts",
   "productionRestoreIntegrityCheckerSha256": "60a12f3fa541ff0dbbc14ee0c954893648d4a6b01d1a3a67bd23faafa9b6ee28",
   "productionRestoreRunner": "scripts/production-restore.ts",

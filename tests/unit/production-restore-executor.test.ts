@@ -221,34 +221,57 @@ describe("production restore executor", () => {
       label: "restore failure",
       failRestore: true,
       failRevoke: false,
+      failClientCleanup: false,
       safeDetail: "restore-dump failed (permission-denied)",
     },
     {
       label: "role cleanup failure",
       failRestore: false,
       failRevoke: true,
+      failClientCleanup: false,
       safeDetail: "restore role cleanup failed",
     },
     {
       label: "restore and role cleanup failure",
       failRestore: true,
       failRevoke: true,
+      failClientCleanup: false,
       safeDetail: "restore-dump failed (permission-denied); restore role cleanup failed",
     },
-  ])("revokes the temporary restore role after $label", async ({ failRestore, failRevoke, safeDetail }) => {
+    {
+      label: "restore and client cleanup failure",
+      failRestore: true,
+      failRevoke: false,
+      failClientCleanup: true,
+      safeDetail: "restore-dump failed (permission-denied); isolated client cleanup failed",
+    },
+  ])("revokes the temporary restore role after $label", async ({ failRestore, failRevoke, failClientCleanup, safeDetail }) => {
     const runnerTempDir = await mkdtemp(join(tmpdir(), "production-restore-executor-"));
     workspaces.push(runnerTempDir);
     const caPath = join(runnerTempDir, "production-ca.pem");
     const dumpPath = join(runnerTempDir, "production.dump");
     await writeFile(caPath, "fixture-ca", { mode: 0o600 });
     const purposes: string[] = [];
+    let restoreFailed = false;
+    let failedClientReported = false;
     const commandRunner = vi.fn(async (invocation: ProductionRestoreCommandInvocation) => {
       purposes.push(invocation.purpose);
       if (invocation.purpose === "dump-source") {
         await writeFile(dumpPath, "bounded-production-data", { mode: 0o600 });
       }
       if (invocation.purpose === "restore-dump" && failRestore) {
+        restoreFailed = true;
         throw new ProductionRestoreCommandError("restore-dump failed (permission-denied)");
+      }
+      if (
+        invocation.purpose === "inspect-client-container" &&
+        failClientCleanup && restoreFailed && !failedClientReported
+      ) {
+        failedClientReported = true;
+        return { stdout: "puizeru_restore_load_client\n", stderr: "" };
+      }
+      if (invocation.purpose === "cleanup-client-container" && failClientCleanup) {
+        throw new Error("private client cleanup detail must not leak");
       }
       if (invocation.purpose === "revoke-local-restore-role" && failRevoke) {
         throw new Error("private cleanup detail must not leak");
@@ -280,6 +303,7 @@ describe("production restore executor", () => {
     expect(purposes).toContain("revoke-local-restore-role");
     expect(purposes.at(-1)).toBe("drop-local-target");
     expect(JSON.stringify(result)).not.toContain("private cleanup detail must not leak");
+    expect(JSON.stringify(result)).not.toContain("private client cleanup detail must not leak");
   });
 
   it("fails and cleans the target when restored data differs from the exported snapshot", async () => {

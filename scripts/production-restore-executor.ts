@@ -360,8 +360,21 @@ export function createProductionRestoreExecutor({
       await commandRunner(command, sensitiveEnvironment);
       ownedClients.delete(containerName);
     } catch (error) {
-      await removeClientIfPresent(containerName);
+      let clientCleanupFailed = false;
+      try {
+        await removeClientIfPresent(containerName);
+      } catch {
+        clientCleanupFailed = true;
+      }
       ownedClients.delete(containerName);
+      if (clientCleanupFailed) {
+        const primarySafeDetail = error instanceof ProductionRestoreCommandError
+          ? error.safeDetail
+          : `${command.purpose} failed`;
+        throw new ProductionRestoreCommandError(
+          `${primarySafeDetail}; isolated client cleanup failed`,
+        );
+      }
       throw error;
     }
   };
