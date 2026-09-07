@@ -188,6 +188,8 @@ describe("production restore executor", () => {
       "clear-local-target-data",
       "inspect-client-container",
       "restore-dump",
+      "inspect-client-container",
+      "revoke-local-restore-role",
       "verify-integrity",
       "drop-local-target",
     ]);
@@ -201,8 +203,78 @@ describe("production restore executor", () => {
     expect(serialized).toContain("grant app_migrator to postgres");
     expect(serialized).toContain("set role app_migrator");
     expect(serialized).toContain("truncate table");
+    const clearInvocation = invocations.find(({ purpose }) => purpose === "clear-local-target-data");
+    expect(JSON.stringify(clearInvocation)).not.toContain("revoke app_migrator from postgres");
+    const restoreInvocation = invocations.find(({ purpose }) => purpose === "restore-dump");
+    expect(restoreInvocation?.argv).toContain("--role=app_migrator");
     expect(serialized).toContain("revoke app_migrator from postgres");
-    expect(serialized).toContain("revoke app_migrator from postgres; commit;");
+    expect(serialized).toContain("revoke app_migrator from postgres;");
+  });
+
+  it.each([
+    {
+      label: "restore failure",
+      failRestore: true,
+      failRevoke: false,
+      safeDetail: "restore-dump failed (permission-denied)",
+    },
+    {
+      label: "role cleanup failure",
+      failRestore: false,
+      failRevoke: true,
+      safeDetail: "restore role cleanup failed",
+    },
+    {
+      label: "restore and role cleanup failure",
+      failRestore: true,
+      failRevoke: true,
+      safeDetail: "restore-dump failed (permission-denied); restore role cleanup failed",
+    },
+  ])("revokes the temporary restore role after $label", async ({ failRestore, failRevoke, safeDetail }) => {
+    const runnerTempDir = await mkdtemp(join(tmpdir(), "production-restore-executor-"));
+    workspaces.push(runnerTempDir);
+    const caPath = join(runnerTempDir, "production-ca.pem");
+    const dumpPath = join(runnerTempDir, "production.dump");
+    await writeFile(caPath, "fixture-ca", { mode: 0o600 });
+    const purposes: string[] = [];
+    const commandRunner = vi.fn(async (invocation: ProductionRestoreCommandInvocation) => {
+      purposes.push(invocation.purpose);
+      if (invocation.purpose === "dump-source") {
+        await writeFile(dumpPath, "bounded-production-data", { mode: 0o600 });
+      }
+      if (invocation.purpose === "restore-dump" && failRestore) {
+        throw new ProductionRestoreCommandError("restore-dump failed (permission-denied)");
+      }
+      if (invocation.purpose === "revoke-local-restore-role" && failRevoke) {
+        throw new Error("private cleanup detail must not leak");
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const result = await runProductionRestoreDrill(
+      createProductionRestoreDrill({
+        source: { ...SOURCE, caPath }, runnerTempDir, runnerTempMode: 0o700, dumpPath, dumpMode: 0o600,
+      }),
+      createProductionRestoreExecutor({
+        captureSourceSnapshot: async (runDump) => {
+          await runDump("fixture-snapshot");
+          return DATA_MANIFEST;
+        },
+        collectTargetManifest: async () => DATA_MANIFEST,
+        commandRunner,
+        repositoryRoot: process.cwd(),
+        runnerTempDir,
+        sourcePassword: "source-password-must-not-leak",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      phase: "failed",
+      targetOwnership: "not-owned",
+      failure: { safeDetail },
+    });
+    expect(purposes).toContain("revoke-local-restore-role");
+    expect(purposes.at(-1)).toBe("drop-local-target");
+    expect(JSON.stringify(result)).not.toContain("private cleanup detail must not leak");
   });
 
   it("fails and cleans the target when restored data differs from the exported snapshot", async () => {

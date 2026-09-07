@@ -209,7 +209,7 @@ describe("production release contract", () => {
       productionRestoreModelSha256:
         "96604eb799d32eefff62297efafe8e18cca595cc6d4505083f60ead85402f028",
       productionRestoreExecutorSha256:
-        "aeb5f0fda2cbe838b8cac187e95922fb8df43e9b27f6ca561291af0aaaf644c3",
+        "2909d4aec3879bf6cc5bb02e2aebfea067e145edbedf3dcd84adee96b3bfd3a1",
       productionRestoreIntegrityCheckerSha256:
         "60a12f3fa541ff0dbbc14ee0c954893648d4a6b01d1a3a67bd23faafa9b6ee28",
       productionRestoreRunnerSha256:
