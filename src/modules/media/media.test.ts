@@ -549,4 +549,23 @@ describe("媒體公開介面", () => {
     expect(result.asset.actualMimeType).toBe("application/octet-stream");
     expect(result.thumbnail).toBeNull();
   });
+
+  it("相簿公開介面可更新說明、選用人工封面並恢復來源封面", async () => {
+    const store = createInMemoryMediaStore({ activeGameIds: [gameId] });
+    const service = createMediaService({ store, objects: objectStore({ bytes: png(), mimeType: "image/png" }) });
+    await service.beginMediaUpload(owner, command());
+    const finalized = await service.finalizeMediaUpload(owner, { idempotencyKey });
+    if ("status" in finalized) throw new Error("expected finalized upload");
+
+    await expect(service.updateMediaMetadata(owner, { assetId: finalized.asset.id, caption: "  桌遊夜  " }))
+      .resolves.toMatchObject({ caption: "桌遊夜" });
+    await expect(service.selectManualCover(owner, { gameId, assetId: finalized.asset.id }))
+      .resolves.toEqual({ manualCoverAssetId: finalized.asset.id });
+    await expect(service.listGameMedia(owner, { gameId })).resolves.toMatchObject({
+      gameId, manualCoverAssetId: finalized.asset.id,
+      items: [{ asset: { id: finalized.asset.id, caption: "桌遊夜" }, thumbnailUrl: null }],
+    });
+    await expect(service.useSourceCover(owner, { gameId })).resolves.toEqual({ manualCoverAssetId: null });
+    await expect(service.listGameMedia(owner, { gameId })).resolves.toMatchObject({ manualCoverAssetId: null });
+  });
 });

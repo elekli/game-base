@@ -13,6 +13,7 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
   const ingests = new Map<string, MediaIngest>();
   const results = new Map<string, MediaUploadResult>();
   const thumbnails = new Map<string, { state: "pending" | "processing" | "ready" | "failed"; attemptCount: number; cycleAttemptCount: number; cycle: number; leaseToken: string | null; leaseUntil: string | null; activeAttemptId: string | null }>();
+  const manualCovers = new Map<string, string>();
 
   function replaceThumbnail(assetId: string, state: "pending" | "processing" | "ready" | "failed"): MediaUploadResult | null {
     for (const [key, result] of results) {
@@ -99,6 +100,9 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
         height: object.height,
         removedAt: null,
         createdAt: now,
+        caption: null,
+        displayName: null,
+        description: null,
       };
       const thumbnail = ingest.purpose === "attachment" ? null : { assetId: asset.id, spec: MEDIA_THUMBNAIL_SPEC, state: "pending" as const };
       const result = { asset, thumbnail };
@@ -152,6 +156,41 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
       if (!job || !updated?.thumbnail || job.state !== "failed") throw new MediaFinalizeUnavailableError();
       thumbnails.set(assetId, { ...job, state: "pending", cycle: job.cycle + 1, cycleAttemptCount: 0, leaseToken: null, leaseUntil: null, activeAttemptId: null });
       return updated.thumbnail;
+    },
+    async listGameMedia(gameId) {
+      if (!games.has(gameId)) throw new MediaGameUnavailableError();
+      return {
+        manualCoverAssetId: manualCovers.get(gameId) ?? null,
+        sourceCover: null,
+        items: [...results.values()].filter((result) => result.asset.gameId === gameId && result.asset.removedAt === null).map((result) => ({
+          asset: result.asset, thumbnail: result.thumbnail, thumbnailPath: null,
+        })),
+      };
+    },
+    async updateMediaMetadata(command) {
+      for (const [key, result] of results) {
+        if (result.asset.id !== command.assetId || result.asset.removedAt !== null || result.asset.purpose === "custom_cover") continue;
+        const clean = (value: string | null | undefined) => value === undefined ? undefined : value?.trim() || null;
+        const updated = { ...result, asset: { ...result.asset,
+          ...(command.caption === undefined ? {} : { caption: clean(command.caption) }),
+          ...(command.displayName === undefined ? {} : { displayName: clean(command.displayName) }),
+          ...(command.description === undefined ? {} : { description: clean(command.description) }),
+        } };
+        results.set(key, updated);
+        return updated.asset;
+      }
+      return null;
+    },
+    async selectManualCover(gameId, assetId) {
+      const asset = [...results.values()].find((result) => result.asset.id === assetId)?.asset;
+      if (!games.has(gameId) || !asset || asset.gameId !== gameId || asset.removedAt !== null || !["gallery_image", "custom_cover"].includes(asset.purpose)) return false;
+      manualCovers.set(gameId, assetId);
+      return true;
+    },
+    async useSourceCover(gameId) {
+      if (!games.has(gameId)) return false;
+      manualCovers.delete(gameId);
+      return true;
     },
   };
 }

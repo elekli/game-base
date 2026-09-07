@@ -2,6 +2,8 @@ import type {
   BeginMediaUploadCommand,
   MediaPurpose,
   MediaUploadResult,
+  MediaAsset,
+  MediaDerivative,
 } from "../contracts";
 
 export const MEDIA_MAX_PIXELS = 100_000_000;
@@ -12,6 +14,7 @@ export type ImageMediaPurpose = Exclude<MediaPurpose, "attachment">;
 export type MediaObjectStore = Readonly<{
   createUploadGrant(path: string): Promise<Readonly<{ uploadUrl: string; token: string; expiresAt: string }>>;
   createOriginalReadGrant(path: string, fileName: string, expiresInSeconds: 60): Promise<Readonly<{ url: string; expiresAt: string }>>;
+  createThumbnailReadGrant?(path: string, expiresInSeconds?: 300): Promise<Readonly<{ url: string; expiresAt: string }>>;
   inspect(path: string): Promise<Readonly<{ path: string; byteSize: number; mimeType: string }> | null>;
   read(path: string): AsyncIterable<Uint8Array>;
   uploadDerivative(path: string, bytes: Uint8Array): Promise<void>;
@@ -80,4 +83,18 @@ export type MediaStore = Readonly<{
   adoptThumbnail(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string; width: number; height: number; byteSize: number }>): Promise<void>;
   failThumbnail(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string; deterministic: boolean }>): Promise<Readonly<{ retryDelayMs: number | null }>>;
   retryThumbnail(assetId: string): Promise<MediaUploadResult["thumbnail"]>;
+  listGameMedia(gameId: string): Promise<Readonly<{
+    manualCoverAssetId: string | null;
+    sourceCover: MediaStoredGalleryItem | null;
+    items: readonly MediaStoredGalleryItem[];
+  }>>;
+  updateMediaMetadata(command: Readonly<{ assetId: string; caption?: string | null; displayName?: string | null; description?: string | null }>): Promise<MediaAsset | null>;
+  selectManualCover(gameId: string, assetId: string): Promise<boolean>;
+  useSourceCover(gameId: string): Promise<boolean>;
+}>;
+
+export type MediaStoredGalleryItem = Readonly<{
+  asset: MediaAsset;
+  thumbnail: MediaDerivative | null;
+  thumbnailPath: string | null;
 }>;

@@ -742,6 +742,8 @@ describe("MediaService 與真 PostgreSQL", () => {
       releaseIncomplete: actual.releaseIncomplete.bind(actual), rejectInvalid: actual.rejectInvalid.bind(actual), completeFinalize: actual.completeFinalize.bind(actual),
       findReadableOriginal: actual.findReadableOriginal.bind(actual), claimThumbnail: actual.claimThumbnail.bind(actual),
       markThumbnailUploaded: actual.markThumbnailUploaded.bind(actual), failThumbnail: actual.failThumbnail.bind(actual), retryThumbnail: actual.retryThumbnail.bind(actual),
+      listGameMedia: actual.listGameMedia.bind(actual), updateMediaMetadata: actual.updateMediaMetadata.bind(actual),
+      selectManualCover: actual.selectManualCover.bind(actual), useSourceCover: actual.useSourceCover.bind(actual),
       async adoptThumbnail() { throw new Error("injected pointer transaction failure"); },
     };
     const delays: number[] = [];
@@ -801,5 +803,30 @@ describe("MediaService 與真 PostgreSQL", () => {
       from app_private.media_derivatives derivative where derivative.asset_id = $1
     `, [grant.assetId]);
     expect(rows[0]).toEqual({ state: "ready", attempt_count: 2, cycle_attempt_count: 2, width: 640, height: 160, adopted_attempts: 1 });
+  });
+
+  it("相簿查詢、說明更新與人工／來源封面切換共用同一權威 asset", async () => {
+    const service = serviceFor();
+    const image = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    await expect(service.updateMediaMetadata(owner, { assetId: image.assetId, caption: "  桌遊夜  " }))
+      .resolves.toMatchObject({ caption: "桌遊夜" });
+    await expect(service.selectManualCover(owner, { gameId, assetId: image.assetId }))
+      .resolves.toEqual({ manualCoverAssetId: image.assetId });
+
+    const attachmentKey = crypto.randomUUID();
+    const attachmentBytes = new TextEncoder().encode("rules");
+    const attachmentService = serviceFor(objects(attachmentBytes, "application/pdf"));
+    const attachment = grantFrom(await attachmentService.beginMediaUpload(owner, beginCommand({ idempotencyKey: attachmentKey, purpose: "attachment", originalFileName: "rules.pdf", declaredMimeType: "application/pdf", declaredByteSize: attachmentBytes.byteLength })));
+    await attachmentService.finalizeMediaUpload(owner, { idempotencyKey: attachmentKey });
+    await expect(attachmentService.updateMediaMetadata(owner, { assetId: attachment.assetId, displayName: "規則書", description: "  中文版  " }))
+      .resolves.toMatchObject({ displayName: "規則書", description: "中文版" });
+
+    const gallery = await service.listGameMedia(owner, { gameId });
+    expect(gallery.manualCoverAssetId).toBe(image.assetId);
+    expect(gallery.items.find((item) => item.asset.id === image.assetId)?.asset.caption).toBe("桌遊夜");
+    expect(gallery.items.find((item) => item.asset.id === attachment.assetId)?.asset).toMatchObject({ displayName: "規則書", description: "中文版" });
+    await expect(service.useSourceCover(owner, { gameId })).resolves.toEqual({ manualCoverAssetId: null });
+    await expect(service.listGameMedia(owner, { gameId })).resolves.toMatchObject({ manualCoverAssetId: null });
   });
 });

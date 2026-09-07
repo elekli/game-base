@@ -22,6 +22,15 @@ const beginSchema = z.object({
 }).strict();
 const finalizeSchema = z.object({ idempotencyKey: z.uuid() }).strict();
 const assetIdSchema = z.uuid();
+const metadataSchema = z.object({
+  caption: z.string().max(2_000).nullable().optional(),
+  displayName: z.string().max(255).nullable().optional(),
+  description: z.string().max(2_000).nullable().optional(),
+}).strict().refine((value) => Object.keys(value).length > 0);
+const coverSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("manual"), assetId: z.uuid() }).strict(),
+  z.object({ mode: z.literal("source") }).strict(),
+]);
 
 function corsOrigin(request: Request): string | null {
   const origin = request.headers.get("origin");
@@ -92,6 +101,44 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
         const parsed = assetIdSchema.safeParse(assetId);
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
         return dependencies.service.issueOriginalRead(owner, { assetId: parsed.data });
+      }));
+    },
+    async list(request: Request, gameId: string) {
+      const rejected = crossOriginResponse(request); if (rejected) return rejected;
+      return withCors(request, await boundary(request, async (owner) => {
+        const parsed = assetIdSchema.safeParse(gameId);
+        if (!parsed.success) throw new PrivateRequestInputError("遊戲參數無效。");
+        return dependencies.service.listGameMedia(owner, { gameId: parsed.data });
+      }));
+    },
+    async metadata(request: Request, assetId: string) {
+      const rejected = crossOriginResponse(request); if (rejected) return rejected;
+      return withCors(request, await boundary(request, async (owner) => {
+        const parsedId = assetIdSchema.safeParse(assetId);
+        const parsed = metadataSchema.safeParse(await json(request));
+        if (!parsedId.success || !parsed.success) throw new PrivateRequestInputError("媒體說明參數無效。");
+        return dependencies.service.updateMediaMetadata(owner, { assetId: parsedId.data, ...parsed.data });
+      }));
+    },
+    async cover(request: Request, gameId: string) {
+      const rejected = crossOriginResponse(request); if (rejected) return rejected;
+      return withCors(request, await boundary(request, async (owner) => {
+        const parsedGame = assetIdSchema.safeParse(gameId);
+        const parsed = coverSchema.safeParse(await json(request));
+        if (!parsedGame.success || !parsed.success) throw new PrivateRequestInputError("封面選擇參數無效。");
+        return parsed.data.mode === "source"
+          ? dependencies.service.useSourceCover(owner, { gameId: parsedGame.data })
+          : dependencies.service.selectManualCover(owner, { gameId: parsedGame.data, assetId: parsed.data.assetId });
+      }));
+    },
+    async retryThumbnail(request: Request, assetId: string) {
+      const rejected = crossOriginResponse(request); if (rejected) return rejected;
+      return withCors(request, await boundary(request, async (owner) => {
+        const parsed = assetIdSchema.safeParse(assetId);
+        if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
+        const result = await dependencies.service.retryThumbnail(owner, { assetId: parsed.data });
+        if (dependencies.wakeThumbnail) after(async () => dependencies.wakeThumbnail?.(parsed.data));
+        return result;
       }));
     },
   };

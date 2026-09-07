@@ -25,6 +25,10 @@ function setup() {
     finalizeMediaUpload: vi.fn<MediaService["finalizeMediaUpload"]>(async () => ({ status: "finalizing" })),
     retryThumbnail: vi.fn<MediaService["retryThumbnail"]>(async () => ({ assetId, spec: "thumb_webp_v1", state: "pending" })),
     issueOriginalRead: vi.fn<MediaService["issueOriginalRead"]>(async () => ({ status: "original_read", url: "https://storage.example/signed?token=opaque&download=photo.png", expiresAt: "2026-09-06T00:01:00.000Z", disposition: "attachment" })),
+    listGameMedia: vi.fn<MediaService["listGameMedia"]>(async () => ({ gameId, manualCoverAssetId: null, sourceCover: null, items: [] })),
+    updateMediaMetadata: vi.fn<MediaService["updateMediaMetadata"]>(async () => ({ id: assetId, gameId, purpose: "attachment", originalFileName: "rules.pdf", actualMimeType: "application/pdf", byteSize: 123, width: null, height: null, removedAt: null, createdAt: "2026-09-06T00:00:00.000Z", caption: null, displayName: "規則書", description: "遊戲規則" })),
+    selectManualCover: vi.fn<MediaService["selectManualCover"]>(async () => ({ manualCoverAssetId: assetId })),
+    useSourceCover: vi.fn<MediaService["useSourceCover"]>(async () => ({ manualCoverAssetId: null })),
   };
   const verifyAccessToken = vi.fn(async () => owner);
   const onUnhandledFailure = vi.fn();
@@ -53,6 +57,15 @@ describe("private media routes", () => {
 
     expect(response.status).toBe(401);
     expect(service.beginMediaUpload).not.toHaveBeenCalled();
+  });
+
+  it("未授權的附件說明與封面變更在 MediaService 前拒絕", async () => {
+    const { handlers, service, verifyAccessToken } = setup();
+    vi.mocked(verifyAccessToken).mockRejectedValue(new AccessDeniedError());
+    expect((await handlers.metadata(request(`/api/private/media/assets/${assetId}/metadata`, { description: "私有內容" }), assetId)).status).toBe(401);
+    expect((await handlers.cover(request(`/api/private/media/games/${gameId}/cover`, { mode: "manual", assetId }), gameId)).status).toBe(401);
+    expect(service.updateMediaMetadata).not.toHaveBeenCalled();
+    expect(service.selectManualCover).not.toHaveBeenCalled();
   });
 
   it("同源 CORS preflight 不驗 owner 且宣告 POST headers", async () => {
@@ -89,6 +102,20 @@ describe("private media routes", () => {
     expect(service.issueOriginalRead).toHaveBeenCalledWith(owner, { assetId });
     expect([...warn.mock.calls, ...error.mock.calls].flat().join(" ")).not.toContain("opaque");
     warn.mockRestore(); error.mockRestore();
+  });
+
+  it("相簿、附件說明、縮圖重試與封面切換皆由同一私有邊界轉交公開 MediaService", async () => {
+    const { handlers, service } = setup();
+    expect((await handlers.list(request(`/api/private/media/games/${gameId}`, {}), gameId)).status).toBe(200);
+    expect((await handlers.metadata(request(`/api/private/media/assets/${assetId}/metadata`, { displayName: "規則書", description: "中文版" }), assetId)).status).toBe(200);
+    expect((await handlers.cover(request(`/api/private/media/games/${gameId}/cover`, { mode: "manual", assetId }), gameId)).status).toBe(200);
+    expect((await handlers.cover(request(`/api/private/media/games/${gameId}/cover`, { mode: "source" }), gameId)).status).toBe(200);
+    expect((await handlers.retryThumbnail(request(`/api/private/media/assets/${assetId}/retry-thumbnail`, {}), assetId)).status).toBe(200);
+    expect(service.listGameMedia).toHaveBeenCalledWith(owner, { gameId });
+    expect(service.updateMediaMetadata).toHaveBeenCalledWith(owner, { assetId, displayName: "規則書", description: "中文版" });
+    expect(service.selectManualCover).toHaveBeenCalledWith(owner, { gameId, assetId });
+    expect(service.useSourceCover).toHaveBeenCalledWith(owner, { gameId });
+    expect(service.retryThumbnail).toHaveBeenCalledWith(owner, { assetId });
   });
 
   it("Storage failure 保留具名觀測碼，但回應與 log 不含 provider 細節", async () => {

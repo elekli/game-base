@@ -1,6 +1,7 @@
 import type { OwnerIdentity } from "@/shared/auth/verify-access-token";
 
 export type MediaPurpose = "gallery_image" | "custom_cover" | "attachment";
+export type StoredMediaPurpose = MediaPurpose | "source_cover";
 
 export type BeginMediaUploadCommand = Readonly<{
   idempotencyKey: string;
@@ -41,7 +42,7 @@ export type OriginalMediaRead = Readonly<{ status: "original_read"; url: string;
 export type MediaAsset = Readonly<{
   id: string;
   gameId: string;
-  purpose: MediaPurpose;
+  purpose: StoredMediaPurpose;
   originalFileName: string;
   actualMimeType: string;
   byteSize: number;
@@ -49,6 +50,9 @@ export type MediaAsset = Readonly<{
   height: number | null;
   removedAt: string | null;
   createdAt: string;
+  caption?: string | null;
+  displayName?: string | null;
+  description?: string | null;
 }>;
 
 export type MediaDerivative = Readonly<{
@@ -62,6 +66,20 @@ export type MediaUploadResult = Readonly<{
   thumbnail: MediaDerivative | null;
 }>;
 
+export type MediaGalleryItem = Readonly<{
+  asset: MediaAsset;
+  thumbnail: MediaDerivative | null;
+  thumbnailUrl: string | null;
+  thumbnailExpiresAt: string | null;
+}>;
+
+export type MediaGallery = Readonly<{
+  gameId: string;
+  manualCoverAssetId: string | null;
+  sourceCover: MediaGalleryItem | null;
+  items: readonly MediaGalleryItem[];
+}>;
+
 export type BeginMediaUploadResult = UploadGrant
   | Readonly<{ status: "finalizing" }>
   | Readonly<{ status: "already_finalized"; result: MediaUploadResult }>;
@@ -73,4 +91,8 @@ export type MediaService = Readonly<{
   finalizeMediaUpload(owner: OwnerIdentity, command: FinalizeMediaUploadCommand): Promise<FinalizeMediaUploadResult>;
   retryThumbnail(owner: OwnerIdentity, command: RetryThumbnailCommand): Promise<MediaDerivative>;
   issueOriginalRead(owner: OwnerIdentity, query: Readonly<{ assetId: string }>): Promise<OriginalMediaRead>;
+  listGameMedia(owner: OwnerIdentity, query: Readonly<{ gameId: string }>): Promise<MediaGallery>;
+  updateMediaMetadata(owner: OwnerIdentity, command: Readonly<{ assetId: string; caption?: string | null; displayName?: string | null; description?: string | null }>): Promise<MediaAsset>;
+  selectManualCover(owner: OwnerIdentity, command: Readonly<{ gameId: string; assetId: string }>): Promise<Readonly<{ manualCoverAssetId: string }>>;
+  useSourceCover(owner: OwnerIdentity, command: Readonly<{ gameId: string }>): Promise<Readonly<{ manualCoverAssetId: null }>>;
 }>;
