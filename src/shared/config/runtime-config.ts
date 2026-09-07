@@ -106,12 +106,32 @@ export function parseRuntimeConfig(
   assertEqual(env.MEDIA_STORAGE_USED_BYTES === undefined, env.MEDIA_STORAGE_CAPACITY_BYTES === undefined);
   if (env.MEDIA_STORAGE_CAPACITY_BYTES !== undefined) assertEqual(env.MEDIA_STORAGE_CAPACITY_BYTES > 0, true);
 
+  const releaseSmokeBinding =
+    env.VERCEL_ENV === "production"
+      ? deploymentBindings.production
+      : null;
+  const releaseSmokeCommonNameSha256 =
+    releaseSmokeBinding?.releaseSmokeCommonNameSha256 ?? null;
+  const releaseSmokeMaxTokenLifetimeSeconds =
+    releaseSmokeBinding?.releaseSmokeMaxTokenLifetimeSeconds ?? null;
+  const releaseSmokeReady =
+    releaseSmokeCommonNameSha256 !== null &&
+    SHA256_PATTERN.test(releaseSmokeCommonNameSha256) &&
+    releaseSmokeMaxTokenLifetimeSeconds !== null &&
+    Number.isSafeInteger(releaseSmokeMaxTokenLifetimeSeconds) &&
+    releaseSmokeMaxTokenLifetimeSeconds > 0;
+
   return {
     environment: env.VERCEL_ENV,
     databaseUrl: env.DATABASE_URL,
     mediaStorageCapacity: env.MEDIA_STORAGE_USED_BYTES === undefined ? null : {
       usedBytes: env.MEDIA_STORAGE_USED_BYTES,
       capacityBytes: env.MEDIA_STORAGE_CAPACITY_BYTES as number,
+    },
+    releaseSmoke: {
+      commonNameSha256: releaseSmokeCommonNameSha256,
+      maxTokenLifetimeSeconds: releaseSmokeMaxTokenLifetimeSeconds,
+      ready: releaseSmokeReady,
     },
     cloudflare: {
       audience: env.CLOUDFLARE_ACCESS_AUDIENCE,

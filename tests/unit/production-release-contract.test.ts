@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   assertNoVercelDeploymentMutationEntrypoints,
+  assertReleaseSmokeAuthArtifactsPinned,
   checkProductionReleaseContract,
   readRepositoryExecutableSources,
 } from "../../scripts/check-production-release-contract";
@@ -111,6 +112,24 @@ describe("production release contract", () => {
       productionDeploymentSourceManifestSchema:
         ".github/production-deployment-source-manifest.schema.json",
       productionSmokeContract: ".github/production-smoke-contract.json",
+      releaseSmokeRoute: "src/app/api/internal/release-smoke/route.ts",
+      releaseSmokeRouteSha256:
+        "99594c244e4fc78c00d4d282b9fafb3974fe1b96760248fa07db1665c5461428",
+      releaseSmokeHandler: "src/app/api/internal/release-smoke/handler.ts",
+      releaseSmokeHandlerSha256:
+        "7e85a4fc08c429cbb9b1e8c9f825eb31882d75e8c6da1f9020706e2aecd162f4",
+      releaseSmokeAccessTokenVerifier:
+        "src/shared/auth/verify-release-smoke-access-token.ts",
+      releaseSmokeAccessTokenVerifierSha256:
+        "185701f85c21333153a6b8655df22dfd10545061ccd27e771033fe1196c8b767",
+      releaseSmokeProductionAccessTokenVerifier:
+        "src/shared/auth/production-release-smoke-access-token-verifier.ts",
+      releaseSmokeProductionAccessTokenVerifierSha256:
+        "2a1463331e350d5284f75ae7eb51ebbf7da74e0951b826a4e21130f2b4648b76",
+      releaseSmokeDeploymentBindings:
+        "src/shared/config/deployment-bindings.ts",
+      releaseSmokeDeploymentBindingsSha256:
+        "dd9041ce7ef885a4aab4cd555c418b84f9c1867dfc5849fd2510ae2398891948",
       productionSmokeModel: "scripts/production-smoke-canary.ts",
       productionRestoreModel: "scripts/production-restore-drill.ts",
       productionRestoreEvidenceSchema:
@@ -242,6 +261,45 @@ describe("production release contract", () => {
         (check) => check.const === "passed",
       ),
     ).toBe(true);
+  });
+
+  it.each([
+    ["non-empty sub rejection", 'payload.sub !== ""', "false"],
+    [
+      "common_name fingerprint rejection",
+      "!matchesSha256(payload.common_name, config.commonNameSha256)",
+      "false",
+    ],
+  ])("rejects a verifier with tampered %s", async (_name, original, replacement) => {
+    const root = await mkdtemp(join(tmpdir(), "release-smoke-auth-contract-"));
+    try {
+      const contract = JSON.parse(
+        await readFile(".github/production-release-contract.json", "utf8"),
+      ) as Parameters<typeof assertReleaseSmokeAuthArtifactsPinned>[1];
+      const artifactPaths = [
+        contract.releaseSmokeRoute,
+        contract.releaseSmokeHandler,
+        contract.releaseSmokeAccessTokenVerifier,
+        contract.releaseSmokeProductionAccessTokenVerifier,
+        contract.releaseSmokeDeploymentBindings,
+      ];
+      for (const artifactPath of artifactPaths) {
+        const target = join(root, artifactPath);
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(target, await readFile(artifactPath, "utf8"));
+      }
+
+      const verifierPath = join(root, contract.releaseSmokeAccessTokenVerifier);
+      const verifier = await readFile(verifierPath, "utf8");
+      expect(verifier).toContain(original);
+      await writeFile(verifierPath, verifier.replace(original, replacement));
+
+      await expect(
+        assertReleaseSmokeAuthArtifactsPinned(root, contract),
+      ).rejects.toThrow(/release-smoke access token verifier fingerprint/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects Vercel mutation entrypoints across dependencies, workflows, scripts, and package commands", () => {
