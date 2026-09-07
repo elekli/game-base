@@ -66,6 +66,7 @@ type GetRequest = Readonly<{
 type PostRequest<TBody = undefined> = Readonly<{
   method: "POST";
   path: string;
+  query?: Readonly<Record<string, string>>;
   headers?: Readonly<Record<string, string>>;
   body?: TBody;
 }>;
@@ -131,7 +132,6 @@ export function buildListVercelProductionDeploymentsRequest({
     query: {
       limit: String(PAGE_LIMIT),
       projectId,
-      sha: commitSha,
       target: "production",
       ...(until === undefined ? {} : { until: String(until) }),
     },
@@ -188,25 +188,46 @@ export function buildUploadVercelFileRequest(
 }
 
 export function buildCreateVercelDeploymentRequest(input: Readonly<{
+  projectId: string;
   projectName: string;
   releaseIdentity: string;
   sourceManifestArtifact: CanonicalProductionDeploymentSourceManifest;
-}>): never {
+  stagedProductionSafetyVerified: boolean;
+}>): PostRequest<Readonly<{
+  files: ReadonlyArray<Readonly<{ file: string; sha: string; size: number }>>;
+  meta: Readonly<{
+    releaseCommit: string;
+    releaseIdentity: string;
+    sourceManifestSha256: string;
+  }>;
+  name: string;
+  project: string;
+  target: "production";
+}>> {
   if (
     !isRecord(input) ||
-    Object.keys(input).length !== 3 ||
+    Object.keys(input).length !== 5 ||
+    !Object.hasOwn(input, "projectId") ||
     !Object.hasOwn(input, "projectName") ||
     !Object.hasOwn(input, "releaseIdentity") ||
-    !Object.hasOwn(input, "sourceManifestArtifact")
+    !Object.hasOwn(input, "sourceManifestArtifact") ||
+    !Object.hasOwn(input, "stagedProductionSafetyVerified")
   ) {
     throw new VercelDeploymentRequestContractError();
   }
-  const { projectName, releaseIdentity, sourceManifestArtifact } = input;
+  const {
+    projectId,
+    projectName,
+    releaseIdentity,
+    sourceManifestArtifact,
+    stagedProductionSafetyVerified,
+  } = input;
   const verifiedSource = verifyCanonicalSourceManifestArtifact(
     sourceManifestArtifact,
   );
   const { commitSha } = verifiedSource.manifest;
   if (
+    !PROJECT_ID.test(projectId) ||
     projectName.trim().length === 0 ||
     projectName !== projectName.trim() ||
     projectName.length > 100 ||
@@ -215,7 +236,29 @@ export function buildCreateVercelDeploymentRequest(input: Readonly<{
   ) {
     throw new VercelDeploymentRequestContractError();
   }
-  throw new VercelStagedProductionSafetyUnverifiedError();
+  if (stagedProductionSafetyVerified !== true) {
+    throw new VercelStagedProductionSafetyUnverifiedError();
+  }
+  return {
+    method: "POST",
+    path: "/v13/deployments",
+    query: { forceNew: "1", skipAutoDetectionConfirmation: "1" },
+    body: {
+      files: verifiedSource.manifest.files.map((file) => ({
+        file: file.path,
+        sha: file.sha1,
+        size: file.size,
+      })),
+      meta: {
+        releaseCommit: commitSha,
+        releaseIdentity,
+        sourceManifestSha256: verifiedSource.sourceManifestSha256,
+      },
+      name: projectName,
+      project: projectId,
+      target: "production",
+    },
+  };
 }
 
 function verifyCanonicalSourceManifestArtifact(

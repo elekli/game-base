@@ -1,5 +1,11 @@
 const VERCEL_API_ORIGIN = "https://api.vercel.com";
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
+const DEFAULT_MAX_JSON_REQUEST_BYTES = 16 * 1024 * 1024;
+const ALLOWED_BINARY_HEADERS = new Set([
+  "content-length",
+  "content-type",
+  "x-vercel-digest",
+]);
 
 export class VercelRestConfigurationError extends Error {
   constructor() {
@@ -59,6 +65,21 @@ export type VercelReadOnlyTransport = Readonly<{
   ): Promise<unknown>;
 }>;
 
+export type VercelRestTransport = VercelReadOnlyTransport &
+  Readonly<{
+    postJson(
+      path: string,
+      body?: unknown,
+      query?: Readonly<Record<string, string | number>>,
+    ): Promise<unknown>;
+    postBytes(
+      path: string,
+      body: Uint8Array,
+      headers: Readonly<Record<string, string>>,
+      query?: Readonly<Record<string, string | number>>,
+    ): Promise<void>;
+  }>;
+
 
 async function readBoundedBody(
   response: Response,
@@ -99,19 +120,21 @@ async function readBoundedBody(
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), total);
 }
 
-export function createVercelReadOnlyTransport({
+export function createVercelRestTransport({
   fetchImpl = globalThis.fetch,
+  maxJsonRequestBytes = DEFAULT_MAX_JSON_REQUEST_BYTES,
   maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
   teamId,
   timeoutMs,
   token,
 }: Readonly<{
   fetchImpl?: VercelFetchImplementation;
+  maxJsonRequestBytes?: number;
   maxResponseBytes?: number;
   teamId: string;
   timeoutMs: number;
   token: string;
-}>): VercelReadOnlyTransport {
+}>): VercelRestTransport {
   if (
     token.trim().length === 0 ||
     token !== token.trim() ||
@@ -121,13 +144,28 @@ export function createVercelReadOnlyTransport({
     !Number.isFinite(timeoutMs) ||
     timeoutMs <= 0 ||
     !Number.isSafeInteger(maxResponseBytes) ||
-    maxResponseBytes <= 0
+    maxResponseBytes <= 0 ||
+    !Number.isSafeInteger(maxJsonRequestBytes) ||
+    maxJsonRequestBytes <= 0
   ) {
     throw new VercelRestConfigurationError();
   }
 
-  return {
-    async getJson(path, query = {}) {
+  const request = async ({
+    body,
+    headers = {},
+    method,
+    parseJson,
+    path,
+    query = {},
+  }: Readonly<{
+    body?: BodyInit;
+    headers?: Readonly<Record<string, string>>;
+    method: "GET" | "POST";
+    parseJson: boolean;
+    path: string;
+    query?: Readonly<Record<string, string | number>>;
+  }>): Promise<unknown> => {
       if (!path.startsWith("/") || path.startsWith("//") || /[?#]/.test(path)) {
         throw new VercelRestConfigurationError();
       }
@@ -136,10 +174,28 @@ export function createVercelReadOnlyTransport({
         throw new VercelRestConfigurationError();
       }
       for (const [key, value] of Object.entries(query)) {
-        if (key === "teamId") throw new VercelRestConfigurationError();
+        if (
+          key === "teamId" ||
+          key.length === 0 ||
+          /[\u0000-\u001f\u007f]/.test(key) ||
+          (typeof value !== "string" && typeof value !== "number") ||
+          String(value).length > 1_024
+        ) {
+          throw new VercelRestConfigurationError();
+        }
         url.searchParams.set(key, String(value));
       }
       url.searchParams.set("teamId", teamId);
+
+      for (const [key, value] of Object.entries(headers)) {
+        if (
+          !ALLOWED_BINARY_HEADERS.has(key) ||
+          value.length === 0 ||
+          /[\r\n]/.test(value)
+        ) {
+          throw new VercelRestConfigurationError();
+        }
+      }
 
       const controller = new AbortController();
       let timedOut = false;
@@ -159,8 +215,10 @@ export function createVercelReadOnlyTransport({
               headers: {
                 accept: "application/json",
                 authorization: `Bearer ${token}`,
+                ...headers,
               },
-              method: "GET",
+              body,
+              method,
               signal: controller.signal,
             }),
             timeoutPromise,
@@ -174,9 +232,9 @@ export function createVercelReadOnlyTransport({
         if (!response.ok) {
           throw new VercelRestHttpError(response.status);
         }
-        let body: Buffer;
+        let responseBody: Buffer;
         try {
-          body = await readBoundedBody(
+          responseBody = await readBoundedBody(
             response,
             maxResponseBytes,
             timeoutPromise,
@@ -187,14 +245,63 @@ export function createVercelReadOnlyTransport({
           }
           throw error;
         }
+        if (!parseJson) return undefined;
         try {
-          return JSON.parse(body.toString("utf8")) as unknown;
+          return JSON.parse(responseBody.toString("utf8")) as unknown;
         } catch {
           throw new VercelRestMalformedJsonError();
         }
       } finally {
         if (timeout !== undefined) clearTimeout(timeout);
       }
+  };
+
+  return {
+    getJson(path, query = {}) {
+      return request({ method: "GET", parseJson: true, path, query });
+    },
+    postJson(path, value = undefined, query = {}) {
+      let encoded: string | undefined;
+      try {
+        encoded = JSON.stringify(value);
+      } catch {
+        throw new VercelRestConfigurationError();
+      }
+      if (
+        encoded !== undefined &&
+        Buffer.byteLength(encoded, "utf8") > maxJsonRequestBytes
+      ) {
+        throw new VercelRestConfigurationError();
+      }
+      return request({
+        body: encoded,
+        headers:
+          encoded === undefined ? undefined : { "content-type": "application/json" },
+        method: "POST",
+        parseJson: true,
+        path,
+        query,
+      });
+    },
+    async postBytes(path, body, headers, query = {}) {
+      if (!(body instanceof Uint8Array)) {
+        throw new VercelRestConfigurationError();
+      }
+      await request({
+        body: Buffer.from(body),
+        headers,
+        method: "POST",
+        parseJson: false,
+        path,
+        query,
+      });
     },
   };
+}
+
+export function createVercelReadOnlyTransport(
+  config: Parameters<typeof createVercelRestTransport>[0],
+): VercelReadOnlyTransport {
+  const transport = createVercelRestTransport(config);
+  return { getJson: transport.getJson };
 }

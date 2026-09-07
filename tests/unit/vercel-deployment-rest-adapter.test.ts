@@ -56,7 +56,7 @@ function deployment(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Vercel deployment REST adapter contract", () => {
-  it("builds fixed bounded, exact-commit read requests", () => {
+  it("builds bounded read requests and validates the exact commit locally", () => {
     expect(buildGetVercelProductionAliasRequest({ customDomain: "game.example.com", projectId: "prj_project" })).toEqual({ method: "GET", path: "/v4/aliases/game.example.com", query: { projectId: "prj_project" } });
     expect(parseVercelProductionAlias({ alias: "game.example.com", projectId: "prj_project", deploymentId: "dpl_D1" }, { customDomain: "game.example.com", projectId: "prj_project" })).toBe("dpl_D1");
     expect(() => parseVercelProductionAlias({ alias: "other.example.com", projectId: "prj_project", deploymentId: "dpl_D1" }, { customDomain: "game.example.com", projectId: "prj_project" })).toThrow();
@@ -71,7 +71,6 @@ describe("Vercel deployment REST adapter contract", () => {
       query: {
         limit: "100",
         projectId: "prj_project",
-        sha: COMMIT_SHA,
         target: "production",
       },
     });
@@ -140,22 +139,43 @@ describe("Vercel deployment REST adapter contract", () => {
     ).toThrow();
   });
 
-  it("cannot create while repository safety remains unverified", () => {
+  it("requires explicit staged-domain safety before creating", () => {
     expect(() =>
       buildCreateVercelDeploymentRequest({
+        projectId: "prj_project",
         projectName: "game-base",
         releaseIdentity: RELEASE_IDENTITY,
         sourceManifestArtifact: SOURCE_ARTIFACT,
+        stagedProductionSafetyVerified: false,
       }),
     ).toThrow(VercelStagedProductionSafetyUnverifiedError);
-    expect(() =>
+
+    expect(
       buildCreateVercelDeploymentRequest({
+        projectId: "prj_project",
         projectName: "game-base",
         releaseIdentity: RELEASE_IDENTITY,
         sourceManifestArtifact: SOURCE_ARTIFACT,
         stagedProductionSafetyVerified: true,
-      } as Parameters<typeof buildCreateVercelDeploymentRequest>[0]),
-    ).toThrow(VercelDeploymentRequestContractError);
+      }),
+    ).toEqual({
+      method: "POST",
+      path: "/v13/deployments",
+      query: { forceNew: "1", skipAutoDetectionConfirmation: "1" },
+      body: {
+        files: [
+          { file: "src/遊戲 file.ts", sha: "c".repeat(40), size: 17 },
+        ],
+        meta: {
+          releaseCommit: COMMIT_SHA,
+          releaseIdentity: RELEASE_IDENTITY,
+          sourceManifestSha256: SOURCE_ARTIFACT.sourceManifestSha256,
+        },
+        name: "game-base",
+        project: "prj_project",
+        target: "production",
+      },
+    });
   });
 
   it("derives create files, commit, and digest only from a verified canonical artifact", () => {
@@ -163,22 +183,26 @@ describe("Vercel deployment REST adapter contract", () => {
     tamperedBytes[tamperedBytes.length - 2] ^= 1;
     expect(() =>
       buildCreateVercelDeploymentRequest({
+        projectId: "prj_project",
         projectName: "game-base",
         releaseIdentity: RELEASE_IDENTITY,
         sourceManifestArtifact: {
           ...SOURCE_ARTIFACT,
           canonicalJson: tamperedBytes,
         },
+        stagedProductionSafetyVerified: true,
       }),
     ).toThrow();
     expect(() =>
       buildCreateVercelDeploymentRequest({
+        projectId: "prj_project",
         projectName: "game-base",
         releaseIdentity: RELEASE_IDENTITY,
         sourceManifestArtifact: {
           ...SOURCE_ARTIFACT,
           sourceManifestSha256: "d".repeat(64),
         },
+        stagedProductionSafetyVerified: true,
       }),
     ).toThrow();
   });
@@ -417,17 +441,10 @@ describe("Vercel deployment REST adapter contract", () => {
     ).toThrow(VercelDeploymentValidationError);
   });
 
-  it("keeps mutation execution structurally disabled and requires staged safety for pure creation", () => {
+  it("keeps mutation execution structurally disabled until the live runner lands", () => {
     expect(() => createVercelDeploymentRestAdapter()).toThrow(
       VercelDeploymentMutationDisabledError,
     );
-    expect(() =>
-      buildCreateVercelDeploymentRequest({
-        projectName: "game-base",
-        releaseIdentity: RELEASE_IDENTITY,
-        sourceManifestArtifact: SOURCE_ARTIFACT,
-      }),
-    ).toThrow(VercelStagedProductionSafetyUnverifiedError);
   });
 
   it("never includes request bytes or metadata values in adapter errors", () => {
@@ -435,9 +452,11 @@ describe("Vercel deployment REST adapter contract", () => {
     const error = (() => {
       try {
         buildCreateVercelDeploymentRequest({
+          projectId: "prj_project",
           projectName: "game-base",
           releaseIdentity: secret,
           sourceManifestArtifact: SOURCE_ARTIFACT,
+          stagedProductionSafetyVerified: true,
         });
       } catch (reason) {
         return reason;
