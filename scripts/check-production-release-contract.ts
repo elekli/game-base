@@ -1,4 +1,5 @@
 import { access, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 
@@ -15,6 +16,7 @@ type ProductionReleaseContract = Readonly<{
   productionCustomDomain: string | null;
   productionDeploymentEnabled: boolean;
   productionDeploymentEvidenceSchema: string;
+  productionDeploymentEvidenceSchemaSha256: string;
   productionDeploymentModel: string;
   productionDeploymentRequiredSecrets: ReadonlyArray<string>;
   productionDeploymentRequiredVariables: ReadonlyArray<string>;
@@ -28,7 +30,9 @@ type ProductionReleaseContract = Readonly<{
   supabaseProjectRef: string;
   supabaseRegion: string;
   vercelGitDeployment: boolean;
-  vercelCliVersion: string;
+  vercelCliCandidateVersion: string;
+  vercelCliStatus: string;
+  vercelDeploymentAdapterEvaluation: string;
   vercelProjectId: string;
   vercelProjectName: string;
   vercelTeamId: string;
@@ -69,9 +73,28 @@ export async function checkProductionReleaseContract(root: string) {
   const releaseStateMachine = await readFile(path.join(root, RELEASE_STATE_MACHINE_PATH), "utf8");
   const packageJson = JSON.parse(
     await readFile(path.join(root, "package.json"), "utf8"),
-  ) as { devDependencies?: Record<string, unknown> };
+  ) as {
+    devDependencies?: Record<string, unknown>;
+    scripts?: Record<string, unknown>;
+  };
+  const deploymentAdapterEvaluation = JSON.parse(
+    await readFile(
+      path.join(root, contract.vercelDeploymentAdapterEvaluation),
+      "utf8",
+    ),
+  ) as {
+    candidateNodeEngine?: unknown;
+    candidateVersion?: unknown;
+    decision?: unknown;
+    nextAdapter?: unknown;
+    audit?: { critical?: unknown; high?: unknown };
+  };
+  const deploymentEvidenceSchemaText = await readFile(
+    path.join(root, contract.productionDeploymentEvidenceSchema),
+    "utf8",
+  );
   const deploymentEvidenceSchema = JSON.parse(
-    await readFile(path.join(root, contract.productionDeploymentEvidenceSchema), "utf8"),
+    deploymentEvidenceSchemaText,
   ) as JsonSchema;
   const productionDeploymentModel = await readFile(
     path.join(root, contract.productionDeploymentModel),
@@ -96,10 +119,27 @@ export async function checkProductionReleaseContract(root: string) {
     contract.vercelTeamId === "team_vpaufHhAabxSup7QLCbCGwlF",
     "Vercel team ID does not match the Production binding",
   );
-  assertContract(contract.vercelCliVersion === "59.11.7", "Vercel CLI version is not pinned to the verified release");
   assertContract(
-    packageJson.devDependencies?.vercel === contract.vercelCliVersion,
-    "package.json must pin the contracted Vercel CLI version exactly",
+    contract.vercelCliCandidateVersion === "59.11.7" &&
+      contract.vercelCliStatus === "blocked-security-audit" &&
+      contract.vercelDeploymentAdapterEvaluation ===
+        ".github/vercel-deployment-adapter-evaluation.json" &&
+      deploymentAdapterEvaluation.candidateVersion ===
+        contract.vercelCliCandidateVersion &&
+      deploymentAdapterEvaluation.candidateNodeEngine === ">= 18" &&
+      deploymentAdapterEvaluation.audit?.critical === 1 &&
+      deploymentAdapterEvaluation.audit?.high === 18 &&
+      deploymentAdapterEvaluation.decision === "blocked-no-executable-cli" &&
+      deploymentAdapterEvaluation.nextAdapter ===
+        "official-rest-api-or-security-cleared-exact-cli",
+    "Vercel CLI candidate must remain security-blocked with its audit evidence",
+  );
+  assertContract(
+    packageJson.devDependencies?.vercel === undefined &&
+      !/(?:pnpm\s+(?:dlx|exec)|npx)\s+vercel|\bvercel\s+(?:deploy|promote|rollback)\b/.test(
+        Object.values(packageJson.scripts ?? {}).join("\n"),
+      ),
+    "security-blocked Vercel CLI must not be executable through package dependencies or scripts",
   );
   assertContract(
     contract.productionDeploymentWriter ===
@@ -116,7 +156,7 @@ export async function checkProductionReleaseContract(root: string) {
   );
   assertContract(
     contract.productionDeploymentStatus ===
-      "blocked-missing-custom-domain-and-credentials" &&
+      "blocked-external-prerequisites-and-deployment-adapter" &&
       contract.productionSmokePrincipalStatus === "unresolved" &&
       contract.productionCustomDomain === null &&
       contract.productionDeploymentEnabled === false,
@@ -141,6 +181,13 @@ export async function checkProductionReleaseContract(root: string) {
     contract.productionDeploymentEvidenceSchema ===
       ".github/production-deployment-evidence.schema.json",
     "Production deployment evidence schema path is not repository-owned",
+  );
+  assertContract(
+    contract.productionDeploymentEvidenceSchemaSha256 ===
+      "d5438760d86aff69cb7dc46573941e0a4d16302257155b5f9a61c018c6833bdc" &&
+      createHash("sha256").update(deploymentEvidenceSchemaText).digest("hex") ===
+        contract.productionDeploymentEvidenceSchemaSha256,
+    "Production deployment evidence schema fingerprint does not match the approved redaction boundary",
   );
   let disabledWriterExists = true;
   try {

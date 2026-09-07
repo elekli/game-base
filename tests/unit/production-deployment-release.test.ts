@@ -23,8 +23,10 @@ function reachPromotionVerification() {
     deploymentId: "dpl_D0",
   });
   release = transitionProductionDeploymentRelease(release, {
-    kind: "staged-deployment-created",
+    kind: "staged-deployment-resolved",
     deploymentId: "dpl_D1",
+    releaseIdentity: `production:${SHA}`,
+    source: "created",
   });
   release = transitionProductionDeploymentRelease(release, {
     kind: "staged-deployment-ready",
@@ -107,17 +109,23 @@ describe("production deployment release model", () => {
     });
 
     expect(release.next).toEqual({
-      kind: "deploy-staged",
+      kind: "ensure-staged-deployment",
       executionSha: SHA,
-      idempotencyKey: `production:${SHA}`,
+      releaseIdentity: `production:${SHA}`,
+      metadata: {
+        releaseCommit: SHA,
+        releaseIdentity: `production:${SHA}`,
+      },
       prod: true,
       skipDomain: true,
       timeoutMs: 300_000,
     });
 
     release = transitionProductionDeploymentRelease(release, {
-      kind: "staged-deployment-created",
+      kind: "staged-deployment-resolved",
       deploymentId: "dpl_D1",
+      releaseIdentity: `production:${SHA}`,
+      source: "created",
     });
     expect(release.next).toEqual({
       kind: "await-staged-ready",
@@ -195,6 +203,17 @@ describe("production deployment release model", () => {
       deploymentId: "dpl_D0",
     });
 
+    expect(release.next).toEqual({
+      kind: "recheck-promotion-guard",
+      expectedCurrentDeploymentId: "dpl_D0",
+      executionSha: SHA,
+      timeoutMs: 30_000,
+    });
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "promotion-guard-observed",
+      currentDeploymentId: "dpl_D0",
+      mainSha: SHA,
+    });
     expect(release.next).toMatchObject({
       kind: "promote-staged",
       deploymentId: "dpl_D1",
@@ -214,6 +233,23 @@ describe("production deployment release model", () => {
     expect(release.phase).toBe("failed");
     expect(release.failure).toBe("promotion-attempts-exhausted");
     expect(release.next).toEqual({ kind: "stop" });
+  });
+
+  it("stops when main advances before a second promotion attempt", () => {
+    let release = reachPromotionVerification();
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "current-deployment-observed",
+      deploymentId: "dpl_D0",
+    });
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "promotion-guard-observed",
+      currentDeploymentId: "dpl_D0",
+      mainSha: "b".repeat(40),
+    });
+
+    expect(release.phase).toBe("failed");
+    expect(release.failure).toBe("promotion-guard-rejected");
+    expect(release.promotionAttempts).toBe(1);
   });
 
   it("stops without rollback when another deployment becomes current", () => {
@@ -352,17 +388,68 @@ describe("production deployment release model", () => {
       deploymentId: "dpl_D0",
     });
     release = transitionProductionDeploymentRelease(release, {
-      kind: "staged-deployment-created",
+      kind: "staged-deployment-resolved",
       deploymentId: "dpl_D1",
+      releaseIdentity: `production:${SHA}`,
+      source: "created",
     });
     release = transitionProductionDeploymentRelease(release, {
       kind: "operation-failed",
     });
 
     expect(release.phase).toBe("failed");
-    expect(release.failure).toBe("operation-failed-before-promotion");
+    expect(release.failure).toBe("staged-ready-wait-failed");
     expect(release.baselineDeploymentId).toBe("dpl_D0");
     expect(release.next).toEqual({ kind: "stop" });
+  });
+
+  it("reuses only a staged deployment resolved with the stable release identity", () => {
+    let release = createProductionDeploymentRelease({
+      executionSha: SHA,
+      releaseKind: "code-only",
+    });
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "release-gate-observed",
+      executionSha: SHA,
+      exactMainCi: true,
+      schemaGate: "strict-current-schema",
+    });
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "current-deployment-observed",
+      deploymentId: "dpl_D0",
+    });
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "staged-deployment-resolved",
+      deploymentId: "dpl_D1",
+      releaseIdentity: `production:${SHA}`,
+      source: "reused",
+    });
+    expect(release.next).toMatchObject({
+      kind: "await-staged-ready",
+      deploymentId: "dpl_D1",
+    });
+
+    let mismatched = createProductionDeploymentRelease({
+      executionSha: SHA,
+      releaseKind: "code-only",
+    });
+    mismatched = transitionProductionDeploymentRelease(mismatched, {
+      kind: "release-gate-observed",
+      executionSha: SHA,
+      exactMainCi: true,
+      schemaGate: "strict-current-schema",
+    });
+    mismatched = transitionProductionDeploymentRelease(mismatched, {
+      kind: "current-deployment-observed",
+      deploymentId: "dpl_D0",
+    });
+    mismatched = transitionProductionDeploymentRelease(mismatched, {
+      kind: "staged-deployment-resolved",
+      deploymentId: "dpl_D1",
+      releaseIdentity: `production:${"b".repeat(40)}`,
+      source: "reused",
+    });
+    expect(mismatched.failure).toBe("staged-deployment-invalid");
   });
 
   it("rejects staged metadata or a changed main/D0 guard before promotion", () => {
@@ -381,8 +468,10 @@ describe("production deployment release model", () => {
       deploymentId: "dpl_D0",
     });
     metadataMismatch = transitionProductionDeploymentRelease(metadataMismatch, {
-      kind: "staged-deployment-created",
+      kind: "staged-deployment-resolved",
       deploymentId: "dpl_D1",
+      releaseIdentity: `production:${SHA}`,
+      source: "reused",
     });
     metadataMismatch = transitionProductionDeploymentRelease(metadataMismatch, {
       kind: "staged-deployment-ready",
@@ -408,8 +497,10 @@ describe("production deployment release model", () => {
       deploymentId: "dpl_D0",
     });
     guardChanged = transitionProductionDeploymentRelease(guardChanged, {
-      kind: "staged-deployment-created",
+      kind: "staged-deployment-resolved",
       deploymentId: "dpl_D1",
+      releaseIdentity: `production:${SHA}`,
+      source: "created",
     });
     guardChanged = transitionProductionDeploymentRelease(guardChanged, {
       kind: "staged-deployment-ready",

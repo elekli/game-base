@@ -26,7 +26,7 @@ feature branch → PR → required CI／verify → main
 
 ## T03 application deployment 模型（尚未接入 live workflow）
 
-`scripts/production-deployment-release.ts` 是 T03 的純狀態轉換模型；它不執行 CLI、不讀取 credentials，也不改動任何外部狀態。`.github/production-release-contract.json` 目前以 `productionDeploymentEnabled: false` 與 `blocked-missing-custom-domain-and-credentials` 停發，且預定的唯一 application deployment writer `.github/workflows/production-application-release.yml` 尚不存在。現有 `.github/workflows/production-release.yml` 仍只管理 migration，禁止加入 Vercel deploy。
+`scripts/production-deployment-release.ts` 是 T03 的純狀態轉換模型；它不執行 CLI、不讀取 credentials，也不改動任何外部狀態。`.github/production-release-contract.json` 目前以 `productionDeploymentEnabled: false` 與 `blocked-external-prerequisites-and-deployment-adapter` 停發，且預定的唯一 application deployment writer `.github/workflows/production-application-release.yml` 尚不存在。現有 `.github/workflows/production-release.yml` 仍只管理 migration，禁止加入 Vercel deploy。
 
 ```text
 exact main CI
@@ -67,13 +67,15 @@ exact main CI
                        sanitized evidence
 ```
 
-Promotion 前的任何失敗都讓 D0 繼續接收流量。Promotion 結果不明時只依重新查得的 current deployment 決策：D1 進 smoke、D0 最多再嘗試一次 promotion、第三個 deployment 立即停止。Smoke 失敗後也只有再次證明 D1 仍是 current 才可 rollback；current 為 D0 或第三個 deployment 時不得送出 rollback。Promotion 與 rollback 各最多 2 次，所有查詢、等待、smoke 與 evidence 寫入都帶固定 timeout。重跑使用 `production:<exact SHA>` 作為穩定 deployment idempotency key。
+Promotion 前的任何失敗都讓 D0 繼續接收流量。Promotion 結果不明時只依重新查得的 current deployment 決策：D1 進 smoke、D0 最多再嘗試一次 promotion、第三個 deployment 立即停止。Smoke 失敗後也只有再次證明 D1 仍是 current 才可 rollback；current 為 D0 或第三個 deployment 時不得送出 rollback。Promotion 與 rollback 各最多 2 次，所有查詢、等待、smoke 與 evidence 寫入都帶固定 timeout。重跑使用 `production:<exact SHA>` 作為穩定 release identity，先依該 identity 與 exact commit metadata 尋找既有 staged D1；只有找不到時才以相同 metadata 建立 `--prod --skip-domain` deployment，因此不把 CLI 本身誤當成具有 idempotency key。
 
 資料庫 schema 永不隨 application rollback 回滾。Migration-bearing release 必須先完成既有 migration strict verification 與 commit-bound ledger；code-only release 則必須走尚待 PR B 接線的 strict-current-schema 專路。若 additive migration 後的 application smoke 失敗，只回復 D0 程式並保留相容 schema；不相容資料變更仍須預先規劃 expand／migrate／contract 與 forward-fix。
 
 公開 artifact 只能符合 `.github/production-deployment-evidence.schema.json`。該 schema 採欄位 allowlist 與 `additionalProperties: false`，只容許 commit、migration tail、deployment identity、domain、時間、結果、bounded attempt count、具名 smoke check 與 request ID；不得包含 token、authorization header、連線字串、request／response payload 或私有資料。
 
 此切片不完成 #58 acceptance。開始 PR B 前仍須具備並核對：Production 自訂網域與 Cloudflare Access application；GitHub `Production` Environment secrets `VERCEL_TOKEN`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET`；variables `VERCEL_ORG_ID`、`VERCEL_PROJECT_ID`、`PRODUCTION_CUSTOM_DOMAIN`；以及只服務 release-smoke route 的最小權限身分裁決。PR B 才能建立受保護 application workflow、live adapter 與有界 smoke；PR C 再加入只輸出到受保護暫存位置的 logical dump／本機 restore 演練。未滿足這些前提時不得把 `productionDeploymentEnabled` 改為 `true`。
+
+Vercel CLI `59.11.7` 的 registry metadata 宣告 Node.js `>= 18`，且已確認具有 `deploy --prod --skip-domain`、`promote` 與 `rollback`；但 2026-09-07 以本 repository 的 `pnpm audit --audit-level high` 檢查其完整 dependency graph 時，新增 1 項 critical 與 18 項 high vulnerabilities。抽查仍可取得的 `55.0.0`、`56.5.0`、`57.0.0`、`58.11.0` 與 `59.11.7` 都未達零 critical／high；其中 `undici` 修補需要跨 major override，不能假設相容。因此 `.github/vercel-deployment-adapter-evaluation.json` 將 `59.11.7` 只記為 candidate，不把任何 Vercel CLI 加入 dependency、package script 或 workflow。PR B 必須改採 Vercel 官方 REST API，或重新驗證一個 exact CLI version 的完整 dependency graph 為零 critical／high，才可解除 `blocked-security-audit`。
 
 Vercel Hobby project 的 owner 仍可直接從 Dashboard 或本機 CLI 建立 production deployment；repository 無法在 Vercel 帳號層絕對撤銷這項 owner 能力。這是殘餘風險，不是第二條支援路徑：owner 不得手動部署，操作證據以 Vercel activity log 稽核。若未來 Vercel 提供適用方案的細緻 deployment policy，應把這項人工禁令改為平台強制。
 

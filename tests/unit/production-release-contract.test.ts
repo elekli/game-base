@@ -9,7 +9,8 @@ describe("production release contract", () => {
       await readFile(".github/production-release-contract.json", "utf8"),
     ) as Record<string, unknown>;
     const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
-      devDependencies: Record<string, string>;
+      scripts?: Record<string, string>;
+      devDependencies?: Record<string, string>;
     };
     const evidenceSchema = JSON.parse(
       await readFile(
@@ -24,11 +25,15 @@ describe("production release contract", () => {
 
     expect(contract).toMatchObject({
       vercelTeamId: "team_vpaufHhAabxSup7QLCbCGwlF",
-      vercelCliVersion: "59.11.7",
+      vercelCliCandidateVersion: "59.11.7",
+      vercelCliStatus: "blocked-security-audit",
+      vercelDeploymentAdapterEvaluation:
+        ".github/vercel-deployment-adapter-evaluation.json",
       productionDeploymentWriter:
         ".github/workflows/production-application-release.yml",
       productionDeploymentModel: "scripts/production-deployment-release.ts",
-      productionDeploymentStatus: "blocked-missing-custom-domain-and-credentials",
+      productionDeploymentStatus:
+        "blocked-external-prerequisites-and-deployment-adapter",
       productionSmokePrincipalStatus: "unresolved",
       productionCustomDomain: null,
       productionDeploymentEnabled: false,
@@ -44,8 +49,13 @@ describe("production release contract", () => {
       ],
       productionDeploymentEvidenceSchema:
         ".github/production-deployment-evidence.schema.json",
+      productionDeploymentEvidenceSchemaSha256:
+        "d5438760d86aff69cb7dc46573941e0a4d16302257155b5f9a61c018c6833bdc",
     });
-    expect(packageJson.devDependencies.vercel).toBe("59.11.7");
+    expect(packageJson.devDependencies).not.toHaveProperty("vercel");
+    expect(Object.values(packageJson.scripts ?? {}).join("\n")).not.toMatch(
+      /(?:pnpm\s+(?:dlx|exec)|npx)\s+vercel|\bvercel\s+(?:deploy|promote|rollback)\b/,
+    );
     expect(evidenceSchema.additionalProperties).toBe(false);
     expect(evidenceSchema.required).toContain("executionSha");
     expect(evidenceSchema.required).toContain("baselineDeploymentId");

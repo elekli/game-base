@@ -3,6 +3,31 @@ export type ProductionSchemaGate =
   | "strict-current-schema"
   | "migration-strict-and-ledger-complete";
 
+export type ProductionDeploymentFailure =
+  | "baseline-deployment-invalid"
+  | "baseline-inspection-failed"
+  | "promotion-attempts-exhausted"
+  | "promotion-guard-check-failed"
+  | "promotion-guard-rejected"
+  | "release-gate-rejected"
+  | "release-gate-check-failed"
+  | "rollback-attempts-exhausted"
+  | "smoke-failed-baseline-restored"
+  | "staged-deployment-ensure-failed"
+  | "staged-deployment-identity-mismatch"
+  | "staged-deployment-invalid"
+  | "staged-ready-wait-failed"
+  | "unexpected-current-deployment-after-promotion"
+  | "unexpected-current-deployment-after-rollback"
+  | "unexpected-current-deployment-before-rollback";
+
+export class ProductionDeploymentReleaseError extends Error {
+  constructor(readonly safeDetail: string) {
+    super(`ProductionDeploymentReleaseError: ${safeDetail}`);
+    this.name = "ProductionDeploymentReleaseError";
+  }
+}
+
 type InspectionPurpose =
   | "snapshot-baseline"
   | "verify-promotion"
@@ -17,9 +42,13 @@ export type ProductionDeploymentAction =
       timeoutMs: number;
     }>
   | Readonly<{
-      kind: "deploy-staged";
+      kind: "ensure-staged-deployment";
       executionSha: string;
-      idempotencyKey: string;
+      releaseIdentity: string;
+      metadata: Readonly<{
+        releaseCommit: string;
+        releaseIdentity: string;
+      }>;
       prod: true;
       skipDomain: true;
       timeoutMs: number;
@@ -93,7 +122,7 @@ export type ProductionDeploymentRelease = ReleaseContext &
     stagedDeploymentId?: string;
     promotionAttempts: number;
     rollbackAttempts: number;
-    failure?: string;
+    failure?: ProductionDeploymentFailure;
     evidenceOutcome?: "passed" | "rolled-back";
     requestIds?: ReadonlyArray<string>;
   }>;
@@ -106,7 +135,12 @@ export type ProductionDeploymentEvent =
       schemaGate: ProductionSchemaGate;
     }>
   | Readonly<{ kind: "current-deployment-observed"; deploymentId: string }>
-  | Readonly<{ kind: "staged-deployment-created"; deploymentId: string }>
+  | Readonly<{
+      kind: "staged-deployment-resolved";
+      deploymentId: string;
+      releaseIdentity: string;
+      source: "created" | "reused";
+    }>
   | Readonly<{
       kind: "staged-deployment-ready";
       deploymentId: string;
@@ -135,7 +169,7 @@ const DEPLOYMENT_ID = /^dpl_[A-Za-z0-9]+$/;
 
 function failed(
   release: ProductionDeploymentRelease,
-  failure: string,
+  failure: ProductionDeploymentFailure,
 ): ProductionDeploymentRelease {
   return { ...release, phase: "failed", failure, next: { kind: "stop" } };
 }
@@ -144,11 +178,30 @@ function inspectCurrent(purpose: InspectionPurpose): ProductionDeploymentAction 
   return { kind: "inspect-current-deployment", purpose, timeoutMs: 30_000 };
 }
 
+function prePromotionFailure(
+  phase: ProductionDeploymentPhase,
+): ProductionDeploymentFailure | undefined {
+  switch (phase) {
+    case "awaiting-release-gate":
+      return "release-gate-check-failed";
+    case "snapshotting-baseline":
+      return "baseline-inspection-failed";
+    case "deploying-staged":
+      return "staged-deployment-ensure-failed";
+    case "awaiting-staged-ready":
+      return "staged-ready-wait-failed";
+    case "rechecking-promotion-guard":
+      return "promotion-guard-check-failed";
+    default:
+      return undefined;
+  }
+}
+
 export function createProductionDeploymentRelease(
   context: ReleaseContext,
 ): ProductionDeploymentRelease {
   if (!FULL_SHA.test(context.executionSha)) {
-    throw new Error("ProductionDeploymentReleaseError: execution SHA is invalid");
+    throw new ProductionDeploymentReleaseError("execution SHA is invalid");
   }
   return {
     ...context,
@@ -163,17 +216,9 @@ export function transitionProductionDeploymentRelease(
   release: ProductionDeploymentRelease,
   event: ProductionDeploymentEvent,
 ): ProductionDeploymentRelease {
-  if (
-    event.kind === "operation-failed" &&
-    [
-      "awaiting-release-gate",
-      "snapshotting-baseline",
-      "deploying-staged",
-      "awaiting-staged-ready",
-      "rechecking-promotion-guard",
-    ].includes(release.phase)
-  ) {
-    return failed(release, "operation-failed-before-promotion");
+  const namedPrePromotionFailure = prePromotionFailure(release.phase);
+  if (event.kind === "operation-failed" && namedPrePromotionFailure) {
+    return failed(release, namedPrePromotionFailure);
   }
   switch (release.phase) {
     case "awaiting-release-gate": {
@@ -205,9 +250,13 @@ export function transitionProductionDeploymentRelease(
         baselineDeploymentId: event.deploymentId,
         phase: "deploying-staged",
         next: {
-          kind: "deploy-staged",
+          kind: "ensure-staged-deployment",
           executionSha: release.executionSha,
-          idempotencyKey: `production:${release.executionSha}`,
+          releaseIdentity: `production:${release.executionSha}`,
+          metadata: {
+            releaseCommit: release.executionSha,
+            releaseIdentity: `production:${release.executionSha}`,
+          },
           prod: true,
           skipDomain: true,
           timeoutMs: 300_000,
@@ -215,10 +264,11 @@ export function transitionProductionDeploymentRelease(
       };
     }
     case "deploying-staged": {
-      if (event.kind !== "staged-deployment-created") break;
+      if (event.kind !== "staged-deployment-resolved") break;
       if (
         !DEPLOYMENT_ID.test(event.deploymentId) ||
-        event.deploymentId === release.baselineDeploymentId
+        event.deploymentId === release.baselineDeploymentId ||
+        event.releaseIdentity !== `production:${release.executionSha}`
       ) {
         return failed(release, "staged-deployment-invalid");
       }
@@ -262,14 +312,18 @@ export function transitionProductionDeploymentRelease(
       ) {
         return failed(release, "promotion-guard-rejected");
       }
+      const attempt = release.promotionAttempts + 1;
+      if (attempt > 2) {
+        return failed(release, "promotion-attempts-exhausted");
+      }
       return {
         ...release,
         phase: "promoting-staged",
-        promotionAttempts: 1,
+        promotionAttempts: attempt,
         next: {
           kind: "promote-staged",
           deploymentId: release.stagedDeploymentId!,
-          attempt: 1,
+          attempt,
           maxAttempts: 2,
           timeoutMs: 60_000,
         },
@@ -301,17 +355,14 @@ export function transitionProductionDeploymentRelease(
         if (release.promotionAttempts >= 2) {
           return failed(release, "promotion-attempts-exhausted");
         }
-        const attempt = release.promotionAttempts + 1;
         return {
           ...release,
-          phase: "promoting-staged",
-          promotionAttempts: attempt,
+          phase: "rechecking-promotion-guard",
           next: {
-            kind: "promote-staged",
-            deploymentId: release.stagedDeploymentId!,
-            attempt,
-            maxAttempts: 2,
-            timeoutMs: 60_000,
+            kind: "recheck-promotion-guard",
+            expectedCurrentDeploymentId: release.baselineDeploymentId!,
+            executionSha: release.executionSha,
+            timeoutMs: 30_000,
           },
         };
       }
@@ -424,5 +475,5 @@ export function transitionProductionDeploymentRelease(
     case "failed":
       break;
   }
-  throw new Error("ProductionDeploymentReleaseError: event is invalid for phase");
+  throw new ProductionDeploymentReleaseError("event is invalid for phase");
 }
