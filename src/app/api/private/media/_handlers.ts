@@ -85,9 +85,8 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
   };
   const authorizedBoundary = <Result extends object>(request: Request, operation: Parameters<typeof handlePrivateRequest<Result>>[1]["operation"]) =>
     boundary(request, async (owner) => {
-      const result = await operation(owner);
-      scheduleReconcile(request);
-      return result;
+      try { return await operation(owner); }
+      finally { scheduleReconcile(request); }
     });
   return {
     options(request: Request) {

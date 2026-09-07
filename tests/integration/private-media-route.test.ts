@@ -135,6 +135,18 @@ describe("private media routes", () => {
     expect(onReconcile).toHaveBeenCalledTimes(2);
   });
 
+  it("owner 驗證成功後即使媒體操作失敗，仍排程持久工作的 reconcile", async () => {
+    const tasks: Array<() => Promise<void>> = [];
+    const reconcileMedia = vi.fn(async () => ({ status: "skipped" as const, thumbnailsWoken: 0, cleanupCleaned: 0, cleanupFailed: 0, quotaState: "ok" as const }));
+    const { handlers, service } = setup({ reconcileMedia, afterResponse: (task) => tasks.push(task) });
+    vi.mocked(service.listGameMedia).mockRejectedValueOnce(new MediaAssetUnavailableError());
+
+    expect((await handlers.list(request(`/api/private/media/games/${gameId}`, {}), gameId)).status).toBe(404);
+    expect(tasks).toHaveLength(1);
+    await tasks[0]!();
+    expect(reconcileMedia).toHaveBeenCalledOnce();
+  });
+
   it("reconcile after callback 失敗會通過具名失敗邊界", async () => {
     const { service, verifyAccessToken, onUnhandledFailure } = setup();
     const handlers = createPrivateMediaHandlers({ service, verifyAccessToken, onAccessDenied: vi.fn(), onUnhandledFailure, reconcileMedia: async () => { throw new Error("storage capability"); } });
