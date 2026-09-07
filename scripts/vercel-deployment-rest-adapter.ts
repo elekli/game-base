@@ -153,6 +153,16 @@ export function buildGetVercelDeploymentRequest(idOrUrl: string): GetRequest {
   };
 }
 
+export function buildGetVercelProductionAliasRequest(input: Readonly<{ customDomain: string; projectId: string }>): GetRequest {
+  if (!PROJECT_ID.test(input.projectId) || !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(input.customDomain)) throw new VercelDeploymentRequestContractError();
+  return { method: "GET", path: `/v4/aliases/${encodeURIComponent(input.customDomain)}`, query: { projectId: input.projectId } };
+}
+
+export function parseVercelProductionAlias(value: unknown, input: Readonly<{ customDomain: string; projectId: string }>): string {
+  if (!isRecord(value) || value.alias !== input.customDomain || value.projectId !== input.projectId || typeof value.deploymentId !== "string" || !DEPLOYMENT_ID.test(value.deploymentId)) throw new VercelDeploymentMalformedResponseError();
+  return value.deploymentId;
+}
+
 export function buildUploadVercelFileRequest(
   input: Uint8Array,
   expectedFile: ProductionDeploymentSourceManifestFile,
@@ -453,6 +463,7 @@ export function parseReadyVercelProductionDeployment(
 }
 
 export type VercelDeploymentRestAdapter = Readonly<{
+  getCurrentProductionDeployment(customDomain: string, projectId: string): Promise<unknown>;
   ensureStagedDeployment(input: Readonly<{
     projectName: string;
     projectId: string;
@@ -482,6 +493,12 @@ export function createVercelDeploymentRestAdapter(input?: Readonly<{
   if (!input.stagedProductionSafetyVerified) throw new VercelStagedProductionSafetyUnverifiedError();
 
   return {
+    async getCurrentProductionDeployment(customDomain, projectId) {
+      const request = buildGetVercelProductionAliasRequest({ customDomain, projectId });
+      const alias = await input.transport.getJson(request.path, request.query);
+      const id = parseVercelProductionAlias(alias, { customDomain, projectId });
+      return input.transport.getJson(buildGetVercelDeploymentRequest(id).path);
+    },
     async ensureStagedDeployment({ projectName, projectId, commitSha, releaseIdentity, sourceManifestArtifact, readFileBytes }) {
       validateIdentity({ projectId, commitSha, releaseIdentity, sourceManifestSha256: sourceManifestArtifact.sourceManifestSha256 });
       const pages: unknown[] = [];

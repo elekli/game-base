@@ -12,6 +12,8 @@ import {
   VercelStagedProductionSafetyUnverifiedError,
   buildCreateVercelDeploymentRequest,
   buildGetVercelDeploymentRequest,
+  buildGetVercelProductionAliasRequest,
+  parseVercelProductionAlias,
   buildListVercelProductionDeploymentsRequest,
   buildPromoteVercelDeploymentRequest,
   buildRollbackVercelDeploymentRequest,
@@ -54,6 +56,9 @@ function deployment(overrides: Record<string, unknown> = {}) {
 
 describe("Vercel deployment REST adapter contract", () => {
   it("builds fixed bounded, exact-commit read requests", () => {
+    expect(buildGetVercelProductionAliasRequest({ customDomain: "game.example.com", projectId: "prj_project" })).toEqual({ method: "GET", path: "/v4/aliases/game.example.com", query: { projectId: "prj_project" } });
+    expect(parseVercelProductionAlias({ alias: "game.example.com", projectId: "prj_project", deploymentId: "dpl_D1" }, { customDomain: "game.example.com", projectId: "prj_project" })).toBe("dpl_D1");
+    expect(() => parseVercelProductionAlias({ alias: "other.example.com", projectId: "prj_project", deploymentId: "dpl_D1" }, { customDomain: "game.example.com", projectId: "prj_project" })).toThrow();
     expect(
       buildListVercelProductionDeploymentsRequest({
         commitSha: COMMIT_SHA,

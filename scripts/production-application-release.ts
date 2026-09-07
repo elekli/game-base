@@ -48,6 +48,7 @@ export function createConcreteProductionApplicationReleaseDriver(input: Readonly
   adapter: VercelDeploymentRestAdapter;
   projectId: string;
   projectName: string;
+  customDomain: string;
   manifest: CanonicalProductionDeploymentSourceManifest;
   readSourceFile(file: ProductionDeploymentSourceManifestFile): Promise<Uint8Array>;
   smoke: ProductionSmokeRunner;
@@ -60,7 +61,7 @@ export function createConcreteProductionApplicationReleaseDriver(input: Readonly
   return { async execute(action) {
     switch (action.kind) {
       case "verify-release-gate": return { kind: "release-gate-observed", executionSha: action.kind && input.manifest.manifest.commitSha, exactMainCi: input.exactMainCi, schemaGate: input.schemaGate };
-      case "inspect-current-deployment": return { kind: "current-deployment-observed", deploymentId: deploymentId(await input.adapter.getDeployment("current")) };
+      case "inspect-current-deployment": return { kind: "current-deployment-observed", deploymentId: deploymentId(await input.adapter.getCurrentProductionDeployment(input.customDomain, input.projectId)) };
       case "ensure-staged-deployment": {
         const value = await input.adapter.ensureStagedDeployment({ projectName: input.projectName, projectId: input.projectId, commitSha: action.executionSha, releaseIdentity: action.releaseIdentity, sourceManifestArtifact: input.manifest, readFileBytes: input.readSourceFile });
         return { kind: "staged-deployment-resolved", commitSha: action.executionSha, deploymentId: value.deploymentId, releaseIdentity: action.releaseIdentity, sourceManifestSha256: action.sourceManifestSha256, source: value.source };
@@ -69,7 +70,7 @@ export function createConcreteProductionApplicationReleaseDriver(input: Readonly
         for (let attempt = 0; attempt < action.maxAttempts; attempt += 1) { const value = await input.adapter.getDeployment(action.deploymentId); const state = typeof value === "object" && value !== null ? ((value as Record<string, unknown>).readyState ?? (value as Record<string, unknown>).state) : undefined; if (state === "READY") return { kind: "staged-deployment-ready", deploymentId: action.deploymentId, commitSha: input.manifest.manifest.commitSha, releaseIdentity: `production:${input.manifest.manifest.commitSha}`, sourceManifestSha256: action.sourceManifestSha256 }; await input.sleep(action.intervalMs); }
         return { kind: "operation-failed" };
       }
-      case "recheck-promotion-guard": return { kind: "promotion-guard-observed", currentDeploymentId: deploymentId(await input.adapter.getDeployment("current")), mainSha: await input.mainSha() };
+      case "recheck-promotion-guard": return { kind: "promotion-guard-observed", currentDeploymentId: deploymentId(await input.adapter.getCurrentProductionDeployment(input.customDomain, input.projectId)), mainSha: await input.mainSha() };
       case "promote-staged": await input.adapter.promote(action.deploymentId, input.projectId); return { kind: "promotion-attempt-finished", outcome: "reported-success" };
       case "rollback-baseline": await input.adapter.rollback(action.deploymentId, input.projectId); return { kind: "rollback-attempt-finished", outcome: "reported-success" };
       case "run-production-smoke": return { kind: "smoke-canary-event", event: await input.smoke.execute(action.canaryAction) };
