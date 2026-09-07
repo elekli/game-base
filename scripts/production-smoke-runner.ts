@@ -11,6 +11,6 @@ export class ProductionSmokePrerequisiteError extends Error {
 /**
  * 現階段固定停發。輸入刻意不解析，避免呼叫端以自報狀態解除 repository contract。
  */
-export function createProductionSmokeRunner(_input?: unknown): never {
+export function createProductionSmokeRunner(): never {
   throw new ProductionSmokePrerequisiteError();
 }

@@ -8,12 +8,12 @@ const input = { principalStatus: "approved" as const, routeAndSchemaStatus: "app
 describe("production smoke runner", () => {
   it("makes zero requests while prerequisite status is unresolved", () => {
     const fetchImpl = vi.fn();
-    expect(() => createProductionSmokeRunner({ ...input, principalStatus: "unresolved", fetchImpl })).toThrow(ProductionSmokePrerequisiteError);
+    expect(() => Reflect.apply(createProductionSmokeRunner, null, [{ ...input, principalStatus: "unresolved", fetchImpl }])).toThrow(ProductionSmokePrerequisiteError);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
   it("rejects every caller-supplied approved state without sending a request", () => {
     const fetchImpl = vi.fn();
-    expect(() => createProductionSmokeRunner({ ...input, fetchImpl })).toThrow(ProductionSmokePrerequisiteError);
+    expect(() => Reflect.apply(createProductionSmokeRunner, null, [{ ...input, fetchImpl }])).toThrow(ProductionSmokePrerequisiteError);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

@@ -388,7 +388,7 @@ export async function checkProductionReleaseContract(root: string) {
       "1c10b85c3dd0d8b8712193edc33c3d1812bf8cc5f981e3adcc4f257da0ad3e65",
       "30301fbfa2b15ca5a0e33a65fcb68998ce5bbf112e9499baca21ca1ef9b37166",
       "f2062c6830759da1bcf7799156c2231b348fad20f105f1a72851d01d838f7d84",
-      "295fd19e2c223c99dd625dd993929addd252525a88fac87b38dbc53b20ab8e9e",
+      "1b62169b8e2078522de549691eac8a4dfab5a3dcff6297623bbc6dcc40bde21d",
       "4bedd522a39f3792141ebb79d83a6b3d461c3a53e5ce28f1bbfd4c6de4323ae8",
       "b801b6e3e46f64c3e273c33b5c3c3432ebc152247900e125459f2cecc5613d40",
     ]),
