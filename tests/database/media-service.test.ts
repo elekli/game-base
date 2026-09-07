@@ -744,6 +744,7 @@ describe("MediaService 與真 PostgreSQL", () => {
       markThumbnailUploaded: actual.markThumbnailUploaded.bind(actual), failThumbnail: actual.failThumbnail.bind(actual), retryThumbnail: actual.retryThumbnail.bind(actual),
       listGameMedia: actual.listGameMedia.bind(actual), updateMediaMetadata: actual.updateMediaMetadata.bind(actual),
       selectManualCover: actual.selectManualCover.bind(actual), useSourceCover: actual.useSourceCover.bind(actual),
+      removeMedia: actual.removeMedia.bind(actual), restoreMedia: actual.restoreMedia.bind(actual),
       async adoptThumbnail() { throw new Error("injected pointer transaction failure"); },
     };
     const delays: number[] = [];
@@ -828,5 +829,29 @@ describe("MediaService 與真 PostgreSQL", () => {
     expect(gallery.items.find((item) => item.asset.id === attachment.assetId)?.asset).toMatchObject({ displayName: "規則書", description: "中文版" });
     await expect(service.useSourceCover(owner, { gameId })).resolves.toEqual({ manualCoverAssetId: null });
     await expect(service.listGameMedia(owner, { gameId })).resolves.toMatchObject({ manualCoverAssetId: null });
+  });
+
+  it("移除自訂封面會在同一交易清除指標，還原資產不會偷偷重新指定封面", async () => {
+    const service = serviceFor();
+    const image = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    await service.selectManualCover(owner, { gameId, assetId: image.assetId });
+
+    await expect(service.removeMedia(owner, { assetId: image.assetId })).resolves.toMatchObject({
+      asset: { id: image.assetId, removedAt: expect.any(String) },
+      manualCoverAssetId: null,
+    });
+    await expect(service.listGameMedia(owner, { gameId })).resolves.toMatchObject({
+      manualCoverAssetId: null,
+      items: [],
+    });
+
+    await expect(service.restoreMedia(owner, { assetId: image.assetId })).resolves.toMatchObject({
+      id: image.assetId,
+      removedAt: null,
+    });
+    const restored = await service.listGameMedia(owner, { gameId });
+    expect(restored.manualCoverAssetId).toBeNull();
+    expect(restored.items.map((item) => item.asset.id)).toContain(image.assetId);
   });
 });

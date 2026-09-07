@@ -497,4 +497,59 @@ export class PostgresMediaStore implements MediaStore {
     `) as Row[];
     return Boolean(rows[0]);
   }
+
+  async removeMedia(assetId: string) {
+    return this.db.transaction(async (tx) => {
+      // Lock in this order.  The pointer update and soft removal must be one
+      // observable change to readers and to the cover-pointer trigger.
+      const assetRows = await tx.execute(sql`
+        select asset.id, asset.game_id
+        from app_private.media_assets asset
+        join app_private.games game on game.id = asset.game_id
+        where asset.id = ${assetId} and asset.authority_state = 'verified' and game.trashed_at is null
+        for update of game, asset
+      `) as Row[];
+      if (!assetRows[0]) return null;
+      const rows = await tx.execute(sql`
+        update app_private.games game
+        set manual_cover_asset_id = case when game.manual_cover_asset_id = ${assetId} then null else game.manual_cover_asset_id end
+        from app_private.media_assets asset
+        where game.id = asset.game_id and asset.id = ${assetId}
+          and asset.authority_state = 'verified' and asset.removed_at is null
+          and asset.purpose <> 'source_cover'
+        returning game.manual_cover_asset_id,
+          asset.id as asset_id, asset.game_id, asset.purpose, asset.original_file_name,
+          asset.actual_mime_type, asset.byte_size, asset.width, asset.height, asset.removed_at,
+          asset.created_at, asset.caption, asset.display_name, asset.description
+      `) as Row[];
+      if (!rows[0]) return null;
+      const removed = await tx.execute(sql`
+        update app_private.media_assets set removed_at = clock_timestamp(), removed_reason = 'owner_removed'
+        where id = ${assetId} and removed_at is null
+        returning id as asset_id, game_id, purpose, original_file_name, actual_mime_type,
+          byte_size, width, height, removed_at, created_at, caption, display_name, description
+      `) as Row[];
+      if (!removed[0]) throw new MediaFinalizeUnavailableError();
+      return { asset: assetFrom(removed[0]), manualCoverAssetId: rows[0].manual_cover_asset_id === null ? null : String(rows[0].manual_cover_asset_id) };
+    });
+  }
+
+  async restoreMedia(assetId: string): Promise<MediaAsset | null> {
+    return this.db.transaction(async (tx) => {
+      const rows = await tx.execute(sql`
+        select asset.id from app_private.media_assets asset
+        join app_private.games game on game.id = asset.game_id
+        where asset.id = ${assetId} and asset.authority_state = 'verified' and game.trashed_at is null
+        for update of game, asset
+      `) as Row[];
+      if (!rows[0]) return null;
+      const restored = await tx.execute(sql`
+        update app_private.media_assets set removed_at = null, removed_reason = null
+        where id = ${assetId} and authority_state = 'verified' and removed_at is not null and purpose <> 'source_cover'
+        returning id as asset_id, game_id, purpose, original_file_name, actual_mime_type,
+          byte_size, width, height, removed_at, created_at, caption, display_name, description
+      `) as Row[];
+      return restored[0] ? assetFrom(restored[0]) : null;
+    });
+  }
 }

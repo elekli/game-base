@@ -29,6 +29,8 @@ function setup(overrides: Readonly<{ wakeThumbnail?: (assetId: string) => Promis
     updateMediaMetadata: vi.fn<MediaService["updateMediaMetadata"]>(async () => ({ id: assetId, gameId, purpose: "attachment", originalFileName: "rules.pdf", actualMimeType: "application/pdf", byteSize: 123, width: null, height: null, removedAt: null, createdAt: "2026-09-06T00:00:00.000Z", caption: null, displayName: "規則書", description: "遊戲規則" })),
     selectManualCover: vi.fn<MediaService["selectManualCover"]>(async () => ({ manualCoverAssetId: assetId })),
     useSourceCover: vi.fn<MediaService["useSourceCover"]>(async () => ({ manualCoverAssetId: null })),
+    removeMedia: vi.fn<MediaService["removeMedia"]>(async () => ({ asset: { id: assetId, gameId, purpose: "gallery_image", originalFileName: "photo.png", actualMimeType: "image/png", byteSize: 123, width: 1, height: 1, removedAt: "2026-09-06T00:00:00.000Z", createdAt: "2026-09-06T00:00:00.000Z" }, manualCoverAssetId: null })),
+    restoreMedia: vi.fn<MediaService["restoreMedia"]>(async () => ({ id: assetId, gameId, purpose: "gallery_image", originalFileName: "photo.png", actualMimeType: "image/png", byteSize: 123, width: 1, height: 1, removedAt: null, createdAt: "2026-09-06T00:00:00.000Z" })),
   };
   const verifyAccessToken = vi.fn(async () => owner);
   const onUnhandledFailure = vi.fn();
@@ -57,6 +59,24 @@ describe("private media routes", () => {
 
     expect(response.status).toBe(401);
     expect(service.beginMediaUpload).not.toHaveBeenCalled();
+  });
+
+  it("原檔讀取先驗證身分，再把明確處置傳到公開服務", async () => {
+    const { handlers, service, verifyAccessToken } = setup();
+    vi.mocked(verifyAccessToken).mockRejectedValueOnce(new AccessDeniedError());
+    expect((await handlers.original(request(`/api/private/media/assets/${assetId}/original?disposition=inline`, { assetId }), assetId)).status).toBe(401);
+    expect(service.issueOriginalRead).not.toHaveBeenCalled();
+    const { handlers: authenticated, service: allowed } = setup();
+    expect((await authenticated.original(request(`/api/private/media/assets/${assetId}/original?disposition=inline`, { assetId }), assetId)).status).toBe(200);
+    expect(allowed.issueOriginalRead).toHaveBeenCalledWith(owner, { assetId, disposition: "inline" });
+  });
+
+  it("移除與還原經過認證邊界後才呼叫公開 MediaService", async () => {
+    const { handlers, service } = setup();
+    expect((await handlers.remove(request(`/api/private/media/assets/${assetId}/remove`, {}), assetId)).status).toBe(200);
+    expect((await handlers.restore(request(`/api/private/media/assets/${assetId}/restore`, {}), assetId)).status).toBe(200);
+    expect(service.removeMedia).toHaveBeenCalledWith(owner, { assetId });
+    expect(service.restoreMedia).toHaveBeenCalledWith(owner, { assetId });
   });
 
   it("未授權的附件說明與封面變更在 MediaService 前拒絕", async () => {
@@ -99,7 +119,7 @@ describe("private media routes", () => {
     expect(begin.headers.get("cache-control")).toBe("private, no-store");
     expect(await original.json()).toMatchObject({ disposition: "attachment", url: expect.stringContaining("download=") });
     expect(service.finalizeMediaUpload).toHaveBeenCalledWith(owner, { idempotencyKey: key });
-    expect(service.issueOriginalRead).toHaveBeenCalledWith(owner, { assetId });
+    expect(service.issueOriginalRead).toHaveBeenCalledWith(owner, { assetId, disposition: "attachment" });
     expect([...warn.mock.calls, ...error.mock.calls].flat().join(" ")).not.toContain("opaque");
     warn.mockRestore(); error.mockRestore();
   });

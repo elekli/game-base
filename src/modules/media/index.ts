@@ -12,6 +12,7 @@ export type {
   MediaService,
   MediaUploadResult,
   OriginalMediaRead,
+  MediaRemovalResult,
   RetryThumbnailCommand,
   UploadGrant,
 } from "./contracts";

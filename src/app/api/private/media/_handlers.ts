@@ -24,6 +24,7 @@ const beginSchema = z.object({
 }).strict();
 const finalizeSchema = z.object({ idempotencyKey: z.uuid() }).strict();
 const assetIdSchema = z.uuid();
+const originalReadSchema = z.object({ disposition: z.enum(["inline", "attachment"]) }).strict();
 const metadataSchema = z.object({
   caption: z.string().max(2_000).nullable().optional(),
   displayName: z.string().max(255).nullable().optional(),
@@ -107,7 +108,10 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
       return withCors(request, await boundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(assetId);
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
-        return dependencies.service.issueOriginalRead(owner, { assetId: parsed.data });
+        const parameters = new URL(request.url).searchParams;
+        const query = originalReadSchema.safeParse(Object.fromEntries(parameters));
+        if (!query.success && parameters.size > 0) throw new PrivateRequestInputError("媒體讀取參數無效。");
+        return dependencies.service.issueOriginalRead(owner, { assetId: parsed.data, disposition: query.success ? query.data.disposition : "attachment" });
       }));
     },
     async list(request: Request, gameId: string) {
@@ -149,6 +153,22 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
           catch { await observeBackgroundFailure(request, "media_thumbnail_retry_wake_failed"); }
         });
         return result;
+      }));
+    },
+    async remove(request: Request, assetId: string) {
+      const rejected = crossOriginResponse(request); if (rejected) return rejected;
+      return withCors(request, await boundary(request, async (owner) => {
+        const parsed = assetIdSchema.safeParse(assetId);
+        if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
+        return dependencies.service.removeMedia(owner, { assetId: parsed.data });
+      }));
+    },
+    async restore(request: Request, assetId: string) {
+      const rejected = crossOriginResponse(request); if (rejected) return rejected;
+      return withCors(request, await boundary(request, async (owner) => {
+        const parsed = assetIdSchema.safeParse(assetId);
+        if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
+        return dependencies.service.restoreMedia(owner, { assetId: parsed.data });
       }));
     },
   };

@@ -228,7 +228,7 @@ describe("媒體公開介面", () => {
     });
     expect(second.url).toContain("token=opaque");
     expect(signed).toHaveBeenCalledTimes(2);
-    expect(signed).toHaveBeenCalledWith(expect.stringMatching(/^originals\//), "桌遊照片.png", 60);
+    expect(signed).toHaveBeenCalledWith(expect.stringMatching(/^originals\//), "桌遊照片.png", "attachment", 60);
   });
   it("begin 對同一原檔冪等，且拒絕相同鍵配上不同不可變參數", async () => {
     const service = createMediaService({

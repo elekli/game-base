@@ -78,22 +78,39 @@ describe("media batch upload", () => {
     expect(createId).toHaveBeenCalledTimes(1);
   });
 
-  it("成功後移除 intent，且同一個 active batch 不重複排入同一冪等鍵", async () => {
-    const identities = new Map<string, string>();
+  it("成功後移除 intent，且相同中繼資料的兩次選取各自保留", async () => {
+    const identities = new Map<string, string[]>();
     const identityStore = {
-      find(selected: { name: string }, purpose: string) { return identities.get(`${purpose}:${selected.name}`) ?? null; },
-      remember(selected: { name: string }, purpose: string, key: string) { identities.set(`${purpose}:${selected.name}`, key); },
-      forget(selected: { name: string }, purpose: string) { identities.delete(`${purpose}:${selected.name}`); },
+      find(selected: { name: string }, purpose: string, occurrence = 0) { return identities.get(`${purpose}:${selected.name}`)?.[occurrence] ?? null; },
+      remember(selected: { name: string }, purpose: string, key: string) { const id = `${purpose}:${selected.name}`; identities.set(id, [...(identities.get(id) ?? []), key]); },
+      forget(selected: { name: string }, purpose: string, key: string) { const id = `${purpose}:${selected.name}`; identities.set(id, (identities.get(id) ?? []).filter((candidate) => candidate !== key)); },
     };
+    let keyNumber = 1;
     const batch = createMediaBatchUpload({
       upload: vi.fn(async () => ({ assetId: "asset", thumbnailState: "pending" as const })),
-      createId: () => "00000000-0000-4000-8000-000000000001",
+      createId: () => `00000000-0000-4000-8000-00000000000${keyNumber++}`,
       identityStore,
     });
     batch.add([file("same.png"), file("same.png")]);
-    expect(batch.snapshot()).toHaveLength(1);
+    expect(batch.snapshot()).toHaveLength(2);
     await batch.start();
-    expect(identities.size).toBe(0);
+    expect([...identities.values()].flat()).toEqual([]);
+  });
+
+  it("同一批同中繼資料的兩個檔案各有可續傳身分，成功不會刪掉另一個 intent", async () => {
+    const keys = ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"];
+    let index = 0;
+    const identityStore = createSessionLikeIdentityStore();
+    const batch = createMediaBatchUpload({
+      upload: vi.fn(async ({ idempotencyKey }) => ({ assetId: `asset-${idempotencyKey}`, thumbnailState: "pending" as const })),
+      createId: () => keys[index++]!, identityStore,
+    });
+    batch.add([file("same.png"), file("same.png")]);
+    expect(batch.snapshot().map((item) => item.idempotencyKey)).toEqual(keys);
+    await batch.start();
+    const remounted = createMediaBatchUpload({ upload: vi.fn(), createId: () => "unexpected", identityStore });
+    remounted.add([file("same.png")]);
+    expect(remounted.snapshot()[0]?.idempotencyKey).toBe("unexpected");
   });
 
   it("取消會中止 active transport，但保留可供續傳的失敗 intent", async () => {
@@ -117,3 +134,20 @@ describe("media batch upload", () => {
     expect(batch.snapshot()[0]?.status).toBe("cancelled");
   });
 });
+
+function createSessionLikeIdentityStore() {
+  const values = new Map<string, string[]>();
+  const signature = (selected: { name: string }, purpose: string) => `${purpose}:${selected.name}`;
+  return {
+    find(selected: { name: string }, purpose: string, occurrence = 0) { return values.get(signature(selected, purpose))?.[occurrence] ?? null; },
+    remember(selected: { name: string }, purpose: string, key: string) {
+      const id = signature(selected, purpose);
+      const existing = values.get(id) ?? [];
+      if (!existing.includes(key)) values.set(id, [...existing, key]);
+    },
+    forget(selected: { name: string }, purpose: string, key: string) {
+      const id = signature(selected, purpose);
+      values.set(id, (values.get(id) ?? []).filter((candidate) => candidate !== key));
+    },
+  };
+}

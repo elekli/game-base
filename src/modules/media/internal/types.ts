@@ -13,7 +13,7 @@ export type ImageMediaPurpose = Exclude<MediaPurpose, "attachment">;
 
 export type MediaObjectStore = Readonly<{
   createUploadGrant(path: string): Promise<Readonly<{ uploadUrl: string; token: string; expiresAt: string }>>;
-  createOriginalReadGrant(path: string, fileName: string, expiresInSeconds: 60): Promise<Readonly<{ url: string; expiresAt: string }>>;
+  createOriginalReadGrant(path: string, fileName: string, dispositionOrExpires?: "inline" | "attachment" | 60, expiresInSeconds?: 60): Promise<Readonly<{ url: string; expiresAt: string }>>;
   createThumbnailReadGrant?(path: string, expiresInSeconds?: 300): Promise<Readonly<{ url: string; expiresAt: string }>>;
   inspect(path: string): Promise<Readonly<{ path: string; byteSize: number; mimeType: string }> | null>;
   read(path: string): AsyncIterable<Uint8Array>;
@@ -91,6 +91,8 @@ export type MediaStore = Readonly<{
   updateMediaMetadata(command: Readonly<{ assetId: string; caption?: string | null; displayName?: string | null; description?: string | null }>): Promise<MediaAsset | null>;
   selectManualCover(gameId: string, assetId: string): Promise<boolean>;
   useSourceCover(gameId: string): Promise<boolean>;
+  removeMedia(assetId: string): Promise<Readonly<{ asset: MediaAsset; manualCoverAssetId: string | null }> | null>;
+  restoreMedia(assetId: string): Promise<MediaAsset | null>;
 }>;
 
 export type MediaStoredGalleryItem = Readonly<{

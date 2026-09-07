@@ -192,5 +192,24 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
       manualCovers.delete(gameId);
       return true;
     },
+    async removeMedia(assetId) {
+      for (const [key, result] of results) {
+        if (result.asset.id !== assetId || result.asset.removedAt !== null || result.asset.purpose === "source_cover") continue;
+        const removed = { ...result, asset: { ...result.asset, removedAt: new Date().toISOString() } };
+        results.set(key, removed);
+        const manualCoverAssetId = manualCovers.get(result.asset.gameId) === assetId ? (manualCovers.delete(result.asset.gameId), null) : manualCovers.get(result.asset.gameId) ?? null;
+        return { asset: removed.asset, manualCoverAssetId };
+      }
+      return null;
+    },
+    async restoreMedia(assetId) {
+      for (const [key, result] of results) {
+        if (result.asset.id !== assetId || result.asset.removedAt === null || result.asset.purpose === "source_cover") continue;
+        const restored = { ...result, asset: { ...result.asset, removedAt: null } };
+        results.set(key, restored);
+        return restored.asset;
+      }
+      return null;
+    },
   };
 }

@@ -86,10 +86,14 @@ export class SupabaseMediaObjectStore implements MediaObjectStore {
     } catch (error) { throw error instanceof MediaStorageUnavailableError ? error : new MediaStorageUnavailableError(); }
   }
 
-  async createOriginalReadGrant(path: string, fileName: string, expiresInSeconds: 60) {
+  async createOriginalReadGrant(path: string, fileName: string, dispositionOrExpires: "inline" | "attachment" | 60 = "attachment", maybeExpiresInSeconds: 60 = 60) {
     assertOriginalPath(path);
+    const disposition = typeof dispositionOrExpires === "number" ? "attachment" : dispositionOrExpires;
+    const expiresInSeconds = typeof dispositionOrExpires === "number" ? dispositionOrExpires : maybeExpiresInSeconds;
     try {
-      const { data, error } = await this.files.createSignedUrl(path, expiresInSeconds, { download: fileName });
+      const { data, error } = disposition === "attachment"
+        ? await this.files.createSignedUrl(path, expiresInSeconds, { download: fileName })
+        : await this.files.createSignedUrl(path, expiresInSeconds);
       if (error || !data?.signedUrl) throw new MediaStorageUnavailableError();
       const signed = new URL(data.signedUrl);
       const expectedPath = `/storage/v1/object/sign/${encodeURIComponent(this.bucket)}/${path.split("/").map(encodeURIComponent).join("/")}`;
@@ -98,8 +102,9 @@ export class SupabaseMediaObjectStore implements MediaObjectStore {
         signed.origin !== this.storageOrigin || signed.username || signed.password ||
         signed.pathname !== expectedPath ||
         signed.searchParams.getAll("token").length !== 1 || !signed.searchParams.get("token") ||
-        signed.searchParams.getAll("download").length !== 1 || signed.searchParams.get("download") !== fileName ||
-        queryKeys.some((key) => key !== "token" && key !== "download")
+        (disposition === "attachment" && (signed.searchParams.getAll("download").length !== 1 || signed.searchParams.get("download") !== fileName)) ||
+        (disposition === "inline" && signed.searchParams.has("download")) ||
+        queryKeys.some((key) => key !== "token" && (disposition === "attachment" ? key !== "download" : true))
       ) throw new MediaStorageUnavailableError();
       return { url: data.signedUrl, expiresAt: new Date(this.now().getTime() + expiresInSeconds * 1000).toISOString() };
     } catch (error) { throw error instanceof MediaStorageUnavailableError ? error : new MediaStorageUnavailableError(); }
