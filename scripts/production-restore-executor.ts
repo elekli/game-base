@@ -101,7 +101,8 @@ export type ProductionRestoreCommandInvocation = Readonly<{
     | "inspect-local-target"
     | "cleanup-partial-target"
     | "inspect-client-container"
-    | "cleanup-client-container";
+    | "cleanup-client-container"
+    | "revoke-local-restore-role";
   program: "docker" | "pnpm";
   argv: ReadonlyArray<string>;
   cwd: string;
@@ -359,8 +360,21 @@ export function createProductionRestoreExecutor({
       await commandRunner(command, sensitiveEnvironment);
       ownedClients.delete(containerName);
     } catch (error) {
-      await removeClientIfPresent(containerName);
+      let clientCleanupFailed = false;
+      try {
+        await removeClientIfPresent(containerName);
+      } catch {
+        clientCleanupFailed = true;
+      }
       ownedClients.delete(containerName);
+      if (clientCleanupFailed) {
+        const primarySafeDetail = error instanceof ProductionRestoreCommandError
+          ? error.safeDetail
+          : `${command.purpose} failed`;
+        throw new ProductionRestoreCommandError(
+          `${primarySafeDetail}; isolated client cleanup failed`,
+        );
+      }
       throw error;
     }
   };
@@ -478,7 +492,7 @@ export function createProductionRestoreExecutor({
         return { outcome: "passed" };
       }
       if (action.kind === "clear-local-target-data") {
-        const clearSql = "begin; grant app_migrator to postgres; set role app_migrator; do $$ declare tables text; begin select string_agg(format('%I.%I', schemaname, tablename), ', ') into tables from pg_catalog.pg_tables where schemaname = 'app_private'; if tables is not null then execute 'truncate table ' || tables || ' restart identity cascade'; end if; end $$; reset role; revoke app_migrator from postgres; commit;";
+        const clearSql = "begin; grant app_migrator to postgres; set role app_migrator; alter table app_private.production_smoke_canaries no force row level security; do $$ declare tables text; begin select string_agg(format('%I.%I', schemaname, tablename), ', ') into tables from pg_catalog.pg_tables where schemaname = 'app_private'; if tables is not null then execute 'truncate table ' || tables || ' restart identity cascade'; end if; end $$; reset role; commit;";
         await runFreshClient(
           RESTORE_CLIENT_CONTAINER,
           invocation(
@@ -506,26 +520,69 @@ export function createProductionRestoreExecutor({
         let restoreArgv = replaceArgument(action.argv, "--host", LOCAL_CONTAINER);
         restoreArgv = replaceArgument(restoreArgv, "--port", "5432");
         restoreArgv[restoreArgv.length - 1] = `/runner/${basename(action.argv.at(-1)!)}`;
-        await runFreshClient(
-          RESTORE_CLIENT_CONTAINER,
-          invocation(
-            { repositoryRoot },
-            action.kind,
-            "docker",
-            [
-              "run", "--rm", "--name", RESTORE_CLIENT_CONTAINER,
-              "--network", LOCAL_NETWORK,
-              "--env", "PGPASSWORD",
-              "--mount", `type=bind,source=${runnerTempDir},target=/runner,readonly`,
-              POSTGRES_CLIENT_IMAGE,
-              "pg_restore",
-              ...restoreArgv,
-            ],
-            ["PGPASSWORD"],
-            300_000,
-          ),
-          { PGPASSWORD: "postgres" },
-        );
+        restoreArgv.unshift("--role=app_migrator");
+        let restoreFailure: ProductionRestoreCommandError | undefined;
+        try {
+          await runFreshClient(
+            RESTORE_CLIENT_CONTAINER,
+            invocation(
+              { repositoryRoot },
+              action.kind,
+              "docker",
+              [
+                "run", "--rm", "--name", RESTORE_CLIENT_CONTAINER,
+                "--network", LOCAL_NETWORK,
+                "--env", "PGPASSWORD",
+                "--mount", `type=bind,source=${runnerTempDir},target=/runner,readonly`,
+                POSTGRES_CLIENT_IMAGE,
+                "pg_restore",
+                ...restoreArgv,
+              ],
+              ["PGPASSWORD"],
+              300_000,
+            ),
+            { PGPASSWORD: "postgres" },
+          );
+        } catch (error) {
+          restoreFailure = error instanceof ProductionRestoreCommandError
+            ? error
+            : new ProductionRestoreCommandError("restore-dump failed");
+        }
+        let roleCleanupFailed = false;
+        try {
+          await runFreshClient(
+            RESTORE_CLIENT_CONTAINER,
+            invocation(
+              { repositoryRoot },
+              "revoke-local-restore-role",
+              "docker",
+              [
+                "run", "--rm", "--name", RESTORE_CLIENT_CONTAINER,
+                "--network", LOCAL_NETWORK,
+                "--env", "PGPASSWORD",
+                POSTGRES_CLIENT_IMAGE,
+                "psql",
+                "--host", LOCAL_CONTAINER,
+                "--port", "5432",
+                "--username", "postgres",
+                "--dbname", "postgres",
+                "--set", "ON_ERROR_STOP=1",
+                "--command", "begin; set role app_migrator; alter table app_private.production_smoke_canaries force row level security; reset role; revoke app_migrator from postgres; commit;",
+              ],
+              ["PGPASSWORD"],
+              120_000,
+            ),
+            { PGPASSWORD: "postgres" },
+          );
+        } catch {
+          roleCleanupFailed = true;
+        }
+        if (roleCleanupFailed) {
+          throw new ProductionRestoreCommandError(
+            `${restoreFailure ? `${restoreFailure.safeDetail}; ` : ""}restore role cleanup failed`,
+          );
+        }
+        if (restoreFailure) throw restoreFailure;
         const digest = await digestFile(action.argv.at(-1)!);
         return { outcome: "passed", restoredSha256: digest.sha256 };
       }
