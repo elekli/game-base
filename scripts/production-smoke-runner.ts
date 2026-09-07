@@ -58,6 +58,9 @@ export function createProductionSmokeRunner(input: Readonly<{
   fetchImpl?: FetchImplementation;
   timeoutMs?: number;
 }>): ProductionSmokeRunner {
+  void input;
+  throw new ProductionSmokePrerequisiteError();
+  /*
   if (input.principalStatus !== "approved" || input.routeAndSchemaStatus !== "approved") {
     throw new ProductionSmokePrerequisiteError();
   }
@@ -101,5 +104,5 @@ export function createProductionSmokeRunner(input: Readonly<{
         }
       } finally { clearTimeout(timer); }
     },
-  };
+  }; */
 }

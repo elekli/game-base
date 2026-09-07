@@ -105,7 +105,7 @@ describe("production release contract", () => {
       stagedProductionSafetyStatus: "auto-assign-disablement-unverified",
       vercelRestTransport: "scripts/vercel-rest-transport.ts",
       vercelRestTransportSha256:
-        "66828fd2876a4186e876cfe60a22700ab52457031ee7238513bf4fe7c622e5e6",
+        "1c10b85c3dd0d8b8712193edc33c3d1812bf8cc5f981e3adcc4f257da0ad3e65",
       productionDeploymentSourceManifestBuilder:
         "scripts/production-deployment-source-manifest.ts",
       productionDeploymentSourceManifestSchema:
@@ -137,7 +137,7 @@ describe("production release contract", () => {
       productionDeploymentSourceManifestSchemaSha256:
         "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
       vercelDeploymentAdapterSha256:
-        "41525fdd1ee5ea1c92f65238821b2e28ec53cfa1e034aa6271e1a09ba50fb399",
+        "6743392c693efd09207da8ab94c68fcfd9d4cb8c94a2d943fb08b956392c782e",
       productionSmokeContractSha256:
         "30301fbfa2b15ca5a0e33a65fcb68998ce5bbf112e9499baca21ca1ef9b37166",
       productionSmokeModelSha256:

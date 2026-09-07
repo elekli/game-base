@@ -10,18 +10,9 @@ describe("production smoke runner", () => {
     expect(() => createProductionSmokeRunner({ ...input, principalStatus: "unresolved", fetchImpl })).toThrow(ProductionSmokePrerequisiteError);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
-  it("parses only a fixed action response", async () => {
-    const runner = createProductionSmokeRunner({ ...input, fetchImpl: vi.fn(async () => new Response(JSON.stringify({ kind: "row-written" }), { status: 200 })) });
-    await expect(runner.execute(action)).resolves.toEqual({ kind: "row-written" });
-  });
-  it("fails closed for malformed and unknown responses", async () => {
-    for (const body of [{ kind: "unknown" }, { nope: true }]) {
-      const runner = createProductionSmokeRunner({ ...input, fetchImpl: vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })) });
-      await expect(runner.execute(action)).rejects.toThrow(ProductionSmokeResponseError);
-    }
-  });
-  it("fails closed when the transport rejects or times out", async () => {
-    const runner = createProductionSmokeRunner({ ...input, timeoutMs: 1, fetchImpl: vi.fn(async () => { throw new Error("network"); }) });
-    await expect(runner.execute(action)).rejects.toThrow();
+  it("rejects every caller-supplied approved state without sending a request", () => {
+    const fetchImpl = vi.fn();
+    expect(() => createProductionSmokeRunner({ ...input, fetchImpl })).toThrow(ProductionSmokePrerequisiteError);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

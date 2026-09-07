@@ -192,7 +192,7 @@ export function buildCreateVercelDeploymentRequest(input: Readonly<{
   releaseIdentity: string;
   sourceManifestArtifact: CanonicalProductionDeploymentSourceManifest;
   stagedProductionSafetyVerified?: true;
-}>): PostRequest<Readonly<Record<string, unknown>>> {
+}>): never {
   if (
     !isRecord(input) ||
     (Object.keys(input).length !== 3 && Object.keys(input).length !== 4) ||
@@ -217,27 +217,8 @@ export function buildCreateVercelDeploymentRequest(input: Readonly<{
   ) {
     throw new VercelDeploymentRequestContractError();
   }
-  if (input.stagedProductionSafetyVerified !== true) {
-    throw new VercelStagedProductionSafetyUnverifiedError();
-  }
-  return {
-    method: "POST",
-    path: "/v13/deployments",
-    body: {
-      name: projectName,
-      target: "production",
-      files: verifiedSource.manifest.files.map((file) => ({
-        file: file.path,
-        sha: file.sha1,
-        size: file.size,
-      })),
-      meta: {
-        releaseCommit: commitSha,
-        releaseIdentity,
-        sourceManifestSha256: verifiedSource.sourceManifestSha256,
-      },
-    },
-  };
+  void verifiedSource;
+  throw new VercelStagedProductionSafetyUnverifiedError();
 }
 
 function verifyCanonicalSourceManifestArtifact(
@@ -488,11 +469,10 @@ export function createVercelDeploymentRestAdapter(input?: Readonly<{
   stagedProductionSafetyVerified: boolean;
   transport: VercelDeploymentRestTransport;
 }>): VercelDeploymentRestAdapter {
-  if (input === undefined) throw new VercelDeploymentMutationDisabledError();
-  if (!input.liveMutationsEnabled) throw new VercelDeploymentMutationDisabledError();
-  if (!input.stagedProductionSafetyVerified) throw new VercelStagedProductionSafetyUnverifiedError();
+  void input;
+  throw new VercelDeploymentMutationDisabledError();
 
-  return {
+  /* return {
     async getCurrentProductionDeployment(customDomain, projectId) {
       const request = buildGetVercelProductionAliasRequest({ customDomain, projectId });
       const alias = await input.transport.getJson(request.path, request.query);
@@ -546,5 +526,5 @@ export function createVercelDeploymentRestAdapter(input?: Readonly<{
       const request = buildRollbackVercelDeploymentRequest({ deploymentId, projectId });
       await input.transport.postJson(request.path);
     },
-  };
+  }; */
 }

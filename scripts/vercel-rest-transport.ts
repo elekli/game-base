@@ -59,24 +59,6 @@ export type VercelReadOnlyTransport = Readonly<{
   ): Promise<unknown>;
 }>;
 
-export type VercelMutationTransport = VercelReadOnlyTransport & Readonly<{
-  postJson(
-    path: string,
-    body?: unknown,
-    headers?: Readonly<Record<string, string>>,
-  ): Promise<unknown>;
-  postBytes(
-    path: string,
-    body: Uint8Array,
-    headers: Readonly<Record<string, string>>,
-  ): Promise<unknown>;
-}>;
-
-function validatePath(path: string): void {
-  if (!path.startsWith("/") || path.startsWith("//") || /[?#]/.test(path)) {
-    throw new VercelRestConfigurationError();
-  }
-}
 
 async function readBoundedBody(
   response: Response,
@@ -214,60 +196,5 @@ export function createVercelReadOnlyTransport({
         if (timeout !== undefined) clearTimeout(timeout);
       }
     },
-  };
-}
-
-/** 唯一的 Vercel REST transport；呼叫端仍須由 adapter 決定是否允許 mutation。 */
-export function createVercelMutationTransport(input: Readonly<{
-  fetchImpl?: VercelFetchImplementation;
-  maxResponseBytes?: number;
-  teamId: string;
-  timeoutMs: number;
-  token: string;
-}>): VercelMutationTransport {
-  const readOnly = createVercelReadOnlyTransport(input);
-  const { fetchImpl = globalThis.fetch, maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, teamId, timeoutMs, token } = input;
-  if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes <= 0) throw new VercelRestConfigurationError();
-  async function post(path: string, body: BodyInit | undefined, headers: Readonly<Record<string, string>>): Promise<unknown> {
-    validatePath(path);
-    if (Object.keys(headers).some((key) => key.toLowerCase() === "authorization" || key.toLowerCase() === "accept")) {
-      throw new VercelRestConfigurationError();
-    }
-    const url = new URL(path, VERCEL_API_ORIGIN);
-    url.searchParams.set("teamId", teamId);
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
-    try {
-      let response: Response;
-      try {
-        response = await fetchImpl(url, { method: "POST", body, headers: { ...headers, accept: "application/json", authorization: `Bearer ${token}` }, signal: controller.signal });
-      } catch {
-        if (timedOut) throw new VercelRestTimeoutError();
-        throw new VercelRestNetworkError();
-      }
-      if (!response.ok) throw new VercelRestHttpError(response.status);
-      const contentLength = response.headers.get("content-length");
-      if (contentLength === "0" || response.status === 204) return {};
-      const bytes = await response.arrayBuffer();
-      if (bytes.byteLength > maxResponseBytes) throw new VercelRestMalformedResponseError();
-      const text = Buffer.from(bytes).toString("utf8");
-      try {
-        return text === "" ? {} : JSON.parse(text) as unknown;
-      } catch {
-        throw new VercelRestMalformedJsonError();
-      }
-    } catch (error) {
-      if (timedOut) throw new VercelRestTimeoutError();
-      if (error instanceof VercelRestHttpError || error instanceof VercelRestMalformedResponseError || error instanceof VercelRestConfigurationError) throw error;
-      throw new VercelRestNetworkError();
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  return {
-    ...readOnly,
-    postJson: (path, body, headers = {}) => post(path, body === undefined ? undefined : JSON.stringify(body), { "content-type": "application/json", ...headers }),
-    postBytes: (path, body, headers) => post(path, Buffer.from(body), headers),
   };
 }
