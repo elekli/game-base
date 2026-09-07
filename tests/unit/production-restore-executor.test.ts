@@ -133,7 +133,13 @@ describe("production restore executor", () => {
     expect(serialized).toContain("--schema=app_private");
     expect(serialized).not.toContain("--clean");
     expect(serialized).not.toContain("--create");
+    expect(serialized).toContain("ON_ERROR_STOP=1");
+    expect(serialized).toContain("begin; grant app_migrator to postgres");
+    expect(serialized).toContain("grant app_migrator to postgres");
+    expect(serialized).toContain("set role app_migrator");
     expect(serialized).toContain("truncate table");
+    expect(serialized).toContain("revoke app_migrator from postgres");
+    expect(serialized).toContain("revoke app_migrator from postgres; commit;");
   });
 
   it("fails and cleans the target when restored data differs from the exported snapshot", async () => {

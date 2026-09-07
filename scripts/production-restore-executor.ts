@@ -411,7 +411,7 @@ export function createProductionRestoreExecutor({
         return { outcome: "passed" };
       }
       if (action.kind === "clear-local-target-data") {
-        const clearSql = "do $$ declare tables text; begin select string_agg(format('%I.%I', schemaname, tablename), ', ') into tables from pg_catalog.pg_tables where schemaname = 'app_private'; if tables is not null then execute 'truncate table ' || tables || ' restart identity cascade'; end if; end $$;";
+        const clearSql = "begin; grant app_migrator to postgres; set role app_migrator; do $$ declare tables text; begin select string_agg(format('%I.%I', schemaname, tablename), ', ') into tables from pg_catalog.pg_tables where schemaname = 'app_private'; if tables is not null then execute 'truncate table ' || tables || ' restart identity cascade'; end if; end $$; reset role; revoke app_migrator from postgres; commit;";
         await runFreshClient(
           RESTORE_CLIENT_CONTAINER,
           invocation(
