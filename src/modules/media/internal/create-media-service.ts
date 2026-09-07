@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { MediaService } from "../contracts";
+import type { MediaDerivative, MediaService } from "../contracts";
 import { assertMediaFileSize } from "../file-size-policy";
 import {
   MediaFileEmptyError,
@@ -12,9 +12,14 @@ import {
   MediaAssetUnavailableError,
   MediaStorageUnavailableError,
   MediaReadUnavailableError,
+  MediaThumbnailUnavailableError,
+  MediaThumbnailUnsupportedError,
 } from "./errors";
 import { identifyAttachmentMime, validateRasterImage } from "./image-header";
 import type { MediaIngest, MediaObjectStore, MediaStore, ValidatedMediaObject } from "./types";
+import { transformThumbnail } from "./thumbnail-transform";
+
+export type InternalMediaService = MediaService & Readonly<{ processThumbnail(assetId: string): Promise<void> }>;
 
 function normalizeMime(value: string): string {
   return value.split(";", 1)[0].trim().toLocaleLowerCase("en-US");
@@ -34,8 +39,9 @@ async function validateStoredObject(objects: MediaObjectStore, ingest: MediaInge
   return { actualMimeType: image.mimeType, byteSize: metadata.byteSize, width: image.width, height: image.height };
 }
 
-export function createMediaService(dependencies: Readonly<{ store: MediaStore; objects: MediaObjectStore; now?: () => Date }>): MediaService {
+export function createMediaService(dependencies: Readonly<{ store: MediaStore; objects: MediaObjectStore; now?: () => Date; sleep?: (milliseconds: number) => Promise<void> }>): InternalMediaService {
   const now = dependencies.now ?? (() => new Date());
+  const sleep = dependencies.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   return {
     async beginMediaUpload(owner, command) {
       void owner;
@@ -105,6 +111,41 @@ export function createMediaService(dependencies: Readonly<{ store: MediaStore; o
         if (error instanceof MediaStorageUnavailableError) throw new MediaFinalizeUnavailableError();
         if (error instanceof MediaOperationError) throw error;
         throw new MediaFinalizeUnavailableError();
+      }
+    },
+    async retryThumbnail(owner, command): Promise<MediaDerivative> {
+      void owner;
+      const thumbnail = await dependencies.store.retryThumbnail(command.assetId);
+      if (!thumbnail) throw new MediaFinalizeUnavailableError();
+      return thumbnail;
+    },
+    async processThumbnail(assetId): Promise<void> {
+      for (let retry = 0; retry < 3; retry += 1) {
+        const token = randomUUID();
+        const claim = await dependencies.store.claimThumbnail(assetId, { token });
+        if (claim.status !== "claimed") return;
+        const attempt = { derivativeId: claim.derivativeId, attemptId: claim.attempt.id, attemptNumber: claim.attempt.number, leaseToken: token };
+        try {
+          const transformed = await transformThumbnail(dependencies.objects.read(claim.originalObjectPath));
+          await dependencies.objects.uploadDerivative(claim.attempt.objectPath, transformed.bytes);
+          await dependencies.store.markThumbnailUploaded(attempt);
+          await dependencies.store.adoptThumbnail({ ...attempt, width: transformed.width, height: transformed.height, byteSize: transformed.bytes.byteLength });
+          return;
+        } catch (error) {
+          if (error instanceof MediaThumbnailUnsupportedError) {
+            await dependencies.store.failThumbnail({ ...attempt, deterministic: true });
+            return;
+          }
+          let failed: Readonly<{ retryDelayMs: number | null }>;
+          try {
+            failed = await dependencies.store.failThumbnail({ ...attempt, deterministic: false });
+          } catch (transitionError) {
+            if (transitionError instanceof MediaOperationError) throw transitionError;
+            throw new MediaThumbnailUnavailableError();
+          }
+          if (failed.retryDelayMs === null || retry === 2) return;
+          await sleep(failed.retryDelayMs);
+        }
       }
     },
     async issueOriginalRead(owner, query) {

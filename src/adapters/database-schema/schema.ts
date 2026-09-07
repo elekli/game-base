@@ -215,7 +215,7 @@ export const mediaAssetsInAppPrivate = appPrivate.table("media_assets", {
 
 export const mediaDerivativeAttemptsInAppPrivate = appPrivate.table("media_derivative_attempts", {
 	id: uuid().defaultRandom().notNull(),
-	derivativeId: uuid("derivative_id").notNull(),
+	derivativeId: uuid("derivative_id").notNull().references((): AnyPgColumn => mediaDerivativesInAppPrivate.id, { onDelete: "restrict" }),
 	attemptNumber: integer("attempt_number").notNull(),
 	objectPath: text("object_path").notNull(),
 	state: text().notNull(),
@@ -223,13 +223,9 @@ export const mediaDerivativeAttemptsInAppPrivate = appPrivate.table("media_deriv
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	uploadedAt: timestamp("uploaded_at", { withTimezone: true, mode: 'string' }),
 	cleanedAt: timestamp("cleaned_at", { withTimezone: true, mode: 'string' }),
+	retryCycle: integer("retry_cycle").default(1),
 }, (table) => [
 	index("media_derivative_attempts_derivative_id_idx").using("btree", table.derivativeId.asc().nullsLast().op("uuid_ops")),
-	foreignKey({
-			columns: [table.derivativeId],
-			foreignColumns: [mediaDerivativesInAppPrivate.id],
-			name: "media_derivative_attempts_derivative_id_fkey"
-		}).onDelete("restrict"),
 	pgPolicy("runtime_media_derivative_attempts", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
@@ -253,8 +249,13 @@ export const mediaDerivativesInAppPrivate = appPrivate.table("media_derivatives"
 	leaseToken: uuid("lease_token"),
 	leaseUntil: timestamp("lease_until", { withTimezone: true, mode: 'string' }),
 	lastErrorCode: text("last_error_code"),
+	retryCycle: integer("retry_cycle").default(1),
+	cycleAttemptCount: integer("cycle_attempt_count").default(0),
+	activeAttemptId: uuid("active_attempt_id"),
+	adoptedAttemptId: uuid("adopted_attempt_id"),
 }, (table) => [
 	index("media_derivatives_asset_id_idx").using("btree", table.assetId.asc().nullsLast().op("uuid_ops")),
+	index("media_derivatives_thumbnail_claim_candidates_idx").using("btree", table.state.asc().nullsLast().op("text_ops"), table.nextAttemptAt.asc().nullsLast().op("timestamptz_ops"), table.leaseUntil.asc().nullsLast().op("timestamptz_ops")).where(sql`((authority_state = 'verified'::text) AND (spec = 'thumb_webp_v1'::text))`),
 	foreignKey({
 			columns: [table.assetId],
 			foreignColumns: [mediaAssetsInAppPrivate.id],

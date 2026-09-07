@@ -14,6 +14,7 @@ export type MediaObjectStore = Readonly<{
   createOriginalReadGrant(path: string, fileName: string, expiresInSeconds: 60): Promise<Readonly<{ url: string; expiresAt: string }>>;
   inspect(path: string): Promise<Readonly<{ path: string; byteSize: number; mimeType: string }> | null>;
   read(path: string): AsyncIterable<Uint8Array>;
+  uploadDerivative(path: string, bytes: Uint8Array): Promise<void>;
 }>;
 
 export type MediaIngest = Readonly<{
@@ -49,6 +50,23 @@ export type ValidatedMediaObject = Readonly<{
   height: number | null;
 }>;
 
+export type ThumbnailAttempt = Readonly<{
+  id: string;
+  number: number;
+  objectPath: string;
+  cycleAttemptCount: number;
+}>;
+
+export type ThumbnailClaim =
+  | Readonly<{ status: "busy" | "not_found" | "not_ready" }>
+  | Readonly<{
+    status: "claimed";
+    derivativeId: string;
+    assetId: string;
+    originalObjectPath: string;
+    attempt: ThumbnailAttempt;
+  }>;
+
 export type MediaStore = Readonly<{
   begin(command: BeginMediaUploadCommand, reserved: Readonly<{ ingestId: string; assetId: string; objectPath: string; staleAfter: string }>): Promise<BeginMediaRecord>;
   renewGrant(idempotencyKey: string, objectPath: string, staleAfter: string): Promise<void>;
@@ -57,4 +75,9 @@ export type MediaStore = Readonly<{
   rejectInvalid(idempotencyKey: string, leaseToken: string): Promise<void>;
   completeFinalize(idempotencyKey: string, leaseToken: string, object: ValidatedMediaObject): Promise<MediaUploadResult>;
   findReadableOriginal(assetId: string): Promise<Readonly<{ path: string; fileName: string }> | null>;
+  claimThumbnail(assetId: string, lease: Readonly<{ token: string; durationMs?: number }>): Promise<ThumbnailClaim>;
+  markThumbnailUploaded(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string }>): Promise<void>;
+  adoptThumbnail(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string; width: number; height: number; byteSize: number }>): Promise<void>;
+  failThumbnail(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string; deterministic: boolean }>): Promise<Readonly<{ retryDelayMs: number | null }>>;
+  retryThumbnail(assetId: string): Promise<MediaUploadResult["thumbnail"]>;
 }>;

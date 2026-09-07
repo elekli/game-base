@@ -135,6 +135,7 @@ function objectStore(object: Readonly<{ bytes: Uint8Array; mimeType: string; byt
     async createOriginalReadGrant(path, fileName) { return { url: `https://storage.example.test/signed/${encodeURIComponent(path)}?download=${encodeURIComponent(fileName)}`, expiresAt: "2026-09-06T00:01:00.000Z" }; },
     async inspect(path) { return { path, byteSize: object.byteSize ?? object.bytes.byteLength, mimeType: object.mimeType }; },
     async *read(path) { void path; yield object.bytes; },
+    async uploadDerivative() {},
   };
 }
 

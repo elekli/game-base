@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import type { ProductionExecutor, QueryExecutor } from "./database-game-store";
 import {
@@ -20,6 +21,7 @@ import {
   type MediaStore,
   type ValidatedMediaObject,
 } from "@/modules/media/internal/types";
+import { decideThumbnailFailure } from "@/modules/media/internal/thumbnail-state";
 
 type Row = Readonly<Record<string, unknown>>;
 
@@ -247,5 +249,171 @@ export class PostgresMediaStore implements MediaStore {
       limit 1
     `) as Row[];
     return rows[0] ? { path: String(rows[0].original_object_path), fileName: String(rows[0].original_file_name) } : null;
+  }
+
+  async claimThumbnail(assetId: string, lease: Readonly<{ token: string; durationMs?: number }>) {
+    return this.db.transaction(async (tx) => {
+      const rows = await tx.execute(sql`
+        select derivative.id as derivative_id, derivative.state, derivative.attempt_count, derivative.cycle_attempt_count,
+          derivative.lease_until, derivative.next_attempt_at,
+          asset.original_object_path
+        from app_private.media_derivatives derivative
+        join app_private.media_assets asset on asset.id = derivative.asset_id
+        join app_private.media_ingests ingest on ingest.id = asset.ingest_id and ingest.state = 'finalized'
+        where derivative.asset_id = ${assetId} and derivative.authority_state = 'verified'
+          and derivative.spec = ${MEDIA_THUMBNAIL_SPEC} and asset.authority_state = 'verified' and asset.purpose <> 'attachment'
+        for update
+      `) as Row[];
+      const derivative = rows[0];
+      if (!derivative) return { status: "not_found" as const };
+      const timing = await tx.execute(sql`
+        select lease_until > clock_timestamp() as lease_valid,
+          (next_attempt_at is null or next_attempt_at <= clock_timestamp()) as retry_due
+        from app_private.media_derivatives where id = ${String(derivative.derivative_id)}
+      `) as Row[];
+      if (!timing[0]) throw new MediaFinalizeUnavailableError();
+      if (derivative.state === "ready" || derivative.state === "failed") return { status: "not_ready" as const };
+      if (derivative.state === "pending" && timing[0].retry_due !== true) return { status: "not_ready" as const };
+      if (derivative.state === "processing" && timing[0].lease_valid === true) return { status: "busy" as const };
+      const cycleAttemptCount = Number(derivative.cycle_attempt_count);
+      if (cycleAttemptCount >= 3) {
+        await tx.execute(sql`
+          update app_private.media_derivatives
+          set state = 'failed', lease_token = null, lease_until = null, active_attempt_id = null,
+            next_attempt_at = null, last_error_code = 'media_thumbnail_retry_exhausted'
+          where id = ${String(derivative.derivative_id)}
+        `);
+        return { status: "not_ready" as const };
+      }
+      const attemptNumber = Number(derivative.attempt_count) + 1;
+      const attemptId = randomUUID();
+      const objectPath = `thumbnails/${assetId}/${MEDIA_THUMBNAIL_SPEC}/${attemptNumber}-${attemptId}.webp`;
+      const attempts = await tx.execute(sql`
+        insert into app_private.media_derivative_attempts (id, derivative_id, attempt_number, retry_cycle, object_path, state)
+        values (${attemptId}, ${String(derivative.derivative_id)}, ${attemptNumber},
+          (select retry_cycle from app_private.media_derivatives where id = ${String(derivative.derivative_id)}), ${objectPath}, 'reserved')
+        returning id
+      `) as Row[];
+      if (!attempts[0]) throw new MediaFinalizeUnavailableError();
+      await tx.execute(sql`
+        update app_private.media_derivatives
+        set state = 'processing', attempt_count = ${attemptNumber}, cycle_attempt_count = ${cycleAttemptCount + 1},
+          active_attempt_id = ${attemptId}, lease_token = ${lease.token},
+          lease_until = clock_timestamp() + least(greatest(${lease.durationMs ?? 300_000}, 1), 300000) * interval '1 millisecond',
+          next_attempt_at = null, last_error_code = null
+        where id = ${String(derivative.derivative_id)}
+      `);
+      return {
+        status: "claimed" as const,
+        derivativeId: String(derivative.derivative_id),
+        assetId,
+        originalObjectPath: String(derivative.original_object_path),
+        attempt: { id: attemptId, number: attemptNumber, objectPath, cycleAttemptCount: cycleAttemptCount + 1 },
+      };
+    });
+  }
+
+  async markThumbnailUploaded(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string }>): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const derivatives = await tx.execute(sql`
+        select id from app_private.media_derivatives
+        where id = ${claim.derivativeId} and state = 'processing' and active_attempt_id = ${claim.attemptId}
+          and attempt_count = ${claim.attemptNumber} and lease_token = ${claim.leaseToken}
+        for update
+      `) as Row[];
+      if (!derivatives[0]) throw new MediaFinalizeUnavailableError();
+      const timing = await tx.execute(sql`
+        select lease_until > clock_timestamp() as lease_valid
+        from app_private.media_derivatives where id = ${claim.derivativeId}
+      `) as Row[];
+      if (timing[0]?.lease_valid !== true) throw new MediaFinalizeUnavailableError();
+      const attempts = await tx.execute(sql`
+        update app_private.media_derivative_attempts set state = 'uploaded', uploaded_at = clock_timestamp()
+        where id = ${claim.attemptId} and derivative_id = ${claim.derivativeId}
+          and attempt_number = ${claim.attemptNumber} and state = 'reserved'
+        returning id
+      `) as Row[];
+      if (!attempts[0]) throw new MediaFinalizeUnavailableError();
+    });
+  }
+
+  async adoptThumbnail(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string; width: number; height: number; byteSize: number }>): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const derivatives = await tx.execute(sql`
+        select id from app_private.media_derivatives
+        where id = ${claim.derivativeId} and state = 'processing' and active_attempt_id = ${claim.attemptId}
+          and attempt_count = ${claim.attemptNumber} and lease_token = ${claim.leaseToken}
+        for update
+      `) as Row[];
+      if (!derivatives[0]) throw new MediaFinalizeUnavailableError();
+      const timing = await tx.execute(sql`
+        select lease_until > clock_timestamp() as lease_valid
+        from app_private.media_derivatives where id = ${claim.derivativeId}
+      `) as Row[];
+      if (timing[0]?.lease_valid !== true) throw new MediaFinalizeUnavailableError();
+      const attempts = await tx.execute(sql`
+        update app_private.media_derivative_attempts set state = 'adopted'
+        where id = ${claim.attemptId} and derivative_id = ${claim.derivativeId}
+          and attempt_number = ${claim.attemptNumber} and state = 'uploaded'
+        returning object_path
+      `) as Row[];
+      if (!attempts[0]) throw new MediaFinalizeUnavailableError();
+      await tx.execute(sql`
+        update app_private.media_derivatives
+        set state = 'ready', active_attempt_id = null, adopted_attempt_id = ${claim.attemptId},
+          lease_token = null, lease_until = null, current_object_path = ${String(attempts[0].object_path)},
+          object_key = ${String(attempts[0].object_path)}, width = ${claim.width}, height = ${claim.height},
+          byte_size = ${claim.byteSize}, completed_at = clock_timestamp(), next_attempt_at = null, last_error_code = null
+        where id = ${claim.derivativeId}
+      `);
+    });
+  }
+
+  async failThumbnail(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string; deterministic: boolean }>): Promise<Readonly<{ retryDelayMs: number | null }>> {
+    return this.db.transaction(async (tx) => {
+      const rows = await tx.execute(sql`
+        select cycle_attempt_count from app_private.media_derivatives
+        where id = ${claim.derivativeId} and state = 'processing' and active_attempt_id = ${claim.attemptId}
+          and attempt_count = ${claim.attemptNumber} and lease_token = ${claim.leaseToken}
+        for update
+      `) as Row[];
+      if (!rows[0]) throw new MediaFinalizeUnavailableError();
+      const timing = await tx.execute(sql`
+        select lease_until > clock_timestamp() as lease_valid
+        from app_private.media_derivatives where id = ${claim.derivativeId}
+      `) as Row[];
+      if (timing[0]?.lease_valid !== true) throw new MediaFinalizeUnavailableError();
+      const outcome = decideThumbnailFailure({ cycleAttemptCount: Number(rows[0].cycle_attempt_count), deterministic: claim.deterministic });
+      await tx.execute(sql`
+        update app_private.media_derivatives
+        set state = ${outcome.state}, active_attempt_id = null, lease_token = null, lease_until = null,
+          next_attempt_at = ${outcome.retryDelayMs === null ? null : sql`clock_timestamp() + ${outcome.retryDelayMs} * interval '1 millisecond'`},
+          last_error_code = ${claim.deterministic ? "media_thumbnail_unsupported" : "media_thumbnail_unavailable"}
+        where id = ${claim.derivativeId}
+      `);
+      return { retryDelayMs: outcome.retryDelayMs };
+    });
+  }
+
+  async retryThumbnail(assetId: string): Promise<MediaUploadResult["thumbnail"]> {
+    return this.db.transaction(async (tx) => {
+      const rows = await tx.execute(sql`
+        select derivative.id from app_private.media_derivatives derivative
+        join app_private.media_assets asset on asset.id = derivative.asset_id
+        join app_private.media_ingests ingest on ingest.id = asset.ingest_id and ingest.state = 'finalized'
+        where derivative.asset_id = ${assetId} and derivative.authority_state = 'verified'
+          and derivative.spec = ${MEDIA_THUMBNAIL_SPEC} and derivative.state = 'failed'
+          and asset.authority_state = 'verified' and asset.purpose <> 'attachment'
+        for update
+      `) as Row[];
+      if (!rows[0]) throw new MediaFinalizeUnavailableError();
+      await tx.execute(sql`
+        update app_private.media_derivatives
+        set state = 'pending', retry_cycle = retry_cycle + 1, cycle_attempt_count = 0,
+          active_attempt_id = null, lease_token = null, lease_until = null, next_attempt_at = clock_timestamp(), last_error_code = null
+        where id = ${String(rows[0].id)}
+      `);
+      return { assetId, spec: MEDIA_THUMBNAIL_SPEC, state: "pending" as const };
+    });
   }
 }
