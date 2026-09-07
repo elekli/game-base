@@ -10,7 +10,7 @@ const gameId = "11111111-1111-4111-8111-111111111111";
 const assetId = "22222222-2222-4222-8222-222222222222";
 const key = "33333333-3333-4333-8333-333333333333";
 
-function setup() {
+function setup(overrides: Readonly<{ wakeThumbnail?: (assetId: string) => Promise<void>; afterResponse?: (task: () => Promise<void>) => void }> = {}) {
   const service: MediaService = {
     beginMediaUpload: vi.fn<MediaService["beginMediaUpload"]>(async () => ({
       status: "upload_grant", ingestId: key, assetId,
@@ -34,7 +34,7 @@ function setup() {
   const onUnhandledFailure = vi.fn();
   return {
     service,
-    handlers: createPrivateMediaHandlers({ service, verifyAccessToken, onAccessDenied: vi.fn(), onUnhandledFailure }),
+    handlers: createPrivateMediaHandlers({ service, verifyAccessToken, onAccessDenied: vi.fn(), onUnhandledFailure, ...overrides }),
     verifyAccessToken,
     onUnhandledFailure,
   };
@@ -116,6 +116,19 @@ describe("private media routes", () => {
     expect(service.selectManualCover).toHaveBeenCalledWith(owner, { gameId, assetId });
     expect(service.useSourceCover).toHaveBeenCalledWith(owner, { gameId });
     expect(service.retryThumbnail).toHaveBeenCalledWith(owner, { assetId });
+  });
+
+  it("縮圖背景重試失敗會留下具名安全觀測事件", async () => {
+    const wakeThumbnail = vi.fn(async () => { throw new Error("provider detail must stay private"); });
+    const afterTasks: Promise<void>[] = [];
+    const { handlers, onUnhandledFailure } = setup({ wakeThumbnail, afterResponse: (task) => { afterTasks.push(task()); } });
+
+    expect((await handlers.retryThumbnail(request(`/api/private/media/assets/${assetId}/retry-thumbnail`, {}), assetId)).status).toBe(200);
+    await Promise.all(afterTasks);
+    expect(onUnhandledFailure).toHaveBeenCalledWith({
+      errorCode: "media_thumbnail_retry_wake_failed",
+      requestId,
+    });
   });
 
   it("Storage failure 保留具名觀測碼，但回應與 log 不含 provider 細節", async () => {

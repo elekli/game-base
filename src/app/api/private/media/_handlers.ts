@@ -2,6 +2,7 @@ import { z } from "zod";
 import { after } from "next/server";
 import { handlePrivateRequest, PrivateRequestInputError } from "@/shared/auth/private-request";
 import type { AccessTokenVerifier } from "@/shared/auth/verify-access-token";
+import { getRequestId } from "@/shared/observability/request-id";
 import { MEDIA_MAX_BYTES, type MediaService } from "@/modules/media";
 
 type Dependencies = Readonly<{
@@ -10,6 +11,7 @@ type Dependencies = Readonly<{
   onAccessDenied: (context: Readonly<{ requestId: string }>) => void | Promise<void>;
   onUnhandledFailure: (context: Readonly<{ errorCode: string; requestId: string }>) => void | Promise<void>;
   wakeThumbnail?: (assetId: string) => Promise<void>;
+  afterResponse?: (task: () => Promise<void>) => void;
 }>;
 
 const beginSchema = z.object({
@@ -57,6 +59,11 @@ async function json(request: Request): Promise<unknown> {
 }
 
 export function createPrivateMediaHandlers(dependencies: Dependencies) {
+  const afterResponse = dependencies.afterResponse ?? after;
+  const observeBackgroundFailure = async (request: Request, errorCode: string) => {
+    try { await dependencies.onUnhandledFailure({ errorCode, requestId: getRequestId(request.headers) }); }
+    catch { console.error(`${errorCode}_observer_failed`); }
+  };
   const boundary = <Result extends object>(request: Request, operation: Parameters<typeof handlePrivateRequest<Result>>[1]["operation"]) =>
     handlePrivateRequest(request, { ...dependencies, operation });
   return {
@@ -87,9 +94,9 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
         if (!parsed.success) throw new PrivateRequestInputError("媒體完成確認參數無效。");
         const result = await dependencies.service.finalizeMediaUpload(owner, parsed.data);
         if ("asset" in result && result.thumbnail && dependencies.wakeThumbnail) {
-          after(async () => {
+          afterResponse(async () => {
             try { await dependencies.wakeThumbnail?.(result.asset.id); }
-            catch (error) { console.error("media_thumbnail_wake_failed", error instanceof Error ? error.name : "unknown"); }
+            catch { await observeBackgroundFailure(request, "media_thumbnail_wake_failed"); }
           });
         }
         return result;
@@ -137,7 +144,10 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
         const parsed = assetIdSchema.safeParse(assetId);
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
         const result = await dependencies.service.retryThumbnail(owner, { assetId: parsed.data });
-        if (dependencies.wakeThumbnail) after(async () => dependencies.wakeThumbnail?.(parsed.data));
+        if (dependencies.wakeThumbnail) afterResponse(async () => {
+          try { await dependencies.wakeThumbnail?.(parsed.data); }
+          catch { await observeBackgroundFailure(request, "media_thumbnail_retry_wake_failed"); }
+        });
         return result;
       }));
     },

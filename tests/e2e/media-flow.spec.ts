@@ -5,10 +5,11 @@ test.describe.configure({ mode: "serial" });
 
 test.beforeEach(async ({ page }) => authenticatePage(page));
 
-test("#65 390px 相簿顯示縮圖狀態、附件說明與短效下載", async ({ page }, testInfo) => {
+test("#65 390px 相簿 fixture：附件短效下載請求與回應", async ({ page }, testInfo) => {
   const gameName = "#65 手機媒體驗收";
   const gameIdPattern = /\/games\/([^/]+)$/;
   let failedOnce = false;
+  let originalReadCount = 0;
   const image = (id: string, state: "pending" | "failed" | "ready", caption: string) => ({
     asset: { id, gameId: "11111111-1111-4111-8111-111111111111", purpose: "gallery_image", originalFileName: `${caption}.png`, actualMimeType: "image/png", byteSize: 100, width: 640, height: 480, removedAt: null, createdAt: "2026-09-07T00:00:00.000Z", caption, displayName: null, description: null },
     thumbnail: { assetId: id, spec: "thumb_webp_v1", state },
@@ -31,7 +32,7 @@ test("#65 390px 相簿顯示縮圖狀態、附件說明與短效下載", async (
       if (body.originalFileName === "broken.png" && !failedOnce) { failedOnce = true; return route.fulfill({ status: 503, json: { message: "模擬網路中斷" } }); }
       return route.fulfill({ json: { status: "already_finalized", result: { asset: { id: crypto.randomUUID() }, thumbnail: { state: "pending" } } } });
     }
-    if (path.endsWith("/original")) return route.fulfill({ json: { url: "https://storage.example.test/short-lived", expiresAt: "2099-01-01T00:01:00.000Z", disposition: "attachment" } });
+    if (path.endsWith("/original")) { originalReadCount += 1; return route.fulfill({ json: { url: "data:text/plain,fixture-download", expiresAt: "2099-01-01T00:01:00.000Z", disposition: "attachment" } }); }
     return route.fulfill({ json: {} });
   });
 
@@ -46,6 +47,10 @@ test("#65 390px 相簿顯示縮圖狀態、附件說明與短效下載", async (
   await expect(page.getByText("縮圖處理失敗", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "重試縮圖" })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "說明", exact: true })).toHaveValue("中文版規則");
+  const originalRequest = page.waitForRequest((request) => request.url().includes("/assets/44444444-4444-4444-8444-444444444444/original"));
+  await page.getByRole("button", { name: "短效下載" }).click();
+  await originalRequest;
+  await expect.poll(() => originalReadCount).toBe(1);
 
   const chooser = page.getByLabel(/選取多個檔案/);
   await chooser.setInputFiles([

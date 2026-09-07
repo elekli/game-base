@@ -173,14 +173,25 @@ export function createMediaService(dependencies: Readonly<{ store: MediaStore; o
         if (!dependencies.objects.createThumbnailReadGrant) throw new MediaReadUnavailableError();
         try {
           const read = await dependencies.objects.createThumbnailReadGrant(item.thumbnailPath, 300);
-          return { asset: item.asset, thumbnail: item.thumbnail, thumbnailUrl: read.url, thumbnailExpiresAt: read.expiresAt };
-        } catch { throw new MediaReadUnavailableError(); }
+          return { asset: item.asset, thumbnail: item.thumbnail, thumbnailUrl: read.url, thumbnailExpiresAt: read.expiresAt, thumbnailError: null };
+        } catch { return { asset: item.asset, thumbnail: item.thumbnail, thumbnailUrl: null, thumbnailExpiresAt: null, thumbnailError: "media_thumbnail_read_unavailable" as const }; }
+      };
+      const exposeBounded = async (items: readonly (typeof gallery.items)[number][]) => {
+        const output: Awaited<ReturnType<typeof expose>>[] = new Array(items.length);
+        let next = 0;
+        await Promise.all(Array.from({ length: Math.min(4, items.length) }, async () => {
+          while (next < items.length) {
+            const index = next++;
+            output[index] = await expose(items[index]!);
+          }
+        }));
+        return output;
       };
       return {
         gameId: query.gameId,
         manualCoverAssetId: gallery.manualCoverAssetId,
         sourceCover: gallery.sourceCover ? await expose(gallery.sourceCover) : null,
-        items: await Promise.all(gallery.items.map(expose)),
+        items: await exposeBounded(gallery.items),
       };
     },
     async updateMediaMetadata(owner, command) {

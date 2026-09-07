@@ -71,6 +71,7 @@ export type MediaGalleryItem = Readonly<{
   thumbnail: MediaDerivative | null;
   thumbnailUrl: string | null;
   thumbnailExpiresAt: string | null;
+  thumbnailError?: "media_thumbnail_read_unavailable" | null;
 }>;
 
 export type MediaGallery = Readonly<{

@@ -17,6 +17,7 @@ export type MediaBatchUploader = (input: Readonly<{
   purpose: MediaBatchFile["purpose"];
   onProgress(uploadedBytes: number): void;
   onProcessing(): void;
+  registerCancel(cancel: () => Promise<void>): void;
 }>) => Promise<Readonly<{
   assetId: string;
   thumbnailState: MediaBatchFile["thumbnailState"];
@@ -26,6 +27,7 @@ type Listener = (files: readonly MediaBatchFile[]) => void;
 export type MediaBatchIdentityStore = Readonly<{
   find(file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"]): string | null;
   remember(file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"], idempotencyKey: string): void;
+  forget?(file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"]): void;
 }>;
 
 export function createSessionMediaIdentityStore(namespace: string): MediaBatchIdentityStore {
@@ -47,6 +49,15 @@ export function createSessionMediaIdentityStore(namespace: string): MediaBatchId
       const id = signature(file, purpose);
       fallback.set(id, key);
       try { sessionStorage.setItem("puizeru:media-upload-identities", JSON.stringify({ ...read(), [id]: key })); } catch { warnUnavailable(); }
+    },
+    forget(file, purpose) {
+      const id = signature(file, purpose);
+      fallback.delete(id);
+      try {
+        const stored = read();
+        delete stored[id];
+        sessionStorage.setItem("puizeru:media-upload-identities", JSON.stringify(stored));
+      } catch { warnUnavailable(); }
     },
   };
 }
@@ -71,6 +82,7 @@ export function createMediaBatchUpload(input: Readonly<{
   let files: MediaBatchFile[] = [];
   let running: Promise<void> | null = null;
   let cancelled = false;
+  const activeCancels = new Map<string, () => Promise<void>>();
   const listeners = new Set<Listener>();
   const emit = () => listeners.forEach((listener) => listener(files));
   const update = (key: string, patch: Partial<MediaBatchFile>) => {
@@ -88,15 +100,19 @@ export function createMediaBatchUpload(input: Readonly<{
         purpose: item.purpose,
         onProgress: (uploadedBytes) => update(item.idempotencyKey, { uploadedBytes }),
         onProcessing: () => update(item.idempotencyKey, { status: "processing" }),
+        registerCancel: (cancel) => activeCancels.set(item.idempotencyKey, cancel),
       });
       if (cancelled) update(item.idempotencyKey, { status: "cancelled" });
-      else update(item.idempotencyKey, { status: "succeeded", assetId: result.assetId, thumbnailState: result.thumbnailState });
+      else {
+        input.identityStore?.forget?.(item.file, item.purpose);
+        update(item.idempotencyKey, { status: "succeeded", assetId: result.assetId, thumbnailState: result.thumbnailState });
+      }
     } catch (error) {
       update(item.idempotencyKey, {
         status: cancelled ? "cancelled" : "failed",
         error: cancelled ? null : error instanceof Error ? error.message : "檔案上傳失敗，請重試。",
       });
-    }
+    } finally { activeCancels.delete(item.idempotencyKey); }
   }
 
   async function drain() {
@@ -119,11 +135,14 @@ export function createMediaBatchUpload(input: Readonly<{
 
   return {
     add(selected: readonly MediaBatchFile["file"][], purpose: MediaBatchFile["purpose"] = "gallery_image") {
-      files = [...files, ...selected.map((file) => {
+      const activeKeys = new Set(files.filter((item) => ["queued", "uploading", "processing"].includes(item.status)).map((item) => item.idempotencyKey));
+      files = [...files, ...selected.flatMap((file) => {
         const idempotencyKey = input.identityStore?.find(file, purpose) ?? createId(file, purpose);
+        if (activeKeys.has(idempotencyKey)) return [];
+        activeKeys.add(idempotencyKey);
         input.identityStore?.remember(file, purpose, idempotencyKey);
-        return { idempotencyKey, file, purpose, status: "queued" as const, uploadedBytes: 0,
-          error: null, assetId: null, thumbnailState: null };
+        return [{ idempotencyKey, file, purpose, status: "queued" as const, uploadedBytes: 0,
+          error: null, assetId: null, thumbnailState: null }];
       })];
       emit();
     },
@@ -133,8 +152,9 @@ export function createMediaBatchUpload(input: Readonly<{
       emit();
       return start();
     },
-    cancel() {
+    async cancel() {
       cancelled = true;
+      await Promise.allSettled([...activeCancels.values()].map((cancel) => cancel()));
       files = files.map((item) => ["queued", "uploading", "processing"].includes(item.status) ? { ...item, status: "cancelled" } : item);
       emit();
     },

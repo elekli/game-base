@@ -77,4 +77,43 @@ describe("media batch upload", () => {
     expect(remounted.snapshot()[0]?.idempotencyKey).toBe(first.snapshot()[0]?.idempotencyKey);
     expect(createId).toHaveBeenCalledTimes(1);
   });
+
+  it("成功後移除 intent，且同一個 active batch 不重複排入同一冪等鍵", async () => {
+    const identities = new Map<string, string>();
+    const identityStore = {
+      find(selected: { name: string }, purpose: string) { return identities.get(`${purpose}:${selected.name}`) ?? null; },
+      remember(selected: { name: string }, purpose: string, key: string) { identities.set(`${purpose}:${selected.name}`, key); },
+      forget(selected: { name: string }, purpose: string) { identities.delete(`${purpose}:${selected.name}`); },
+    };
+    const batch = createMediaBatchUpload({
+      upload: vi.fn(async () => ({ assetId: "asset", thumbnailState: "pending" as const })),
+      createId: () => "00000000-0000-4000-8000-000000000001",
+      identityStore,
+    });
+    batch.add([file("same.png"), file("same.png")]);
+    expect(batch.snapshot()).toHaveLength(1);
+    await batch.start();
+    expect(identities.size).toBe(0);
+  });
+
+  it("取消會中止 active transport，但保留可供續傳的失敗 intent", async () => {
+    let release!: () => void;
+    const transportCancel = vi.fn(async () => undefined);
+    const batch = createMediaBatchUpload({
+      upload: vi.fn(async ({ registerCancel }) => {
+        registerCancel(transportCancel);
+        await new Promise<void>((resolve) => { release = resolve; });
+        throw new Error("aborted");
+      }),
+      createId: () => "00000000-0000-4000-8000-000000000001",
+    });
+    batch.add([file("resume.png")]);
+    const run = batch.start();
+    await vi.waitFor(() => expect(transportCancel).not.toHaveBeenCalled());
+    await batch.cancel();
+    release();
+    await run;
+    expect(transportCancel).toHaveBeenCalledOnce();
+    expect(batch.snapshot()[0]?.status).toBe("cancelled");
+  });
 });
