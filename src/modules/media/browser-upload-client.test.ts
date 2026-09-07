@@ -117,14 +117,14 @@ async function startTusServer(input: {
     requests.push({ method, path, headers: request.headers, byteSize: size });
     response.setHeader("Tus-Resumable", "1.0.0");
 
-    if (method === "POST" && path === "/storage/v1/upload/resumable") {
+    if (method === "POST" && path === "/storage/v1/upload/resumable/sign") {
       postCount += 1;
       if (input.rejectCreationStatus) {
         response.statusCode = input.rejectCreationStatus;
         response.end();
         return;
       }
-      const uploadPath = `/storage/v1/upload/resumable/session-${postCount}`;
+      const uploadPath = `/storage/v1/upload/resumable/sign/session-${postCount}`;
       offsets.set(uploadPath, size);
       response.statusCode = 201;
       response.setHeader("Upload-Offset", String(size));
@@ -166,8 +166,8 @@ async function startTusServer(input: {
     },
   };
   return {
-    endpoint: "https://fixture.storage.supabase.co/storage/v1/upload/resumable",
-    localEndpoint: `${localOrigin}/storage/v1/upload/resumable`,
+    endpoint: "https://fixture.storage.supabase.co/storage/v1/upload/resumable/sign",
+    localEndpoint: `${localOrigin}/storage/v1/upload/resumable/sign`,
     httpStack,
     requests,
     close: () => new Promise<void>((resolve, reject) => {
@@ -182,8 +182,8 @@ afterEach(async () => Promise.all(servers.splice(0).map((server) => server.close
 
 describe("browser media TUS upload", () => {
   it.each([
-    "http://127.0.0.1:54321/storage/v1/upload/resumable",
-    "http://localhost:54321/storage/v1/upload/resumable",
+    "http://127.0.0.1:54321/storage/v1/upload/resumable/sign",
+    "http://localhost:54321/storage/v1/upload/resumable/sign",
   ])("accepts the exact local Supabase development TUS endpoint: %s", async (endpoint) => {
     const uploadGrant = grant(endpoint);
     const task = createBrowserMediaUpload({
@@ -203,14 +203,15 @@ describe("browser media TUS upload", () => {
   });
 
   it.each([
-    "http://127.0.0.1/storage/v1/upload/resumable",
-    "http://localhost/storage/v1/upload/resumable",
-    "http://0.0.0.0:54321/storage/v1/upload/resumable",
-    "http://127.0.0.1.evil.test:54321/storage/v1/upload/resumable",
-    "http://user@127.0.0.1:54321/storage/v1/upload/resumable",
-    "http://127.0.0.1:54321/storage/v1/upload/resumable?token=x",
-    "http://127.0.0.1:54321/storage/v1/upload/resumable#fragment",
-    "http://127.0.0.1:54321/storage/v1/upload/resumable/other",
+    "https://fixture.storage.supabase.co/storage/v1/upload/resumable",
+    "http://127.0.0.1/storage/v1/upload/resumable/sign",
+    "http://localhost/storage/v1/upload/resumable/sign",
+    "http://0.0.0.0:54321/storage/v1/upload/resumable/sign",
+    "http://127.0.0.1.evil.test:54321/storage/v1/upload/resumable/sign",
+    "http://user@127.0.0.1:54321/storage/v1/upload/resumable/sign",
+    "http://127.0.0.1:54321/storage/v1/upload/resumable/sign?token=x",
+    "http://127.0.0.1:54321/storage/v1/upload/resumable/sign#fragment",
+    "http://127.0.0.1:54321/storage/v1/upload/resumable/sign/other",
   ])("rejects a widened local TUS endpoint without touching the network: %s", async (endpoint) => {
     const uploadGrant = grant(endpoint);
     const task = createBrowserMediaUpload({
