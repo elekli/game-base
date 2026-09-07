@@ -20,4 +20,8 @@ describe("production smoke runner", () => {
       await expect(runner.execute(action)).rejects.toThrow(ProductionSmokeResponseError);
     }
   });
+  it("fails closed when the transport rejects or times out", async () => {
+    const runner = createProductionSmokeRunner({ ...input, timeoutMs: 1, fetchImpl: vi.fn(async () => { throw new Error("network"); }) });
+    await expect(runner.execute(action)).rejects.toThrow();
+  });
 });
