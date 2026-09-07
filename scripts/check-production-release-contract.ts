@@ -42,6 +42,8 @@ type ProductionReleaseContract = Readonly<{
   productionSmokeRunner: string;
   productionSmokeRunnerSha256: string;
   productionSmokeRunnerStatus: string;
+  productionSmokeAdapter: string;
+  productionSmokeAdapterSha256: string;
   productionSmokePrincipalStatus: string;
   releaseSmokeAccessTokenVerifier: string;
   releaseSmokeAccessTokenVerifierSha256: string;
@@ -438,7 +440,8 @@ export async function checkProductionReleaseContract(root: string) {
   await assertPinnedArtifact(root, contract.productionSmokePersistenceMigration, "supabase/migrations/0015_production_smoke_canary.sql", contract.productionSmokePersistenceMigrationSha256, "smoke persistence migration");
   await assertPinnedArtifact(root, contract.productionSmokePersistencePgtap, "supabase/tests/0015_production_smoke_canary.pgtap.sql", contract.productionSmokePersistencePgtapSha256, "smoke persistence pgTAP");
   await assertPinnedArtifact(root, contract.productionSmokeRunner, "scripts/production-smoke-runner.ts", contract.productionSmokeRunnerSha256, "smoke runner");
-  assertContract(contract.productionSmokeRunnerStatus === "fail-closed-pending-principal-db-storage-route-and-live-runner", "smoke runner status must enumerate every unresolved live dependency");
+  await assertPinnedArtifact(root, contract.productionSmokeAdapter, "src/adapters/production-smoke-canary-adapter.ts", contract.productionSmokeAdapterSha256, "smoke adapter");
+  assertContract(contract.productionSmokeRunnerStatus === "ready-fail-closed-pending-production-principal-and-live-credentials", "smoke runner status must enumerate every unresolved live dependency");
   await assertReleaseSmokeAuthArtifactsPinned(root, contract);
   await assertPinnedArtifact(root, contract.productionRestoreModel, "scripts/production-restore-drill.ts", contract.productionRestoreModelSha256, "restore model");
   await assertPinnedArtifact(root, contract.productionRestoreEvidenceSchema, ".github/production-restore-drill-evidence.schema.json", contract.productionRestoreEvidenceSchemaSha256, "restore evidence schema");
@@ -456,6 +459,7 @@ export async function checkProductionReleaseContract(root: string) {
       contract.productionSmokePersistenceMigrationSha256,
       contract.productionSmokePersistencePgtapSha256,
       contract.productionSmokeRunnerSha256,
+      contract.productionSmokeAdapterSha256,
       contract.releaseSmokeRouteSha256,
       contract.releaseSmokeHandlerSha256,
       contract.releaseSmokeAccessTokenVerifierSha256,
@@ -469,13 +473,14 @@ export async function checkProductionReleaseContract(root: string) {
       "e491156ff423e03872d95175236f86f3cde936b3254fe81d706e53776a96d093",
       "e95dbbcd680c012ff5c56dc0aa5886a89b0ad9ef368f02a79ee27e31458cd014",
       "1c10b85c3dd0d8b8712193edc33c3d1812bf8cc5f981e3adcc4f257da0ad3e65",
-      "4394d99c7888e4048b5e7e48206d2b1f3b24bb367531becf0978de6fad0ca269",
-      "5aacb6018c3a94ed2532c90817d3c82a97a03ef2e08d9f2f1b1931d8f2e36fe6",
+      "0086cb94455b9b75eb092bb20e7fb2343952b843f6ca9e6b46f29ab0d35d9199",
+      "18fa525b8fdeac5430e70ca7164d42a55228e1b9b21981f92dffdac052ea4890",
       "ecc8b4b53f319f877a3e5dc50d9690e1a36d94d5ee123d81d33a4eb1820687f8",
       "f1cc8366f5dafa9b9aa28fa7334c9a2e4ffa555e6e62b7e0f09d7d31eb8998e3",
-      "1b62169b8e2078522de549691eac8a4dfab5a3dcff6297623bbc6dcc40bde21d",
-      "99594c244e4fc78c00d4d282b9fafb3974fe1b96760248fa07db1665c5461428",
-      "7e85a4fc08c429cbb9b1e8c9f825eb31882d75e8c6da1f9020706e2aecd162f4",
+      "20e4281d886258a139fc6fb04795b8f8ee075eff2993b489c9cab8a2bbcde045",
+      "d976e4810f341690b3f8a236adb48f5c78a6a11660278e44da7fb316f30a53c6",
+      "b2e22f7ffb8089ae408c201ef9da20ec5249ca4afc7256b74741bd232457486c",
+      "bd090591c481088c9202b089ad5af2a4a8ce71b8282104fc4b3dd9329202ed98",
       "185701f85c21333153a6b8655df22dfd10545061ccd27e771033fe1196c8b767",
       "2a1463331e350d5284f75ae7eb51ebbf7da74e0951b826a4e21130f2b4648b76",
       "dd9041ce7ef885a4aab4cd555c418b84f9c1867dfc5849fd2510ae2398891948",
@@ -520,7 +525,7 @@ export async function checkProductionReleaseContract(root: string) {
     "Source manifest schema must remain closed and versioned",
   );
   assertContract(
-    smokeContract.contractVersion === 2 &&
+    smokeContract.contractVersion === 3 &&
       smokeContract.namespace === "release-smoke-v1" &&
       smokeContract.generationFormat === "uuid-v4-created-once-per-complete-attempt" &&
       smokeContract.actionSequenceFormat ===
@@ -542,7 +547,8 @@ export async function checkProductionReleaseContract(root: string) {
       }) &&
       JSON.stringify(smokeContract.stateEvents) === JSON.stringify([
         "counts-observed", "fixed-read-checks-observed", "row-written",
-        "object-written", "cleanup-finished", "operation-failed",
+        "object-written", "round-trip-observed",
+        "private-storage-denial-observed", "cleanup-finished", "operation-failed",
         "operation-uncertain",
       ]) &&
       JSON.stringify(smokeContract.evidenceAllowlist) === JSON.stringify([
@@ -642,7 +648,7 @@ export async function checkProductionReleaseContract(root: string) {
   );
   assertContract(
     contract.productionDeploymentEvidenceSchemaSha256 ===
-      "6f6296eb86e4eabf2138bac2ef0bb48151dded0b1883d1324b1cc93edc900018" &&
+      "850c9a9830611364d82d673ab2408b25fbff5573963cb77569e82bd010c84a1b" &&
       createHash("sha256").update(deploymentEvidenceSchemaText).digest("hex") ===
         contract.productionDeploymentEvidenceSchemaSha256,
     "Production deployment evidence schema fingerprint does not match the approved redaction boundary",
@@ -695,7 +701,7 @@ export async function checkProductionReleaseContract(root: string) {
         JSON.stringify(["checks", "counts", "generation", "outcome", "requestIds"]) &&
       JSON.stringify(smokeSchema.required) ===
         JSON.stringify(["outcome", "generation", "requestIds"]) &&
-      (evidenceProperties.canaryContractVersion as { const?: unknown } | undefined)?.const === 2,
+      (evidenceProperties.canaryContractVersion as { const?: unknown } | undefined)?.const === 3,
     "Production smoke evidence must reject payloads and unknown fields",
   );
   const smokeGeneration = smokeSchema?.properties?.generation as JsonSchema | undefined;

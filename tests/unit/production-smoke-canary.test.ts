@@ -48,7 +48,6 @@ function readChecks() {
     "direct-origin-denied": "passed" as const,
     "authenticated-library-read": "passed" as const,
     "runtime-database-read": "passed" as const,
-    "private-storage-direct-denied": "passed" as const,
   };
 }
 
@@ -112,6 +111,7 @@ describe("production smoke canary", () => {
       objectCount: 0,
       rowIdentity: canary.identity,
       rowGeneration: GENERATION,
+      rowActionSequence: 3,
       rowPayloadSha256: canary.payloadSha256,
       rowPhase: "row_claimed",
     });
@@ -120,6 +120,7 @@ describe("production smoke canary", () => {
       kind: "cleanup-exact-canary",
       expectedPhase: "row_claimed",
       generation: GENERATION,
+      actionSequence: 4,
     });
   });
 
@@ -158,7 +159,7 @@ describe("production smoke canary", () => {
     });
     expect(canary.next).toMatchObject({
       kind: "run-fixed-read-checks",
-      checks: PRODUCTION_SMOKE_CHECKS.slice(0, 5),
+      checks: PRODUCTION_SMOKE_CHECKS.slice(0, 4),
     });
 
     canary = transitionProductionSmokeCanary(canary, {
@@ -188,10 +189,16 @@ describe("production smoke canary", () => {
       objectIdentity: `release-smoke-v1:${SHA}`,
       rowGeneration: GENERATION,
       objectGeneration: GENERATION,
+      rowActionSequence: 4,
       rowPhase: "object_written",
       rowPayloadSha256: canary.payloadSha256,
       objectPayloadSha256: canary.payloadSha256,
       requestIds: [REQUEST_ID],
+    });
+    expect(canary.next).toMatchObject({ kind: "verify-private-storage-denial" });
+    canary = transitionProductionSmokeCanary(canary, {
+      kind: "private-storage-denial-observed",
+      status: "passed",
     });
     canary = transitionProductionSmokeCanary(canary, { kind: "cleanup-finished" });
     canary = transitionProductionSmokeCanary(canary, {
@@ -301,6 +308,7 @@ describe("production smoke canary", () => {
       objectIdentity: `release-smoke-v1:${SHA}`,
       rowGeneration: GENERATION,
       objectGeneration: GENERATION,
+      rowActionSequence: 4,
       rowPhase: "object_written",
       rowPayloadSha256: mismatch.payloadSha256,
       objectPayloadSha256: "b".repeat(64),
@@ -359,11 +367,12 @@ describe("production smoke canary", () => {
       objectIdentity: `release-smoke-v1:${SHA}`,
       rowGeneration: GENERATION,
       objectGeneration: GENERATION,
+      rowActionSequence: 4,
       rowPhase: "object_written",
       rowPayloadSha256: canary.payloadSha256,
       objectPayloadSha256: canary.payloadSha256,
     });
-    expect(residue.next).toMatchObject({ kind: "cleanup-exact-canary" });
+    expect(residue.next).toMatchObject({ kind: "cleanup-exact-canary", actionSequence: 5 });
 
     expect(() =>
       transitionProductionSmokeCanary(canary, {
@@ -430,6 +439,7 @@ describe("production smoke canary", () => {
       objectIdentity: `release-smoke-v1:${SHA}`,
       rowGeneration: GENERATION,
       objectGeneration: GENERATION,
+      rowActionSequence: 4,
       rowPhase: "object_written",
       rowPayloadSha256: canary.payloadSha256,
       objectPayloadSha256: canary.payloadSha256,
@@ -457,6 +467,7 @@ describe("production smoke canary", () => {
       objectCount: 0,
       rowIdentity: canary.identity,
       rowGeneration: GENERATION,
+      rowActionSequence: 3,
       rowPayloadSha256: canary.payloadSha256,
       rowPhase: "row_claimed",
     });

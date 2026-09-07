@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "contractVersion": 2,
+  "contractVersion": 3,
   "namespace": "release-smoke-v1",
   "rowId": "7355773e-c3b5-4e5d-9f07-55ac0e22f384",
   "objectPath": "release-smoke-v1/canary.json",
@@ -47,6 +47,8 @@
     "fixed-read-checks-observed",
     "row-written",
     "object-written",
+    "round-trip-observed",
+    "private-storage-denial-observed",
     "cleanup-finished",
     "operation-failed",
     "operation-uncertain"

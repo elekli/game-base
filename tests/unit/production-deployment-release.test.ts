@@ -135,7 +135,6 @@ function failedSmokeWithVerifiedCleanup(release: ReturnType<typeof reachSmoke>) 
       "direct-origin-denied": "passed",
       "authenticated-library-read": "passed",
       "runtime-database-read": "passed",
-      "private-storage-direct-denied": "passed",
     },
     requestIds: [SMOKE_REQUEST_ID],
   });
@@ -166,7 +165,6 @@ function completedSmoke(release: ReturnType<typeof reachSmoke>) {
       "direct-origin-denied": "passed",
       "authenticated-library-read": "passed",
       "runtime-database-read": "passed",
-      "private-storage-direct-denied": "passed",
     },
     requestIds: [SMOKE_REQUEST_ID],
   });
@@ -184,6 +182,10 @@ function completedSmoke(release: ReturnType<typeof reachSmoke>) {
     rowPayloadSha256: calculateProductionSmokePayloadSha256(SHA),
     objectPayloadSha256: calculateProductionSmokePayloadSha256(SHA),
     requestIds: [SMOKE_REQUEST_ID],
+  });
+  next = sendCanaryEvent(next, {
+    kind: "private-storage-denial-observed",
+    status: "passed",
   });
   next = sendCanaryEvent(next, { kind: "cleanup-finished" });
   return sendCanaryEvent(next, {

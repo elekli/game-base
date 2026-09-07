@@ -4,6 +4,7 @@ import { getRequestId } from "@/shared/observability/request-id";
 
 const MAX_REQUEST_BODY_BYTES = 1024;
 const REQUEST_BODY_DEADLINE_MS = 1_000;
+const OPERATION_DEADLINE_MS = 35_000;
 const RESPONSE_HEADERS = { "cache-control": "private, no-store" } as const;
 
 const requestSchema = z
@@ -12,6 +13,7 @@ const requestSchema = z
     generation: z
       .string()
       .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+    actionSequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     operation: z.enum([
       "inspect-baseline",
       "run-fixed-read-checks",
@@ -30,8 +32,9 @@ type ProductionBinding = Readonly<{
   releaseSmokeMaxTokenLifetimeSeconds: number | null;
 }>;
 
-type ReleaseSmokeConfig = Readonly<{
+export type ReleaseSmokeConfig = Readonly<{
   environment: "development" | "preview" | "production";
+  databaseUrl: string;
   cloudflare: Readonly<{
     audience: string;
     issuer: string;
@@ -42,11 +45,19 @@ type ReleaseSmokeConfig = Readonly<{
     maxTokenLifetimeSeconds: number | null;
     ready: boolean;
   }>;
-  supabase: Readonly<{ projectRef: string }>;
+  supabase: Readonly<{ projectRef: string; secretKey: string; url: string }>;
+}>;
+
+export type ReleaseSmokeOperationInput = z.infer<typeof requestSchema>;
+export type ReleaseSmokeOperationResult = Readonly<Record<string, unknown>> &
+  Readonly<{ kind: string }>;
+type ReleaseSmokeCanaryDependencies = Readonly<{
+  execute: (input: ReleaseSmokeOperationInput, signal: AbortSignal) => Promise<ReleaseSmokeOperationResult>;
+  close: () => Promise<void> | void;
 }>;
 
 type ReleaseSmokeRouteDependencies = Readonly<{
-  createCanaryDependencies: () => unknown;
+  createCanaryDependencies: (config: ReleaseSmokeConfig) => ReleaseSmokeCanaryDependencies;
   getRuntimeConfig: () => ReleaseSmokeConfig;
   getVercelEnvironment: () => string | undefined;
   getVerifier: (config: Readonly<{
@@ -121,6 +132,28 @@ function response(status: number, message: string, errorCode: string, requestId:
     { errorCode, message, requestId },
     { status, headers: RESPONSE_HEADERS },
   );
+}
+
+function success(event: ReleaseSmokeOperationResult, requestId: string) {
+  return Response.json(
+    { event, requestId },
+    { status: 200, headers: RESPONSE_HEADERS },
+  );
+}
+
+function safeOperationFailure(error: unknown): ReleaseSmokeOperationResult | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const value = error as Record<string, unknown>;
+  if (typeof value.safeDetail !== "string" || value.safeDetail.length < 1 || value.safeDetail.length > 256) {
+    return undefined;
+  }
+  if (value.name === "ProductionSmokeOperationUncertainError") {
+    return { kind: "operation-uncertain", safeDetail: value.safeDetail };
+  }
+  if (value.name === "ProductionSmokeOperationError") {
+    return { kind: "operation-failed", safeDetail: value.safeDetail };
+  }
+  return undefined;
 }
 
 async function safelyObserve(
@@ -231,12 +264,14 @@ export function createReleaseSmokeRouteHandler(
       );
     }
 
+    let operation: ReleaseSmokeOperationInput;
     try {
       if (!request.headers.get("content-type")?.startsWith("application/json")) {
         throw new SyntaxError("request body must be JSON");
       }
       const parsed = requestSchema.safeParse(JSON.parse(await readBoundedBody(request)));
       if (!parsed.success) throw new SyntaxError("invalid release-smoke request");
+      operation = parsed.data;
     } catch (error) {
       if (error instanceof ReleaseSmokeBodyTimeoutError) {
         return response(
@@ -253,16 +288,52 @@ export function createReleaseSmokeRouteHandler(
       return response(400, "請求參數無效。", errorCode, requestId);
     }
 
-    await safelyObserve(
-      dependencies,
-      "release_smoke_canary_not_implemented",
-      requestId,
-    );
-    return response(
-      503,
-      "Release smoke canary 尚未實作。",
-      "release_smoke_canary_not_implemented",
-      requestId,
-    );
+    let canary: ReleaseSmokeCanaryDependencies;
+    try {
+      canary = dependencies.createCanaryDependencies(config);
+    } catch {
+      await safelyObserve(dependencies, "release_smoke_dependency_init_failed", requestId);
+      return response(503, "Release smoke 操作失敗。", "release_smoke_operation_failed", requestId);
+    }
+
+    let event: ReleaseSmokeOperationResult | undefined;
+    let operationError: unknown;
+    const operationController = new AbortController();
+    let operationTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      event = await Promise.race([
+        canary.execute(operation, operationController.signal),
+        new Promise<never>((_resolve, reject) => {
+          operationTimer = setTimeout(() => {
+            operationController.abort();
+            reject({
+              name: "ProductionSmokeOperationUncertainError",
+              safeDetail: "route operation deadline exceeded",
+            });
+          }, OPERATION_DEADLINE_MS);
+        }),
+      ]);
+    } catch (error) {
+      operationError = error;
+    } finally {
+      if (operationTimer !== undefined) clearTimeout(operationTimer);
+    }
+    let closeFailed = false;
+    try {
+      await canary.close();
+    } catch {
+      closeFailed = true;
+      await safelyObserve(dependencies, "release_smoke_dependency_close_failed", requestId);
+    }
+    const namedFailure = safeOperationFailure(operationError);
+    if (!closeFailed && namedFailure) {
+      await safelyObserve(dependencies, `release_smoke_${namedFailure.kind.replaceAll("-", "_")}`, requestId);
+      return success(namedFailure, requestId);
+    }
+    if (operationError !== undefined || closeFailed || event === undefined) {
+      await safelyObserve(dependencies, "release_smoke_operation_failed", requestId);
+      return response(503, "Release smoke 操作失敗。", "release_smoke_operation_failed", requestId);
+    }
+    return success(event, requestId);
   };
 }

@@ -6,12 +6,14 @@ import { deploymentBindings } from "@/shared/config/deployment-bindings";
 const validBody = JSON.stringify({
   executionSha: "0123456789abcdef0123456789abcdef01234567",
   generation: "1f45c8cc-6b61-4c4b-8f26-dc8c70bbd539",
+  actionSequence: 1,
   operation: "inspect-baseline",
 });
 
 function readyConfig() {
   return {
     environment: "production" as const,
+    databaseUrl: "postgres://app_runtime.production:secret@example.test:6543/postgres",
     cloudflare: {
       audience: "production-audience",
       issuer: "https://puizeru.cloudflareaccess.com",
@@ -22,14 +24,28 @@ function readyConfig() {
       maxTokenLifetimeSeconds: 300,
       ready: true,
     },
-    supabase: { projectRef: deploymentBindings.production.projectRef },
+    supabase: {
+      projectRef: deploymentBindings.production.projectRef,
+      secretKey: "sb_secret_test",
+      url: "https://example.supabase.co",
+    },
   };
 }
 
 function makeHarness(overrides: Record<string, unknown> = {}) {
   const verifyAccessToken = vi.fn(async () => ({ kind: "release-smoke" as const }));
   const getVerifier = vi.fn(() => verifyAccessToken);
-  const createCanaryDependencies = vi.fn();
+  const execute = vi.fn(async (...args: [unknown, AbortSignal]) => {
+    void args;
+    return {
+      kind: "counts-observed" as const,
+      purpose: "baseline" as const,
+      rowCount: 0,
+      objectCount: 0,
+    };
+  });
+  const close = vi.fn(async () => undefined);
+  const createCanaryDependencies = vi.fn(() => ({ execute, close }));
   const observeFailure = vi.fn();
   const dependencies = {
     createCanaryDependencies,
@@ -45,8 +61,10 @@ function makeHarness(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
   return {
+    close,
     createCanaryDependencies,
     dependencies,
+    execute,
     getVerifier,
     observeFailure,
     verifyAccessToken,
@@ -192,6 +210,8 @@ describe("POST /api/internal/release-smoke", () => {
     ["caller-selected owner", { ...JSON.parse(validBody), owner: "other-owner" }],
     ["uppercase SHA", { ...JSON.parse(validBody), executionSha: "A".repeat(40) }],
     ["non-v4 generation", { ...JSON.parse(validBody), generation: "00000000-0000-1000-8000-000000000000" }],
+    ["negative action sequence", { ...JSON.parse(validBody), actionSequence: -1 }],
+    ["fractional action sequence", { ...JSON.parse(validBody), actionSequence: 1.5 }],
     ["unknown operation", { ...JSON.parse(validBody), operation: "delete-anything" }],
   ])("rejects %s", async (_name, body) => {
     const harness = makeHarness();
@@ -201,15 +221,100 @@ describe("POST /api/internal/release-smoke", () => {
     expect(harness.createCanaryDependencies).not.toHaveBeenCalled();
   });
 
-  it("returns a named 503 after valid authentication and input without adapter calls", async () => {
+  it("dispatches a valid operation only after authentication and closes dependencies", async () => {
     const harness = makeHarness();
     const response = await harness.handler(request());
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      errorCode: "release_smoke_canary_not_implemented",
+      event: {
+        kind: "counts-observed",
+        purpose: "baseline",
+        rowCount: 0,
+        objectCount: 0,
+      },
       requestId: expect.stringMatching(/[0-9a-f-]{36}/),
     });
-    expect(harness.createCanaryDependencies).not.toHaveBeenCalled();
+    expect(harness.execute).toHaveBeenCalledWith({
+      executionSha: "0123456789abcdef0123456789abcdef01234567",
+      generation: "1f45c8cc-6b61-4c4b-8f26-dc8c70bbd539",
+      actionSequence: 1,
+      operation: "inspect-baseline",
+    }, expect.any(AbortSignal));
+    expect(harness.close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["ProductionSmokeOperationError", "operation-failed"],
+    ["ProductionSmokeOperationUncertainError", "operation-uncertain"],
+  ])("returns a bounded state-machine event for %s", async (name, kind) => {
+    const harness = makeHarness();
+    harness.execute.mockRejectedValueOnce({ name, safeDetail: "bounded failure" });
+
+    const response = await harness.handler(request());
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      event: { kind, safeDetail: "bounded failure" },
+      requestId: expect.stringMatching(/[0-9a-f-]{36}/),
+    });
+    expect(harness.close).toHaveBeenCalledOnce();
+  });
+
+  it("returns a generic 503 for an unknown operation error without leaking its message", async () => {
+    const harness = makeHarness();
+    harness.execute.mockRejectedValueOnce(new Error("database password leaked here"));
+
+    const response = await harness.handler(request());
+    const body = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(body).not.toContain("database password leaked here");
+    expect(body).not.toContain("password");
+    expect(harness.close).toHaveBeenCalledOnce();
+  });
+
+  it("returns a generic 503 when dependency close fails after a successful operation", async () => {
+    const harness = makeHarness();
+    harness.close.mockRejectedValueOnce(new Error("close failed"));
+
+    const response = await harness.handler(request());
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ errorCode: "release_smoke_operation_failed" });
+    expect(harness.execute).toHaveBeenCalledOnce();
+    expect(harness.close).toHaveBeenCalledOnce();
+    expect(harness.observeFailure).toHaveBeenCalledWith({
+      errorCode: "release_smoke_dependency_close_failed",
+      requestId: expect.stringMatching(/[0-9a-f-]{36}/),
+    });
+  });
+
+  it("aborts an operation at the route deadline and returns uncertain evidence", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = makeHarness();
+      harness.execute.mockImplementationOnce((...args: [unknown, AbortSignal]) => {
+        const signal = args[1];
+        return new Promise(() => signal.addEventListener("abort", () => undefined, { once: true }));
+      });
+      const responsePromise = harness.handler(request());
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(35_000);
+      const response = await responsePromise;
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        event: {
+          kind: "operation-uncertain",
+          safeDetail: "route operation deadline exceeded",
+        },
+      });
+      expect(harness.execute.mock.calls[0]?.[1]).toMatchObject({ aborted: true });
+      expect(harness.close).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
