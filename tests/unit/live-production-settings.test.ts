@@ -15,6 +15,12 @@ const encrypted = (key: string, value: string) => ({
   value,
 });
 
+const productionOnlySecret = (key: string, type: "encrypted" | "sensitive") => ({
+  key,
+  target: ["production"],
+  type,
+});
+
 const validSettings = {
   githubDeploymentBranchPolicies: [{ name: "main" }],
   githubEnvironmentSecretNames: [
@@ -44,6 +50,9 @@ const validSettings = {
     protection_rules: [{ type: "required_reviewers" }],
   },
   vercelEnvironmentVariables: [
+    productionOnlySecret("BGG_TOKEN", "sensitive"),
+    productionOnlySecret("IGDB_CLIENT_ID", "encrypted"),
+    productionOnlySecret("IGDB_CLIENT_SECRET", "sensitive"),
     {
       key: "SUPABASE_PUBLISHABLE_KEY",
       target: ["production"],
@@ -89,11 +98,62 @@ describe("live production settings", () => {
     expect(checkLiveProductionSettings(validSettings)).toEqual({
       githubEnvironment: "Production",
       productionMigrationTlsSecretsPresent: true,
+      productionSourceCredentialsPresent: true,
       requiredCheck: "verify",
-      vercelEnvironmentVariableCount: 12,
+      vercelEnvironmentVariableCount: 15,
       vercelGitConnected: false,
     });
   });
+
+  it.each(["BGG_TOKEN", "IGDB_CLIENT_ID", "IGDB_CLIENT_SECRET"])(
+    "rejects a missing %s source credential",
+    (key) => {
+      expect(() =>
+        checkLiveProductionSettings({
+          ...validSettings,
+          vercelEnvironmentVariables: validSettings.vercelEnvironmentVariables.filter(
+            (variable) => variable.key !== key,
+          ),
+        }),
+      ).toThrow(`${key} is missing from Vercel Production`);
+    },
+  );
+
+  it.each(["BGG_TOKEN", "IGDB_CLIENT_ID", "IGDB_CLIENT_SECRET"])(
+    "rejects %s outside the Production-only target",
+    (key) => {
+      expect(() =>
+        checkLiveProductionSettings({
+          ...validSettings,
+          vercelEnvironmentVariables: validSettings.vercelEnvironmentVariables.map(
+            (variable) =>
+              variable.key === key
+                ? { ...variable, target: ["production", "preview"] }
+                : variable,
+          ),
+        }),
+      ).toThrow("Vercel variables must not target Preview or Development");
+    },
+  );
+
+  it.each([
+    ["BGG_TOKEN", "encrypted", "sensitive"],
+    ["IGDB_CLIENT_ID", "sensitive", "encrypted"],
+    ["IGDB_CLIENT_SECRET", "encrypted", "sensitive"],
+  ])(
+    "rejects %s when it uses Vercel type %s instead of %s",
+    (key, actualType, expectedType) => {
+      expect(() =>
+        checkLiveProductionSettings({
+          ...validSettings,
+          vercelEnvironmentVariables: validSettings.vercelEnvironmentVariables.map(
+            (variable) =>
+              variable.key === key ? { ...variable, type: actualType } : variable,
+          ),
+        }),
+      ).toThrow(`${key} must use Vercel type ${expectedType}`);
+    },
+  );
 
   it("rejects a production credential copied to Preview", () => {
     expect(() =>

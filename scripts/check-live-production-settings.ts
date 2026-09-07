@@ -110,6 +110,9 @@ export function checkLiveProductionSettings(settings: LiveProductionSettings) {
     assertSetting(variable.type === type, `${key} must use Vercel type ${type}`);
     return variable;
   };
+  requireVariable("BGG_TOKEN", "sensitive");
+  requireVariable("IGDB_CLIENT_ID", "encrypted");
+  requireVariable("IGDB_CLIENT_SECRET", "sensitive");
   const publishableKey = requireVariable("SUPABASE_PUBLISHABLE_KEY", "encrypted");
   requireVariable("SUPABASE_SECRET_KEY", "sensitive");
   const expectedPublishableFingerprint = requireVariable(
@@ -182,6 +185,7 @@ export function checkLiveProductionSettings(settings: LiveProductionSettings) {
   return {
     githubEnvironment: githubEnvironment.name,
     productionMigrationTlsSecretsPresent: true,
+    productionSourceCredentialsPresent: true,
     requiredCheck: "verify",
     vercelEnvironmentVariableCount: vercelEnvironmentVariables.length,
     vercelGitConnected: false,
