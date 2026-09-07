@@ -222,6 +222,16 @@ export class PostgresMediaStore implements MediaStore {
           on conflict (asset_id, kind) do nothing
         `);
       }
+      if (ingest.purpose === "custom_cover") {
+        await tx.execute(sql`
+          update app_private.games
+          set manual_cover_asset_id = ${ingest.reservedAssetId}, manual_cover_selected_at = clock_timestamp()
+          where id = ${ingest.gameId}
+            and coalesce(manual_cover_selected_at, '-infinity'::timestamptz) <= (
+              select created_at from app_private.media_ingests where id = ${ingest.id}
+            )
+        `);
+      }
       await tx.execute(sql`
         update app_private.media_ingests
         set state = 'finalized', lease_token = null, lease_until = null, finalized_at = now(),
@@ -236,9 +246,9 @@ export class PostgresMediaStore implements MediaStore {
     });
   }
 
-  async findReadableOriginal(assetId: string): Promise<Readonly<{ path: string; fileName: string }> | null> {
+  async findReadableOriginal(assetId: string): Promise<Readonly<{ path: string; fileName: string; purpose: StoredMediaPurpose; actualMimeType: string }> | null> {
     const rows = await this.db.execute(sql`
-      select asset.original_object_path, asset.original_file_name
+      select asset.original_object_path, asset.original_file_name, asset.purpose, asset.actual_mime_type
       from app_private.media_assets asset
       join app_private.media_ingests ingest on ingest.id = asset.ingest_id
       join app_private.games game on game.id = asset.game_id
@@ -250,7 +260,10 @@ export class PostgresMediaStore implements MediaStore {
         and game.trashed_at is null
       limit 1
     `) as Row[];
-    return rows[0] ? { path: String(rows[0].original_object_path), fileName: String(rows[0].original_file_name) } : null;
+    return rows[0] ? {
+      path: String(rows[0].original_object_path), fileName: String(rows[0].original_file_name),
+      purpose: rows[0].purpose as StoredMediaPurpose, actualMimeType: String(rows[0].actual_mime_type),
+    } : null;
   }
 
   async findReadableThumbnail(assetId: string): Promise<Readonly<{ path: string }> | null> {
@@ -496,7 +509,8 @@ export class PostgresMediaStore implements MediaStore {
 
   async selectManualCover(gameId: string, assetId: string): Promise<boolean> {
     const rows = await this.db.execute(sql`
-      update app_private.games game set manual_cover_asset_id = asset.id
+      update app_private.games game
+      set manual_cover_asset_id = asset.id, manual_cover_selected_at = clock_timestamp()
       from app_private.media_assets asset
       where game.id = ${gameId} and game.trashed_at is null and asset.id = ${assetId}
         and asset.game_id = game.id and asset.authority_state = 'verified'
@@ -509,7 +523,7 @@ export class PostgresMediaStore implements MediaStore {
 
   async useSourceCover(gameId: string): Promise<boolean> {
     const rows = await this.db.execute(sql`
-      update app_private.games set manual_cover_asset_id = null
+      update app_private.games set manual_cover_asset_id = null, manual_cover_selected_at = clock_timestamp()
       where id = ${gameId} and trashed_at is null returning id
     `) as Row[];
     return Boolean(rows[0]);
@@ -529,7 +543,8 @@ export class PostgresMediaStore implements MediaStore {
       if (!assetRows[0]) return null;
       const rows = await tx.execute(sql`
         update app_private.games game
-        set manual_cover_asset_id = case when game.manual_cover_asset_id = ${assetId} then null else game.manual_cover_asset_id end
+        set manual_cover_asset_id = case when game.manual_cover_asset_id = ${assetId} then null else game.manual_cover_asset_id end,
+          manual_cover_selected_at = case when game.manual_cover_asset_id = ${assetId} then clock_timestamp() else game.manual_cover_selected_at end
         from app_private.media_assets asset
         where game.id = asset.game_id and asset.id = ${assetId}
           and asset.authority_state = 'verified' and asset.removed_at is null

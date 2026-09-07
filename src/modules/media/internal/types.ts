@@ -4,6 +4,7 @@ import type {
   MediaUploadResult,
   MediaAsset,
   MediaDerivative,
+  StoredMediaPurpose,
 } from "../contracts";
 
 export const MEDIA_MAX_PIXELS = 100_000_000;
@@ -77,7 +78,7 @@ export type MediaStore = Readonly<{
   releaseIncomplete(idempotencyKey: string, leaseToken: string): Promise<void>;
   rejectInvalid(idempotencyKey: string, leaseToken: string): Promise<void>;
   completeFinalize(idempotencyKey: string, leaseToken: string, object: ValidatedMediaObject): Promise<MediaUploadResult>;
-  findReadableOriginal(assetId: string): Promise<Readonly<{ path: string; fileName: string }> | null>;
+  findReadableOriginal(assetId: string): Promise<Readonly<{ path: string; fileName: string; purpose: StoredMediaPurpose; actualMimeType: string }> | null>;
   findReadableThumbnail(assetId: string): Promise<Readonly<{ path: string }> | null>;
   claimThumbnail(assetId: string, lease: Readonly<{ token: string; durationMs?: number }>): Promise<ThumbnailClaim>;
   markThumbnailUploaded(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string }>): Promise<void>;

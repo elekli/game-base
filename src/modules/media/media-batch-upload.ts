@@ -10,6 +10,7 @@ export type MediaBatchFile = Readonly<{
   error: string | null;
   assetId: string | null;
   thumbnailState: "pending" | "processing" | "ready" | "failed" | null;
+  retryable: boolean;
 }>;
 
 export type MediaBatchUploader = (input: Readonly<{
@@ -132,9 +133,12 @@ export function createMediaBatchUpload(input: Readonly<{
       }
     } catch (error) {
       const cancelFailed = error instanceof Error && error.message === "media_upload_cancel_failed";
+      const retryable = cancelFailed || (typeof error !== "object" || error === null || !("retryable" in error) || error.retryable !== false);
+      if (!retryable) input.identityStore?.forget?.(item.identity, item.idempotencyKey);
       update(item.idempotencyKey, {
         status: cancelFailed ? "failed" : cancelled ? "cancelled" : "failed",
         error: cancelFailed ? "暫停上傳失敗，請重新整理後確認狀態。" : cancelled ? null : error instanceof Error ? error.message : "檔案上傳失敗，請重試。",
+        retryable,
       });
     } finally { activeCancels.delete(item.idempotencyKey); cancelSignals.delete(item.idempotencyKey); }
   }
@@ -171,13 +175,21 @@ export function createMediaBatchUpload(input: Readonly<{
         activeKeys.add(idempotencyKey);
         input.identityStore?.remember(identity, idempotencyKey);
         return [{ idempotencyKey, identity, file, purpose, status: "queued" as const, uploadedBytes: 0,
-          error: null, assetId: null, thumbnailState: null }];
+          error: null, assetId: null, thumbnailState: null, retryable: true }];
       })];
+      emit();
+    },
+    reject(selected: readonly Readonly<{ file: MediaBatchFile["file"]; error: string }>[], purpose: MediaBatchFile["purpose"] = "gallery_image") {
+      files = [...files, ...selected.map(({ file, error }) => ({
+        idempotencyKey: createId(file, purpose), identity: "", file, purpose,
+        status: "failed" as const, uploadedBytes: 0, error, assetId: null,
+        thumbnailState: null, retryable: false,
+      }))];
       emit();
     },
     start,
     retryFailed() {
-      files = files.map((item) => item.status === "failed" ? { ...item, status: "queued", error: null } : item);
+      files = files.map((item) => item.status === "failed" && item.retryable ? { ...item, status: "queued", error: null } : item);
       emit();
       return start();
     },
@@ -191,6 +203,7 @@ export function createMediaBatchUpload(input: Readonly<{
         ...item,
         status: failedKeys.has(item.idempotencyKey) ? "failed" : "cancelled",
         error: failedKeys.has(item.idempotencyKey) ? "暫停上傳失敗，請重新整理後確認狀態。" : null,
+        retryable: failedKeys.has(item.idempotencyKey),
       } : item);
       emit();
       if (failedKeys.size) throw new Error("media_upload_cancel_failed");

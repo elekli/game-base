@@ -16,6 +16,9 @@ import {
 import { createBrowserMediaUpload } from "@/modules/media/browser-upload-client";
 
 type JsonError = Readonly<{ message?: string }>;
+class MediaClientError extends Error {
+  constructor(message: string, readonly retryable: boolean) { super(message); this.name = "MediaClientError"; }
+}
 const statusLabel: Record<MediaBatchFile["status"], string> = {
   queued: "等待中", uploading: "上傳中", processing: "確認原檔中", succeeded: "原檔已保存",
   failed: "上傳失敗", cancelled: "已暫停",
@@ -25,7 +28,7 @@ async function responseJson<T>(response: Response): Promise<T> {
   let body: T | JsonError;
   try { body = await response.json() as T; }
   catch { throw new Error("伺服器回應格式無效，請稍後重試。"); }
-  if (!response.ok) throw new Error((body as JsonError).message ?? "媒體操作失敗，請重試。");
+  if (!response.ok) throw new MediaClientError((body as JsonError).message ?? "媒體操作失敗，請重試。", response.status !== 400);
   return body as T;
 }
 
@@ -123,31 +126,20 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
     if (!selected?.length) return;
     const selectedPurpose = purpose;
     const candidates = selectedPurpose === "custom_cover" ? [...selected].slice(0, 1) : [...selected];
-    const accepted = candidates.filter((file) => {
-      if (file.size > 0 && file.size <= MEDIA_MAX_BYTES) return true;
-      setMessage(file.size === 0 ? `${file.name} 是空檔案。` : `${file.name} 超過 50 MB 上限。`);
-      return false;
-    });
+    const accepted = candidates.filter((file) => file.size > 0 && file.size <= MEDIA_MAX_BYTES);
+    const rejected = candidates.flatMap((file) => file.size > 0 && file.size <= MEDIA_MAX_BYTES ? [] : [{
+      file,
+      error: file.size === 0 ? "空檔案不會上傳，請重新選取。" : "超過 50 MB 上限，不會上傳。",
+    }]);
+    if (rejected.length) batch.reject(rejected, selectedPurpose);
     if (!accepted.length) return;
-    const existingKeys = new Set(batch.snapshot().map((item) => item.idempotencyKey));
     try {
       setMessage("正在確認檔案內容……");
       await batch.add(accepted, selectedPurpose);
       setMessage("批次已開始；離開頁面前請等候原檔保存完成。");
       await batch.start();
-      if (selectedPurpose === "custom_cover") {
-        const uploaded = batch.snapshot().find((item) => !existingKeys.has(item.idempotencyKey) && item.status === "succeeded" && item.assetId);
-        if (uploaded?.assetId) {
-          const applied = await action(
-            () => post(`/api/private/media/games/${gameId}/cover`, { mode: "manual", assetId: uploaded.assetId }),
-            "正在套用自訂封面……",
-            () => router.refresh(),
-          );
-          if (!applied) await loadGallery();
-          return;
-        }
-      }
       await loadGallery();
+      if (selectedPurpose === "custom_cover") router.refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "無法確認檔案內容，請重新選取。");
     }
@@ -201,14 +193,14 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
     );
   }
 
-  const failedCount = files.filter((file) => file.status === "failed").length;
+  const failedCount = files.filter((file) => file.status === "failed" && file.retryable).length;
   const undoAssetId = undoAssetIds.at(-1) ?? null;
   const images = gallery?.items.filter((item) => item.asset.purpose !== "attachment") ?? [];
   const attachments = gallery?.items.filter((item) => item.asset.purpose === "attachment") ?? [];
 
   return <section aria-labelledby="media-heading" className="mt-10 overflow-hidden rounded-[2rem] border border-emerald-950/10 bg-[#fffdf6] shadow-[0_24px_60px_-42px_rgba(6,78,59,.65)]">
     <header className="border-b border-emerald-950/10 bg-[linear-gradient(135deg,#e8f3e9_0%,#fff7db_100%)] px-5 py-6">
-      <p className="text-xs font-bold tracking-[.22em] text-emerald-800">PRIVATE MEDIA CABINET</p>
+      <p className="text-xs font-bold tracking-[.22em] text-emerald-800">私人媒體櫃</p>
       <h2 id="media-heading" className="mt-2 text-2xl font-semibold text-emerald-950">照片與遊戲附件</h2>
       <p className="mt-2 max-w-prose text-sm leading-6 text-emerald-950/70">原檔保存在私人空間；相簿只載入縮圖，下載網址約 60 秒後失效。</p>
     </header>

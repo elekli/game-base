@@ -232,6 +232,24 @@ describe("媒體公開介面", () => {
     expect(signed).toHaveBeenCalledWith(expect.stringMatching(/^originals\//), "桌遊照片.png", "attachment", 60);
   });
 
+  it("非 PDF 附件即使請求 inline 仍強制使用 attachment disposition", async () => {
+    const bytes = new TextEncoder().encode("<html>not trusted</html>");
+    const signed = vi.fn(async () => ({ url: "https://storage.example.test/signed/attachment", expiresAt: "2026-09-06T00:01:00.000Z" }));
+    const service = createMediaService({
+      store: createInMemoryMediaStore({ activeGameIds: [gameId] }),
+      objects: { ...objectStore({ bytes, mimeType: "text/html" }), createOriginalReadGrant: signed },
+    });
+    await service.beginMediaUpload(owner, command({
+      purpose: "attachment", originalFileName: "note.html", declaredMimeType: "text/html", declaredByteSize: bytes.byteLength,
+    }));
+    const finalized = await service.finalizeMediaUpload(owner, { idempotencyKey });
+    if ("status" in finalized) throw new Error("expected finalized upload");
+
+    await expect(service.issueOriginalRead(owner, { assetId: finalized.asset.id, disposition: "inline" }))
+      .resolves.toMatchObject({ disposition: "attachment" });
+    expect(signed).toHaveBeenCalledWith(expect.stringMatching(/^originals\//), "note.html", "attachment", 60);
+  });
+
   it("ready 封面縮圖經公開介面核發短效讀取，未 ready 時拒絕", async () => {
     const store = createInMemoryMediaStore({ activeGameIds: [gameId] });
     const service = createMediaService({ store, objects: objectStore({ bytes: png(), mimeType: "image/png" }) });

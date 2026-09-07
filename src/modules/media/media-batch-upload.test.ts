@@ -143,6 +143,28 @@ describe("media batch upload", () => {
     expect(batch.snapshot()[0]?.status).toBe("failed");
   });
 
+  it("內容驗證的永久失敗不重試，重新選檔時建立新 intent", async () => {
+    const identityStore = createSessionLikeIdentityStore();
+    const keys = ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"];
+    let index = 0;
+    const upload = vi.fn(async () => { throw Object.assign(new Error("檔案內容無效。"), { retryable: false }); });
+    const batch = createMediaBatchUpload({ upload, createId: () => keys[index++]!, identityStore });
+    await batch.add([file("invalid.png")]);
+    await batch.start();
+    await batch.retryFailed();
+    expect(upload).toHaveBeenCalledTimes(1);
+    await batch.add([file("invalid.png")]);
+    expect(batch.snapshot().map((item) => item.idempotencyKey)).toEqual(keys);
+  });
+
+  it("本機拒絕的檔案保留逐檔原因且不進入重試佇列", async () => {
+    const batch = createMediaBatchUpload({ upload: vi.fn(), createId: () => "00000000-0000-4000-8000-000000000001" });
+    batch.reject([{ file: file("empty.png", ""), error: "空檔案不會上傳，請重新選取。" }]);
+    expect(batch.snapshot()[0]).toMatchObject({ status: "failed", retryable: false, error: "空檔案不會上傳，請重新選取。" });
+    await batch.retryFailed();
+    expect(batch.snapshot()[0]?.status).toBe("failed");
+  });
+
   it("取消會中止 active transport，但保留可供續傳的失敗 intent", async () => {
     let release!: () => void;
     const transportCancel = vi.fn(async () => undefined);

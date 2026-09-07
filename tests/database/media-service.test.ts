@@ -300,7 +300,7 @@ describe("MediaService 與真 PostgreSQL", () => {
       .rejects.toBeInstanceOf(MediaUploadIdempotencyConflictError);
   });
 
-  it("finalize 建立單一 asset 與 pending derivative，但自訂封面需由明確指令套用", async () => {
+  it("finalize 建立單一 asset 與 pending derivative，並原子套用自訂封面", async () => {
     const service = serviceFor();
     const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand({ purpose: "custom_cover" })));
 
@@ -318,15 +318,28 @@ describe("MediaService 與真 PostgreSQL", () => {
         manual_cover_asset_id
       from app_private.games where id = $3
     `, [grant.ingestId, grant.assetId, gameId]);
-    expect(rows[0]).toEqual({ asset_count: 1, derivative_count: 1, manual_cover_asset_id: null });
-    await expect(service.selectManualCover(owner, { gameId, assetId: grant.assetId }))
-      .resolves.toEqual({ manualCoverAssetId: grant.assetId });
+    expect(rows[0]).toEqual({ asset_count: 1, derivative_count: 1, manual_cover_asset_id: grant.assetId });
     await expect(runtime.unsafe("update app_private.media_derivatives set spec = null where asset_id = $1", [grant.assetId]))
       .rejects.toThrow("verified media derivative identity fields are immutable");
     await expect(runtime.unsafe("update app_private.media_derivatives set authority_state = 'legacy_unverified' where asset_id = $1", [grant.assetId]))
       .rejects.toThrow("verified media derivative identity fields are immutable");
     await expect(runtime.unsafe("delete from app_private.media_derivatives where asset_id = $1", [grant.assetId]))
       .rejects.toThrow("cannot delete verified image derivative");
+  });
+
+  it("較早開始但較晚完成的自訂封面，不會覆寫較新的封面 intent", async () => {
+    const service = serviceFor();
+    const newerKey = "51000000-0000-4000-8000-000000000099";
+    const older = grantFrom(await service.beginMediaUpload(owner, beginCommand({ idempotencyKey: key, purpose: "custom_cover" })));
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const newer = grantFrom(await service.beginMediaUpload(owner, beginCommand({ idempotencyKey: newerKey, purpose: "custom_cover" })));
+
+    await service.finalizeMediaUpload(owner, { idempotencyKey: newerKey });
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+
+    const rows = await runtime.unsafe<{ manual_cover_asset_id: string }[]>("select manual_cover_asset_id from app_private.games where id = $1", [gameId]);
+    expect(rows[0]?.manual_cover_asset_id).toBe(newer.assetId);
+    expect(rows[0]?.manual_cover_asset_id).not.toBe(older.assetId);
   });
 
   it("同鍵 finalize 已在驗證物件時，並行呼叫回報 finalizing，完成後重播同一資產", async () => {
