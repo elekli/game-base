@@ -142,14 +142,18 @@ describe("Vercel deployment REST adapter contract", () => {
         sourceManifestArtifact: SOURCE_ARTIFACT,
       }),
     ).toThrow(VercelStagedProductionSafetyUnverifiedError);
-    expect(() =>
+    expect(
       buildCreateVercelDeploymentRequest({
         projectName: "game-base",
         releaseIdentity: RELEASE_IDENTITY,
         sourceManifestArtifact: SOURCE_ARTIFACT,
         stagedProductionSafetyVerified: true,
-      } as never),
-    ).toThrow();
+      }),
+    ).toMatchObject({
+      method: "POST",
+      path: "/v13/deployments",
+      body: { target: "production", meta: { releaseCommit: COMMIT_SHA } },
+    });
   });
 
   it("derives create files, commit, and digest only from a verified canonical artifact", () => {

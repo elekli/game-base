@@ -24,9 +24,11 @@ feature branch → PR → required CI／verify → main
 - T02A 唯讀 preflight 與 T02B migration apply／strict／ledger gate 已接入受保護的 `Production` Environment；T03 app deployment 尚未完成，因此此 workflow 只管理 migration，不呼叫 Vercel deploy。`PRODUCTION_MIGRATION_DATABASE_URL` 必須使用 `sslmode=verify-full`，並搭配 Supabase Dashboard 下載的 `PRODUCTION_MIGRATION_CA_CERT`；任一缺失都 fail closed。不得以手動 Dashboard deployment 繞過停發狀態。
 - Production credentials 只可存在 GitHub `Production` Environment secrets 或 Vercel Production scope。Vercel Preview／Development、repository variables、workflow log 與 artifact 都不得包含這些值。
 
-## T03 application deployment 模型（尚未接入 live workflow）
+## T03 application deployment 模型
 
-`scripts/production-deployment-release.ts` 是 T03 的純狀態轉換模型；它不執行 CLI、不讀取 credentials，也不改動任何外部狀態。`.github/production-release-contract.json` 目前以 `productionDeploymentEnabled: false` 與 `blocked-external-prerequisites-and-staging-safety-verification` 停發，且預定的唯一 application deployment writer `.github/workflows/production-application-release.yml` 尚不存在。現有 `.github/workflows/production-release.yml` 仍只管理 migration，禁止加入 Vercel deploy。
+`scripts/production-deployment-release.ts` 是 T03 的純狀態轉換模型；唯一 application deployment writer 是 `.github/workflows/production-application-release.yml`，它只接受 current `main` 的完整 commit、成功的 `ci.yml`、strict migration target，且在 `Production` Environment 核准後才呼叫 repository-owned `scripts/production-application-release.ts`。現有 `.github/workflows/production-release.yml` 仍只管理 migration，禁止加入 Vercel deploy。
+
+目前 `.github/production-release-contract.json` 仍以 `productionDeploymentEnabled: false` 與 `blocked-external-prerequisites-and-staging-safety-verification` 停發。executor 會在建立 transport 前讀取此契約並停止，因此 workflow 存在不等於允許 live mutation。
 
 ```text
 exact main CI
@@ -73,7 +75,17 @@ Promotion 前的任何失敗都讓 D0 繼續接收流量。Promotion 結果不�
 
 公開 artifact 只能符合 `.github/production-deployment-evidence.schema.json`。該 schema 採欄位 allowlist 與 `additionalProperties: false`，只容許 commit、migration tail、deployment identity、domain、時間、結果、bounded attempt count、具名 smoke check 與 request ID；不得包含 token、authorization header、連線字串、request／response payload 或私有資料。
 
-此切片不完成 #58 acceptance。啟用 live deployment 前仍須具備並核對：Production 自訂網域與 Cloudflare Access application；GitHub `Production` Environment secrets `VERCEL_TOKEN`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET`；variables `VERCEL_ORG_ID`、`VERCEL_PROJECT_ID`、`PRODUCTION_CUSTOM_DOMAIN`；以及只服務 release-smoke route 的最小權限身分裁決。還必須由操作者在 Vercel 專案設定中證明「自動指派 Custom Production Domains」已關閉；目前沒有可靠的 repository-owned REST 唯讀檢查可替代這項人工證據。未滿足這些前提時不得把 `productionDeploymentEnabled` 改為 `true`。
+啟用 live deployment 前仍須具備並核對：Production 自訂網域與 Cloudflare Access application；GitHub `Production` Environment secrets `VERCEL_TOKEN`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET`；variables `VERCEL_ORG_ID`、`VERCEL_PROJECT_ID`、`PRODUCTION_CUSTOM_DOMAIN`；以及只服務 release-smoke route 的最小權限身分裁決。還必須由操作者在 Vercel 專案設定中證明「自動指派 Custom Production Domains」已關閉；目前沒有可靠的 repository-owned REST 唯讀檢查可替代這項人工證據。未滿足這些前提時不得把 `productionDeploymentEnabled` 改為 `true`。
+
+### 尚未裁決的最窄 smoke 前提
+
+`scripts/production-smoke-runner.ts` 不會建立或繞過 `requireOwner`。在下列三項由安全審查裁決前，它固定拋出 `ProductionSmokePrerequisiteError`，不送任何 HTTP request：
+
+1. 專用 `/api/internal/release-smoke` route 僅驗證 Cloudflare 注入、經既有 issuer／audience／JWKS／簽章／時間檢查的 assertion，並只接受 production allowlist 的 service-token `common_name`；不得信任 client header 自報，且此 principal 不得進一般 private route。
+2. route 的唯一可變資料為固定 UUID 的 `app_private.production_smoke_canaries` row 與固定 private Storage path；row／object 皆必須以 exact execution identity 清除，不能接受任意 table、game、object 或 owner input。
+3. route 可在同一受限 principal 下完成固定 owner-library read、runtime DB read 與 private Storage denial；其餘 app 功能不授權給該 principal。
+
+此決策完成、migration 與 route 有獨立審查、外部 settings 證據到位前，`productionDeploymentEnabled` 一律保持 `false`。
 
 ### REST adapter、安全閘與 Free 方案限制
 

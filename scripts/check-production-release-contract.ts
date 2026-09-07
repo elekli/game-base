@@ -109,6 +109,8 @@ const SOURCE_SCAN_EXCLUDED_DIRECTORIES = new Set([
 ]);
 const SOURCE_SCAN_AUTHORIZED_CONTRACT_FILES = new Set([
   "scripts/check-production-release-contract.ts",
+  "scripts/production-application-release.ts",
+  "scripts/production-smoke-runner.ts",
   "scripts/vercel-deployment-rest-adapter.ts",
   "tests/unit/production-release-contract.test.ts",
   "tests/unit/vercel-deployment-rest-adapter.test.ts",
@@ -522,20 +524,28 @@ export async function checkProductionReleaseContract(root: string) {
         contract.productionDeploymentEvidenceSchemaSha256,
     "Production deployment evidence schema fingerprint does not match the approved redaction boundary",
   );
-  let disabledWriterExists = true;
+  let applicationWriterExists = true;
   try {
     await access(path.join(root, contract.productionDeploymentWriter));
-  } catch (error) {
-    disabledWriterExists =
-      !(
-        error instanceof Error &&
-        "code" in error &&
-        (error as NodeJS.ErrnoException).code === "ENOENT"
-      );
+  } catch {
+    applicationWriterExists = false;
   }
   assertContract(
-    !disabledWriterExists,
-    "disabled Production application deployment writer must not be executable",
+    applicationWriterExists,
+    "Production application deployment writer must be repository-owned",
+  );
+  const applicationWorkflow = await readFile(
+    path.join(root, contract.productionDeploymentWriter),
+    "utf8",
+  );
+  assertContract(
+    applicationWorkflow.includes("Verify exact current main commit and successful CI") &&
+      applicationWorkflow.includes("name: Production") &&
+      applicationWorkflow.includes("pnpm release:migration:verify") &&
+      applicationWorkflow.includes("pnpm release:application:run") &&
+      !VERCEL_CLI_MUTATION.test(applicationWorkflow) &&
+      !VERCEL_MUTATION_ENDPOINT.test(applicationWorkflow),
+    "Production application writer must keep exact-main, strict migration, protected environment, and repository executor gates",
   );
   const evidenceFields = [
     "schemaVersion",

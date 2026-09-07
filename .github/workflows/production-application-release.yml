@@ -1,0 +1,91 @@
+name: Production Application Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact current main commit approved for application release
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: production-application-release
+  cancel-in-progress: false
+
+jobs:
+  verify-release-candidate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      execution_sha: ${{ steps.candidate.outputs.execution_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      - id: candidate
+        name: Verify exact current main commit and successful CI
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git fetch --no-tags origin main
+          execution_sha="$(git rev-parse origin/main)"
+          test "$execution_sha" = "$COMMIT_SHA"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${execution_sha}&branch=main&event=push&status=success&per_page=100" |
+            jq -e --arg sha "$execution_sha" 'any(.workflow_runs[]; .head_sha == $sha and .conclusion == "success")' >/dev/null
+          echo "execution_sha=$execution_sha" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm release:contract:check
+
+  release-application:
+    needs: verify-release-candidate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: Production
+    env:
+      GITHUB_SHA: ${{ needs.verify-release-candidate.outputs.execution_sha }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      PRODUCTION_CUSTOM_DOMAIN: ${{ vars.PRODUCTION_CUSTOM_DOMAIN }}
+      PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID: ${{ secrets.PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID }}
+      PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET: ${{ secrets.PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET }}
+      PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.verify-release-candidate.outputs.execution_sha }}
+      - name: Confirm pinned execution is still current main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Strictly verify the migration target before application release
+        run: pnpm release:migration:verify
+      - name: Deploy same verified commit through repository-owned REST executor
+        run: pnpm release:application:run
