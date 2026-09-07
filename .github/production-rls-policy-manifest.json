@@ -200,6 +200,17 @@
       "withCheck": "true"
     },
     {
+      "table": "production_smoke_canaries",
+      "name": "migrator_production_smoke_canaries_all",
+      "validFrom": "0015",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_migrator"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
       "table": "source_categories",
       "name": "runtime_source_categories",
       "validFrom": "0003",

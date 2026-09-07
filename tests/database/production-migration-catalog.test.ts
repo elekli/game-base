@@ -75,6 +75,48 @@ describe("production migration PostgreSQL catalog checks", () => {
 
     expect(healthy.unexpectedAclCount).toBe(0);
     expect(healthy.defaultPrivilegeDriftCount).toBe(0);
+    expect(healthy.runtimeGrantDriftCount).toBe(0);
+    expect(healthy.productionSmokeSecurityDriftCount).toBe(0);
+  });
+
+  it.each([
+    [
+      "removed FORCE RLS",
+      "set local role app_migrator; alter table app_private.production_smoke_canaries no force row level security; reset role;",
+    ],
+    [
+      "direct runtime table access",
+      "set local role app_migrator; grant select on app_private.production_smoke_canaries to app_runtime; reset role;",
+    ],
+    [
+      "SECURITY INVOKER",
+      "set local role app_migrator; alter function app_private.inspect_production_smoke_canary() security invoker; reset role;",
+    ],
+    [
+      "mutable search_path",
+      "set local role app_migrator; alter function app_private.inspect_production_smoke_canary() set search_path = public; reset role;",
+    ],
+    [
+      "replaced function body",
+      `set local role app_migrator;
+       create or replace function app_private.inspect_production_smoke_canary()
+       returns table (row_count bigint, identity text, generation text, action_sequence bigint, payload_sha256 text, phase text)
+       language sql stable security definer set search_path = pg_catalog, app_private
+       as $$ select 0::bigint, null::text, null::text, null::bigint, null::text, null::text $$;
+       reset role;`,
+    ],
+  ])("detects production smoke security drift from %s", async (_case, mutation) => {
+    const healthy = await snapshot();
+    expect(healthy.productionSmokeSecurityDriftCount).toBe(0);
+
+    await database.unsafe("begin");
+    try {
+      await database.unsafe(mutation);
+      const drifted = await snapshot();
+      expect(drifted.productionSmokeSecurityDriftCount).toBeGreaterThan(0);
+    } finally {
+      await database.unsafe("rollback");
+    }
   });
 
   it("revokes PUBLIC execute only after postgres switches to the function owner", async () => {
@@ -253,6 +295,49 @@ describe("production migration PostgreSQL catalog checks", () => {
       const polluted = await snapshot();
       expect(polluted.unexpectedAclCount).toBeGreaterThanOrEqual(
         healthy.unexpectedAclCount + 2,
+      );
+    } finally {
+      await database.unsafe("rollback");
+    }
+  });
+
+  it("rejects app_runtime execute on a function outside the fixed smoke API", async () => {
+    const healthy = await snapshot();
+    await database.unsafe("begin");
+    try {
+      await database.unsafe(`
+        set local role app_migrator;
+        create function app_private.acl_probe_runtime_function() returns integer
+          language sql as $$ select 1 $$;
+        grant execute on function app_private.acl_probe_runtime_function() to app_runtime;
+        reset role;
+      `);
+
+      const polluted = await snapshot();
+      expect(polluted.unexpectedAclCount).toBeGreaterThanOrEqual(
+        healthy.unexpectedAclCount + 1,
+      );
+    } finally {
+      await database.unsafe("rollback");
+    }
+  });
+
+  it("rejects restoring runtime DELETE on reconciliation ledgers", async () => {
+    const healthy = await snapshot();
+    await database.unsafe("begin");
+    try {
+      await database.unsafe(`
+        set local role app_migrator;
+        grant delete on app_private.media_cleanup_jobs, app_private.media_reconciliation_runs to app_runtime;
+        reset role;
+      `);
+
+      const polluted = await snapshot();
+      expect(polluted.unexpectedAclCount).toBeGreaterThanOrEqual(
+        healthy.unexpectedAclCount + 2,
+      );
+      expect(polluted.runtimeGrantDriftCount).toBeGreaterThanOrEqual(
+        healthy.runtimeGrantDriftCount + 2,
       );
     } finally {
       await database.unsafe("rollback");
