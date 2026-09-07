@@ -23,6 +23,71 @@ const DUMP_CLIENT_CONTAINER = "puizeru_restore_dump_client";
 const RESTORE_CLIENT_CONTAINER = "puizeru_restore_load_client";
 const MAX_COMMAND_OUTPUT_BYTES = 65_536;
 
+function maskQuotedContent(value: string) {
+  return value.replace(
+    /"(?:[^"]|"")*"|'(?:[^']|'')*'/g,
+    (quoted) => " ".repeat(quoted.length),
+  );
+}
+
+function safeCommandFailureDetail(
+  purpose: ProductionRestoreCommandInvocation["purpose"],
+  stderr: string,
+) {
+  if (purpose !== "restore-dump") return `${purpose} failed`;
+  let databaseRejection = false;
+  const primaryErrors = stderr
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      const restoreError = line.match(/^pg_restore: error:\s*(.+)$/i)?.[1];
+      if (!restoreError) return [];
+      const databaseErrorOffset = maskQuotedContent(restoreError).lastIndexOf("ERROR:");
+      if (databaseErrorOffset < 0) return [maskQuotedContent(restoreError)];
+      databaseRejection = true;
+      return [maskQuotedContent(
+        restoreError.slice(databaseErrorOffset + "ERROR:".length),
+      )];
+    })
+    .join("\n");
+  if (/permission denied/i.test(primaryErrors)) {
+    return "restore-dump failed (permission-denied)";
+  }
+  if (
+    /(?:duplicate key value|violates unique constraint)/i.test(primaryErrors)
+  ) {
+    return "restore-dump failed (duplicate-data)";
+  }
+  if (
+    /violates (?:foreign key|check|not-null) constraint/i.test(primaryErrors)
+  ) {
+    return "restore-dump failed (constraint-violation)";
+  }
+  if (
+    /(?:system platform|media (?:manual cover|source cover|asset|derivative|attachment|ingest|cleanup job)|finalized media|verified (?:media|image|thumbnail)|browser media|source cover ingest|current source cover|active media|adopted media)/i.test(primaryErrors)
+  ) {
+    return "restore-dump failed (trigger-invariant)";
+  }
+  if (
+    /(?:relation|column).+does not exist/i.test(primaryErrors)
+  ) {
+    return "restore-dump failed (schema-mismatch)";
+  }
+  if (
+    /unsupported version.+file header/i.test(primaryErrors)
+  ) {
+    return "restore-dump failed (archive-incompatible)";
+  }
+  if (
+    /(?:connection to server.+failed|could not translate host name|server closed the connection)/i.test(primaryErrors)
+  ) {
+    return "restore-dump failed (target-unreachable)";
+  }
+  if (databaseRejection) {
+    return "restore-dump failed (database-rejection)";
+  }
+  return "restore-dump failed";
+}
+
 export class ProductionRestoreCommandError extends Error {
   constructor(readonly safeDetail: string) {
     super(`ProductionRestoreCommandError: ${safeDetail}`);
@@ -149,7 +214,9 @@ export async function runBoundedCommand(
         finish(() => {
           if (terminationDetail) reject(new ProductionRestoreCommandError(terminationDetail));
           else if (code === 0) resolvePromise({ stdout, stderr });
-          else reject(new ProductionRestoreCommandError(`${invocation.purpose} failed`));
+          else reject(new ProductionRestoreCommandError(
+            safeCommandFailureDetail(invocation.purpose, stderr),
+          ));
         });
       });
       timer.current = setTimeout(() => {
