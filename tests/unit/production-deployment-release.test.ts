@@ -1,16 +1,59 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  calculateProductionSmokePayloadSha256,
+  type ProductionSmokeCanaryEvent,
+} from "../../scripts/production-smoke-canary";
+
+import {
   createProductionDeploymentRelease,
+  ProductionDeploymentReleaseError,
   transitionProductionDeploymentRelease,
 } from "../../scripts/production-deployment-release";
 
 const SHA = "a".repeat(40);
+const MANIFEST_SHA256 = "b".repeat(64);
+const SMOKE_REQUEST_ID = "00000000-0000-4000-8000-000000000001";
+
+function smokeEvidence(executionSha = SHA) {
+  return {
+    namespace: "release-smoke-v1" as const,
+    executionSha,
+    identity: `release-smoke-v1:${executionSha}`,
+    payloadSha256: calculateProductionSmokePayloadSha256(executionSha),
+    counts: {
+      baseline: { row: 0, object: 0 },
+      mutation: { row: 1, object: 1 },
+      cleanup: { row: 0, object: 0 },
+    },
+    checks: {
+      "custom-domain-owner-access": "passed" as const,
+      "direct-origin-denied": "passed" as const,
+      "authenticated-library-read": "passed" as const,
+      "runtime-database-read": "passed" as const,
+      "private-storage-direct-denied": "passed" as const,
+      "canary-row-round-trip": "passed" as const,
+      "canary-object-round-trip": "passed" as const,
+      "canary-cleanup-counts": "passed" as const,
+    },
+    requestIds: [SMOKE_REQUEST_ID],
+  };
+}
+
+function failedCleanupEvidence() {
+  return {
+    outcome: "failed" as const,
+    requestIds: [SMOKE_REQUEST_ID],
+    counts: { cleanup: { row: 0, object: 0 } },
+    checks: { "canary-cleanup-counts": "passed" as const },
+  };
+}
 
 function reachPromotionAttempt() {
   let release = createProductionDeploymentRelease({
     executionSha: SHA,
     releaseKind: "migration-bearing",
+    sourceManifestSha256: MANIFEST_SHA256,
   });
   release = transitionProductionDeploymentRelease(release, {
     kind: "release-gate-observed",
@@ -25,13 +68,17 @@ function reachPromotionAttempt() {
   release = transitionProductionDeploymentRelease(release, {
     kind: "staged-deployment-resolved",
     deploymentId: "dpl_D1",
+    commitSha: SHA,
     releaseIdentity: `production:${SHA}`,
+    sourceManifestSha256: MANIFEST_SHA256,
     source: "created",
   });
   release = transitionProductionDeploymentRelease(release, {
     kind: "staged-deployment-ready",
     deploymentId: "dpl_D1",
     commitSha: SHA,
+    releaseIdentity: `production:${SHA}`,
+    sourceManifestSha256: MANIFEST_SHA256,
   });
   release = transitionProductionDeploymentRelease(release, {
     kind: "promotion-guard-observed",
@@ -55,11 +102,92 @@ function reachSmoke() {
   });
 }
 
+function sendCanaryEvent(
+  release: ReturnType<typeof reachSmoke>,
+  event: ProductionSmokeCanaryEvent,
+) {
+  return transitionProductionDeploymentRelease(release, {
+    kind: "smoke-canary-event",
+    event,
+  });
+}
+
+function failedSmokeWithVerifiedCleanup(release: ReturnType<typeof reachSmoke>) {
+  let next = sendCanaryEvent(release, {
+    kind: "counts-observed",
+    purpose: "baseline",
+    rowCount: 0,
+    objectCount: 0,
+  });
+  next = sendCanaryEvent(next, {
+    kind: "fixed-read-checks-observed",
+    checks: {
+      "custom-domain-owner-access": "passed",
+      "direct-origin-denied": "passed",
+      "authenticated-library-read": "passed",
+      "runtime-database-read": "passed",
+      "private-storage-direct-denied": "passed",
+    },
+    requestIds: [SMOKE_REQUEST_ID],
+  });
+  next = sendCanaryEvent(next, {
+    kind: "operation-failed",
+    safeDetail: "canary write outcome is ambiguous",
+  });
+  next = sendCanaryEvent(next, { kind: "cleanup-finished" });
+  return sendCanaryEvent(next, {
+    kind: "counts-observed",
+    purpose: "cleanup",
+    rowCount: 0,
+    objectCount: 0,
+  });
+}
+
+function completedSmoke(release: ReturnType<typeof reachSmoke>) {
+  let next = sendCanaryEvent(release, {
+    kind: "counts-observed",
+    purpose: "baseline",
+    rowCount: 0,
+    objectCount: 0,
+  });
+  next = sendCanaryEvent(next, {
+    kind: "fixed-read-checks-observed",
+    checks: {
+      "custom-domain-owner-access": "passed",
+      "direct-origin-denied": "passed",
+      "authenticated-library-read": "passed",
+      "runtime-database-read": "passed",
+      "private-storage-direct-denied": "passed",
+    },
+    requestIds: [SMOKE_REQUEST_ID],
+  });
+  next = sendCanaryEvent(next, { kind: "row-written" });
+  next = sendCanaryEvent(next, { kind: "object-written" });
+  next = sendCanaryEvent(next, {
+    kind: "round-trip-observed",
+    rowCount: 1,
+    objectCount: 1,
+    rowIdentity: `release-smoke-v1:${SHA}`,
+    objectIdentity: `release-smoke-v1:${SHA}`,
+    rowPayloadSha256: calculateProductionSmokePayloadSha256(SHA),
+    objectPayloadSha256: calculateProductionSmokePayloadSha256(SHA),
+    requestIds: [SMOKE_REQUEST_ID],
+  });
+  next = sendCanaryEvent(next, { kind: "cleanup-finished" });
+  return sendCanaryEvent(next, {
+    kind: "counts-observed",
+    purpose: "cleanup",
+    rowCount: 0,
+    objectCount: 0,
+  });
+}
+
 describe("production deployment release model", () => {
   it("requires the release-kind-specific schema gate before reading Production", () => {
     const migrationRelease = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "migration-bearing",
+      sourceManifestSha256: MANIFEST_SHA256,
     });
 
     expect(migrationRelease.next).toEqual({
@@ -80,6 +208,7 @@ describe("production deployment release model", () => {
     const codeOnlyRelease = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "code-only",
+      sourceManifestSha256: MANIFEST_SHA256,
     });
     const accepted = transitionProductionDeploymentRelease(codeOnlyRelease, {
       kind: "release-gate-observed",
@@ -100,6 +229,7 @@ describe("production deployment release model", () => {
     let release = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "migration-bearing",
+      sourceManifestSha256: MANIFEST_SHA256,
     });
     release = transitionProductionDeploymentRelease(release, {
       kind: "release-gate-observed",
@@ -116,19 +246,22 @@ describe("production deployment release model", () => {
       kind: "ensure-staged-deployment",
       executionSha: SHA,
       releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
       metadata: {
         releaseCommit: SHA,
         releaseIdentity: `production:${SHA}`,
+        sourceManifestSha256: MANIFEST_SHA256,
       },
       prod: true,
-      skipDomain: true,
       timeoutMs: 300_000,
     });
 
     release = transitionProductionDeploymentRelease(release, {
       kind: "staged-deployment-resolved",
       deploymentId: "dpl_D1",
+      commitSha: SHA,
       releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
       source: "created",
     });
     expect(release.next).toEqual({
@@ -136,6 +269,7 @@ describe("production deployment release model", () => {
       deploymentId: "dpl_D1",
       intervalMs: 5_000,
       maxAttempts: 60,
+      sourceManifestSha256: MANIFEST_SHA256,
       timeoutMs: 300_000,
     });
 
@@ -143,6 +277,8 @@ describe("production deployment release model", () => {
       kind: "staged-deployment-ready",
       deploymentId: "dpl_D1",
       commitSha: SHA,
+      releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
     });
     expect(release.next).toEqual({
       kind: "recheck-promotion-guard",
@@ -180,16 +316,23 @@ describe("production deployment release model", () => {
       kind: "run-production-smoke",
       deploymentId: "dpl_D1",
       executionSha: SHA,
+      canaryAction: {
+        kind: "inspect-canary-counts",
+        purpose: "baseline",
+        rowId: "7355773e-c3b5-4e5d-9f07-55ac0e22f384",
+        objectPath: "release-smoke-v1/canary.json",
+      },
       timeoutMs: 180_000,
     });
 
-    release = transitionProductionDeploymentRelease(release, {
-      kind: "smoke-passed",
-      requestIds: ["00000000-0000-4000-8000-000000000001"],
-    });
+    release = completedSmoke(release);
     expect(release.next).toEqual({
       kind: "record-sanitized-evidence",
+      executionSha: SHA,
       outcome: "passed",
+      releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
+      smokeEvidence: smokeEvidence(),
       timeoutMs: 30_000,
     });
 
@@ -198,6 +341,41 @@ describe("production deployment release model", () => {
     });
     expect(release.phase).toBe("succeeded");
     expect(release.next).toEqual({ kind: "stop" });
+  });
+
+  it("rejects even a hand-built complete success evidence object", () => {
+    expect(() =>
+      transitionProductionDeploymentRelease(reachSmoke(), {
+        kind: "smoke-passed",
+        evidence: smokeEvidence(),
+      } as never),
+    ).toThrow(ProductionDeploymentReleaseError);
+  });
+
+  it("never rolls back after an unverified smoke interruption", () => {
+    for (const event of [
+      { kind: "operation-failed" },
+      { kind: "smoke-run-interrupted", reason: "timeout" },
+      { kind: "smoke-run-interrupted", reason: "crash" },
+    ]) {
+      const release = transitionProductionDeploymentRelease(
+        reachSmoke(),
+        event as never,
+      );
+      expect(release.phase).toBe("manual-recovery-required");
+      expect(release.next).toEqual({ kind: "stop" });
+      expect(release.evidenceOutcome).toBeUndefined();
+    }
+  });
+
+  it("permits rollback only after the canary has proved cleanup completed", () => {
+    const release = failedSmokeWithVerifiedCleanup(reachSmoke());
+
+    expect(release.next).toEqual({
+      kind: "inspect-current-deployment",
+      purpose: "before-rollback",
+      timeoutMs: 30_000,
+    });
   });
 
   it("retries promotion only when inspection still finds D0, and stops after a bounded second attempt", () => {
@@ -273,10 +451,7 @@ describe("production deployment release model", () => {
   });
 
   it("rolls back only after smoke failure is followed by proof that D1 is still current", () => {
-    let release = transitionProductionDeploymentRelease(reachSmoke(), {
-      kind: "smoke-failed",
-      requestIds: ["00000000-0000-4000-8000-000000000002"],
-    });
+    let release = failedSmokeWithVerifiedCleanup(reachSmoke());
     expect(release.next).toEqual({
       kind: "inspect-current-deployment",
       purpose: "before-rollback",
@@ -311,9 +486,14 @@ describe("production deployment release model", () => {
     });
     expect(release.next).toEqual({
       kind: "record-sanitized-evidence",
+      executionSha: SHA,
       outcome: "rolled-back",
+      releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
+      smokeFailureEvidence: failedCleanupEvidence(),
       timeoutMs: 30_000,
     });
+    expect(release.rollbackAttempts).toBe(1);
 
     release = transitionProductionDeploymentRelease(release, {
       kind: "evidence-recorded",
@@ -322,11 +502,27 @@ describe("production deployment release model", () => {
     expect(release.failure).toBe("smoke-failed-baseline-restored");
   });
 
-  it("never rolls back when post-smoke inspection finds a deployment other than D1", () => {
-    let release = transitionProductionDeploymentRelease(reachSmoke(), {
-      kind: "smoke-failed",
-      requestIds: [],
+  it("records cleanup proof with zero rollback attempts when inspection already finds D0", () => {
+    let release = failedSmokeWithVerifiedCleanup(reachSmoke());
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "current-deployment-observed",
+      deploymentId: "dpl_D0",
     });
+
+    expect(release.rollbackAttempts).toBe(0);
+    expect(release.next).toEqual({
+      kind: "record-sanitized-evidence",
+      executionSha: SHA,
+      outcome: "rolled-back",
+      releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
+      smokeFailureEvidence: failedCleanupEvidence(),
+      timeoutMs: 30_000,
+    });
+  });
+
+  it("never rolls back when post-smoke inspection finds a deployment other than D1", () => {
+    let release = failedSmokeWithVerifiedCleanup(reachSmoke());
     release = transitionProductionDeploymentRelease(release, {
       kind: "current-deployment-observed",
       deploymentId: "dpl_D2",
@@ -340,10 +536,7 @@ describe("production deployment release model", () => {
   });
 
   it("bounds rollback retries when an ambiguous command leaves D1 current", () => {
-    let release = transitionProductionDeploymentRelease(reachSmoke(), {
-      kind: "smoke-failed",
-      requestIds: [],
-    });
+    let release = failedSmokeWithVerifiedCleanup(reachSmoke());
     release = transitionProductionDeploymentRelease(release, {
       kind: "current-deployment-observed",
       deploymentId: "dpl_D1",
@@ -380,6 +573,7 @@ describe("production deployment release model", () => {
     let release = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "code-only",
+      sourceManifestSha256: MANIFEST_SHA256,
     });
     release = transitionProductionDeploymentRelease(release, {
       kind: "release-gate-observed",
@@ -394,7 +588,9 @@ describe("production deployment release model", () => {
     release = transitionProductionDeploymentRelease(release, {
       kind: "staged-deployment-resolved",
       deploymentId: "dpl_D1",
+      commitSha: SHA,
       releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
       source: "created",
     });
     release = transitionProductionDeploymentRelease(release, {
@@ -407,7 +603,7 @@ describe("production deployment release model", () => {
     expect(release.next).toEqual({ kind: "stop" });
   });
 
-  it("treats command failures after promotion as ambiguous and re-inspects before mutating", () => {
+  it("requires manual recovery for a smoke command failure without cleanup proof", () => {
     const promotionFailure = transitionProductionDeploymentRelease(
       reachPromotionAttempt(),
       { kind: "operation-failed" },
@@ -418,19 +614,12 @@ describe("production deployment release model", () => {
       timeoutMs: 30_000,
     });
 
-    let smokeFailure = transitionProductionDeploymentRelease(reachSmoke(), {
+    const smokeFailure = transitionProductionDeploymentRelease(reachSmoke(), {
       kind: "operation-failed",
     });
-    expect(smokeFailure.next).toEqual({
-      kind: "inspect-current-deployment",
-      purpose: "before-rollback",
-      timeoutMs: 30_000,
-    });
-    smokeFailure = transitionProductionDeploymentRelease(smokeFailure, {
-      kind: "current-deployment-observed",
-      deploymentId: "dpl_D1",
-    });
-    expect(smokeFailure.next.kind).toBe("rollback-baseline");
+    expect(smokeFailure.phase).toBe("manual-recovery-required");
+    expect(smokeFailure.failure).toBe("smoke-cleanup-unverified");
+    expect(smokeFailure.next).toEqual({ kind: "stop" });
 
     const inspectionFailure = transitionProductionDeploymentRelease(
       reachPromotionVerification(),
@@ -443,10 +632,7 @@ describe("production deployment release model", () => {
   });
 
   it("names evidence persistence failure instead of reporting release success", () => {
-    let release = transitionProductionDeploymentRelease(reachSmoke(), {
-      kind: "smoke-passed",
-      requestIds: [],
-    });
+    let release = completedSmoke(reachSmoke());
     release = transitionProductionDeploymentRelease(release, {
       kind: "operation-failed",
     });
@@ -456,10 +642,7 @@ describe("production deployment release model", () => {
   });
 
   it("fails visibly when rollback-state inspection cannot establish an authority", () => {
-    let beforeRollback = transitionProductionDeploymentRelease(reachSmoke(), {
-      kind: "smoke-failed",
-      requestIds: [],
-    });
+    let beforeRollback = failedSmokeWithVerifiedCleanup(reachSmoke());
     const beforeRollbackInspectionFailure =
       transitionProductionDeploymentRelease(beforeRollback, {
         kind: "operation-failed",
@@ -492,6 +675,7 @@ describe("production deployment release model", () => {
     let release = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "code-only",
+      sourceManifestSha256: MANIFEST_SHA256,
     });
     release = transitionProductionDeploymentRelease(release, {
       kind: "release-gate-observed",
@@ -506,7 +690,9 @@ describe("production deployment release model", () => {
     release = transitionProductionDeploymentRelease(release, {
       kind: "staged-deployment-resolved",
       deploymentId: "dpl_D1",
+      commitSha: SHA,
       releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
       source: "reused",
     });
     expect(release.next).toMatchObject({
@@ -517,6 +703,7 @@ describe("production deployment release model", () => {
     let mismatched = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "code-only",
+      sourceManifestSha256: MANIFEST_SHA256,
     });
     mismatched = transitionProductionDeploymentRelease(mismatched, {
       kind: "release-gate-observed",
@@ -531,7 +718,9 @@ describe("production deployment release model", () => {
     mismatched = transitionProductionDeploymentRelease(mismatched, {
       kind: "staged-deployment-resolved",
       deploymentId: "dpl_D1",
+      commitSha: SHA,
       releaseIdentity: `production:${"b".repeat(40)}`,
+      sourceManifestSha256: MANIFEST_SHA256,
       source: "reused",
     });
     expect(mismatched.failure).toBe("staged-deployment-invalid");
@@ -541,6 +730,7 @@ describe("production deployment release model", () => {
     let metadataMismatch = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "code-only",
+      sourceManifestSha256: MANIFEST_SHA256,
     });
     metadataMismatch = transitionProductionDeploymentRelease(metadataMismatch, {
       kind: "release-gate-observed",
@@ -555,13 +745,17 @@ describe("production deployment release model", () => {
     metadataMismatch = transitionProductionDeploymentRelease(metadataMismatch, {
       kind: "staged-deployment-resolved",
       deploymentId: "dpl_D1",
+      commitSha: SHA,
       releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
       source: "reused",
     });
     metadataMismatch = transitionProductionDeploymentRelease(metadataMismatch, {
       kind: "staged-deployment-ready",
       deploymentId: "dpl_D1",
       commitSha: "b".repeat(40),
+      releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
     });
     expect(metadataMismatch.failure).toBe(
       "staged-deployment-identity-mismatch",
@@ -570,6 +764,7 @@ describe("production deployment release model", () => {
     let guardChanged = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "migration-bearing",
+      sourceManifestSha256: MANIFEST_SHA256,
     });
     guardChanged = transitionProductionDeploymentRelease(guardChanged, {
       kind: "release-gate-observed",
@@ -584,13 +779,17 @@ describe("production deployment release model", () => {
     guardChanged = transitionProductionDeploymentRelease(guardChanged, {
       kind: "staged-deployment-resolved",
       deploymentId: "dpl_D1",
+      commitSha: SHA,
       releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
       source: "created",
     });
     guardChanged = transitionProductionDeploymentRelease(guardChanged, {
       kind: "staged-deployment-ready",
       deploymentId: "dpl_D1",
       commitSha: SHA,
+      releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
     });
     guardChanged = transitionProductionDeploymentRelease(guardChanged, {
       kind: "promotion-guard-observed",
@@ -598,5 +797,104 @@ describe("production deployment release model", () => {
       mainSha: SHA,
     });
     expect(guardChanged.failure).toBe("promotion-guard-rejected");
+  });
+
+  it("carries the exact source manifest through create, reuse, READY, and evidence", () => {
+    let release = createProductionDeploymentRelease({
+      executionSha: SHA,
+      releaseKind: "code-only",
+      sourceManifestSha256: MANIFEST_SHA256,
+    });
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "release-gate-observed",
+      executionSha: SHA,
+      exactMainCi: true,
+      schemaGate: "strict-current-schema",
+    });
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "current-deployment-observed",
+      deploymentId: "dpl_D0",
+    });
+    expect(release.next).toMatchObject({
+      kind: "ensure-staged-deployment",
+      sourceManifestSha256: MANIFEST_SHA256,
+      metadata: { sourceManifestSha256: MANIFEST_SHA256 },
+    });
+
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "staged-deployment-resolved",
+      deploymentId: "dpl_D1",
+      commitSha: SHA,
+      releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
+      source: "reused",
+    });
+    expect(release.next).toMatchObject({
+      kind: "await-staged-ready",
+      sourceManifestSha256: MANIFEST_SHA256,
+    });
+
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "staged-deployment-ready",
+      deploymentId: "dpl_D1",
+      commitSha: SHA,
+      releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
+    });
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "promotion-guard-observed",
+      currentDeploymentId: "dpl_D0",
+      mainSha: SHA,
+    });
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "promotion-attempt-finished",
+      outcome: "reported-success",
+    });
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "current-deployment-observed",
+      deploymentId: "dpl_D1",
+    });
+    release = completedSmoke(release);
+    expect(release.next).toEqual({
+      kind: "record-sanitized-evidence",
+      executionSha: SHA,
+      releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
+      outcome: "passed",
+      smokeEvidence: smokeEvidence(),
+      timeoutMs: 30_000,
+    });
+
+    let mismatch = createProductionDeploymentRelease({
+      executionSha: SHA,
+      releaseKind: "code-only",
+      sourceManifestSha256: MANIFEST_SHA256,
+    });
+    mismatch = transitionProductionDeploymentRelease(mismatch, {
+      kind: "release-gate-observed",
+      executionSha: SHA,
+      exactMainCi: true,
+      schemaGate: "strict-current-schema",
+    });
+    mismatch = transitionProductionDeploymentRelease(mismatch, {
+      kind: "current-deployment-observed",
+      deploymentId: "dpl_D0",
+    });
+    mismatch = transitionProductionDeploymentRelease(mismatch, {
+      kind: "staged-deployment-resolved",
+      deploymentId: "dpl_D1",
+      commitSha: SHA,
+      releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: MANIFEST_SHA256,
+      source: "created",
+    });
+    mismatch = transitionProductionDeploymentRelease(mismatch, {
+      kind: "staged-deployment-ready",
+      deploymentId: "dpl_D1",
+      commitSha: SHA,
+      releaseIdentity: `production:${SHA}`,
+      sourceManifestSha256: "c".repeat(64),
+    });
+    expect(mismatch.failure).toBe("staged-deployment-identity-mismatch");
   });
 });

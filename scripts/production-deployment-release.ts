@@ -1,3 +1,14 @@
+import {
+  consumeProductionSmokeCanaryTerminal,
+  createProductionSmokeCanary,
+  transitionProductionSmokeCanary,
+  type ProductionSmokeCanary,
+  type ProductionSmokeCanaryAction,
+  type ProductionSmokeCanaryEvidence,
+  type ProductionSmokeCanaryEvent,
+  type ProductionSmokeFailedCleanupEvidence,
+} from "./production-smoke-canary";
+
 export type ProductionReleaseKind = "code-only" | "migration-bearing";
 export type ProductionSchemaGate =
   | "strict-current-schema"
@@ -15,6 +26,9 @@ export type ProductionDeploymentFailure =
   | "release-gate-check-failed"
   | "rollback-attempts-exhausted"
   | "rollback-state-inspection-failed"
+  | "smoke-cleanup-unverified"
+  | "smoke-execution-crash"
+  | "smoke-execution-timeout"
   | "smoke-failed-baseline-restored"
   | "staged-deployment-ensure-failed"
   | "staged-deployment-identity-mismatch"
@@ -49,12 +63,13 @@ export type ProductionDeploymentAction =
       kind: "ensure-staged-deployment";
       executionSha: string;
       releaseIdentity: string;
+      sourceManifestSha256: string;
       metadata: Readonly<{
         releaseCommit: string;
         releaseIdentity: string;
+        sourceManifestSha256: string;
       }>;
       prod: true;
-      skipDomain: true;
       timeoutMs: number;
     }>
   | Readonly<{
@@ -62,6 +77,7 @@ export type ProductionDeploymentAction =
       deploymentId: string;
       intervalMs: number;
       maxAttempts: number;
+      sourceManifestSha256: string;
       timeoutMs: number;
     }>
   | Readonly<{
@@ -81,6 +97,7 @@ export type ProductionDeploymentAction =
       kind: "run-production-smoke";
       deploymentId: string;
       executionSha: string;
+      canaryAction: ProductionSmokeCanaryAction;
       timeoutMs: number;
     }>
   | Readonly<{
@@ -92,7 +109,20 @@ export type ProductionDeploymentAction =
     }>
   | Readonly<{
       kind: "record-sanitized-evidence";
-      outcome: "passed" | "rolled-back";
+      executionSha: string;
+      outcome: "passed";
+      releaseIdentity: string;
+      sourceManifestSha256: string;
+      smokeEvidence: ProductionSmokeCanaryEvidence;
+      timeoutMs: number;
+    }>
+  | Readonly<{
+      kind: "record-sanitized-evidence";
+      executionSha: string;
+      outcome: "rolled-back";
+      releaseIdentity: string;
+      sourceManifestSha256: string;
+      smokeFailureEvidence: ProductionSmokeFailedCleanupEvidence;
       timeoutMs: number;
     }>
   | Readonly<{ kind: "stop" }>;
@@ -110,12 +140,14 @@ export type ProductionDeploymentPhase =
   | "rolling-back"
   | "verifying-rollback"
   | "recording-evidence"
+  | "manual-recovery-required"
   | "succeeded"
   | "failed";
 
 type ReleaseContext = Readonly<{
   executionSha: string;
   releaseKind: ProductionReleaseKind;
+  sourceManifestSha256: string;
 }>;
 
 export type ProductionDeploymentRelease = ReleaseContext &
@@ -129,6 +161,9 @@ export type ProductionDeploymentRelease = ReleaseContext &
     failure?: ProductionDeploymentFailure;
     evidenceOutcome?: "passed" | "rolled-back";
     requestIds?: ReadonlyArray<string>;
+    smokeEvidence?: ProductionSmokeCanaryEvidence;
+    smokeFailureEvidence?: ProductionSmokeFailedCleanupEvidence;
+    smokeCanary?: ProductionSmokeCanary;
   }>;
 
 export type ProductionDeploymentEvent =
@@ -141,14 +176,18 @@ export type ProductionDeploymentEvent =
   | Readonly<{ kind: "current-deployment-observed"; deploymentId: string }>
   | Readonly<{
       kind: "staged-deployment-resolved";
+      commitSha: string;
       deploymentId: string;
       releaseIdentity: string;
+      sourceManifestSha256: string;
       source: "created" | "reused";
     }>
   | Readonly<{
       kind: "staged-deployment-ready";
       deploymentId: string;
       commitSha: string;
+      releaseIdentity: string;
+      sourceManifestSha256: string;
     }>
   | Readonly<{
       kind: "promotion-guard-observed";
@@ -159,8 +198,14 @@ export type ProductionDeploymentEvent =
       kind: "promotion-attempt-finished";
       outcome: "reported-success" | "ambiguous-failure";
     }>
-  | Readonly<{ kind: "smoke-passed"; requestIds: ReadonlyArray<string> }>
-  | Readonly<{ kind: "smoke-failed"; requestIds: ReadonlyArray<string> }>
+  | Readonly<{
+      kind: "smoke-canary-event";
+      event: ProductionSmokeCanaryEvent;
+    }>
+  | Readonly<{
+      kind: "smoke-run-interrupted";
+      reason: "timeout" | "crash";
+    }>
   | Readonly<{
       kind: "rollback-attempt-finished";
       outcome: "reported-success" | "ambiguous-failure";
@@ -169,13 +214,63 @@ export type ProductionDeploymentEvent =
   | Readonly<{ kind: "operation-failed" }>;
 
 const FULL_SHA = /^[a-f0-9]{40}$/;
+const SHA256 = /^[a-f0-9]{64}$/;
 const DEPLOYMENT_ID = /^dpl_[A-Za-z0-9]+$/;
-
 function failed(
   release: ProductionDeploymentRelease,
   failure: ProductionDeploymentFailure,
 ): ProductionDeploymentRelease {
   return { ...release, phase: "failed", failure, next: { kind: "stop" } };
+}
+
+function manualRecovery(
+  release: ProductionDeploymentRelease,
+  failure:
+    | "smoke-cleanup-unverified"
+    | "smoke-execution-crash"
+    | "smoke-execution-timeout",
+): ProductionDeploymentRelease {
+  return {
+    ...release,
+    phase: "manual-recovery-required",
+    failure,
+    next: { kind: "stop" },
+  };
+}
+
+function runProductionSmoke(
+  release: ProductionDeploymentRelease,
+  smokeCanary: ProductionSmokeCanary,
+): ProductionDeploymentAction {
+  return {
+    kind: "run-production-smoke",
+    deploymentId: release.stagedDeploymentId!,
+    executionSha: release.executionSha,
+    canaryAction: smokeCanary.next,
+    timeoutMs: 180_000,
+  };
+}
+
+function recordRolledBackEvidence(
+  release: ProductionDeploymentRelease,
+): ProductionDeploymentRelease {
+  if (!release.smokeFailureEvidence) {
+    return manualRecovery(release, "smoke-cleanup-unverified");
+  }
+  return {
+    ...release,
+    evidenceOutcome: "rolled-back",
+    phase: "recording-evidence",
+    next: {
+      kind: "record-sanitized-evidence",
+      executionSha: release.executionSha,
+      outcome: "rolled-back",
+      releaseIdentity: `production:${release.executionSha}`,
+      sourceManifestSha256: release.sourceManifestSha256,
+      smokeFailureEvidence: release.smokeFailureEvidence,
+      timeoutMs: 30_000,
+    },
+  };
 }
 
 function inspectCurrent(purpose: InspectionPurpose): ProductionDeploymentAction {
@@ -207,6 +302,11 @@ export function createProductionDeploymentRelease(
   if (!FULL_SHA.test(context.executionSha)) {
     throw new ProductionDeploymentReleaseError("execution SHA is invalid");
   }
+  if (!SHA256.test(context.sourceManifestSha256)) {
+    throw new ProductionDeploymentReleaseError(
+      "source manifest SHA-256 is invalid",
+    );
+  }
   return {
     ...context,
     phase: "awaiting-release-gate",
@@ -235,12 +335,7 @@ export function transitionProductionDeploymentRelease(
       case "verifying-promotion":
         return failed(release, "promotion-state-inspection-failed");
       case "running-smoke":
-        return {
-          ...release,
-          requestIds: release.requestIds ?? [],
-          phase: "inspecting-before-rollback",
-          next: inspectCurrent("before-rollback"),
-        };
+        return manualRecovery(release, "smoke-cleanup-unverified");
       case "inspecting-before-rollback":
         return failed(release, "pre-rollback-inspection-failed");
       case "rolling-back":
@@ -290,12 +385,13 @@ export function transitionProductionDeploymentRelease(
           kind: "ensure-staged-deployment",
           executionSha: release.executionSha,
           releaseIdentity: `production:${release.executionSha}`,
+          sourceManifestSha256: release.sourceManifestSha256,
           metadata: {
             releaseCommit: release.executionSha,
             releaseIdentity: `production:${release.executionSha}`,
+            sourceManifestSha256: release.sourceManifestSha256,
           },
           prod: true,
-          skipDomain: true,
           timeoutMs: 300_000,
         },
       };
@@ -305,7 +401,9 @@ export function transitionProductionDeploymentRelease(
       if (
         !DEPLOYMENT_ID.test(event.deploymentId) ||
         event.deploymentId === release.baselineDeploymentId ||
-        event.releaseIdentity !== `production:${release.executionSha}`
+        event.commitSha !== release.executionSha ||
+        event.releaseIdentity !== `production:${release.executionSha}` ||
+        event.sourceManifestSha256 !== release.sourceManifestSha256
       ) {
         return failed(release, "staged-deployment-invalid");
       }
@@ -318,6 +416,7 @@ export function transitionProductionDeploymentRelease(
           deploymentId: event.deploymentId,
           intervalMs: 5_000,
           maxAttempts: 60,
+          sourceManifestSha256: release.sourceManifestSha256,
           timeoutMs: 300_000,
         },
       };
@@ -326,7 +425,9 @@ export function transitionProductionDeploymentRelease(
       if (event.kind !== "staged-deployment-ready") break;
       if (
         event.deploymentId !== release.stagedDeploymentId ||
-        event.commitSha !== release.executionSha
+        event.commitSha !== release.executionSha ||
+        event.releaseIdentity !== `production:${release.executionSha}` ||
+        event.sourceManifestSha256 !== release.sourceManifestSha256
       ) {
         return failed(release, "staged-deployment-identity-mismatch");
       }
@@ -377,15 +478,14 @@ export function transitionProductionDeploymentRelease(
     case "verifying-promotion": {
       if (event.kind !== "current-deployment-observed") break;
       if (event.deploymentId === release.stagedDeploymentId) {
+        const smokeCanary = createProductionSmokeCanary({
+          executionSha: release.executionSha,
+        });
         return {
           ...release,
           phase: "running-smoke",
-          next: {
-            kind: "run-production-smoke",
-            deploymentId: release.stagedDeploymentId!,
-            executionSha: release.executionSha,
-            timeoutMs: 180_000,
-          },
+          smokeCanary,
+          next: runProductionSmoke(release, smokeCanary),
         };
       }
       if (event.deploymentId === release.baselineDeploymentId) {
@@ -406,25 +506,62 @@ export function transitionProductionDeploymentRelease(
       return failed(release, "unexpected-current-deployment-after-promotion");
     }
     case "running-smoke": {
-      if (event.kind === "smoke-passed") {
-        return {
-          ...release,
-          requestIds: event.requestIds,
-          evidenceOutcome: "passed",
-          phase: "recording-evidence",
-          next: {
-            kind: "record-sanitized-evidence",
-            outcome: "passed",
-            timeoutMs: 30_000,
-          },
-        };
+      if (event.kind === "smoke-run-interrupted") {
+        return manualRecovery(
+          release,
+          event.reason === "timeout"
+            ? "smoke-execution-timeout"
+            : "smoke-execution-crash",
+        );
       }
-      if (event.kind === "smoke-failed") {
+      if (event.kind === "smoke-canary-event") {
+        if (!release.smokeCanary) {
+          return manualRecovery(release, "smoke-cleanup-unverified");
+        }
+        let smokeCanary: ProductionSmokeCanary;
+        try {
+          smokeCanary = transitionProductionSmokeCanary(
+            release.smokeCanary,
+            event.event,
+          );
+        } catch {
+          return manualRecovery(release, "smoke-cleanup-unverified");
+        }
+        const terminal = consumeProductionSmokeCanaryTerminal(smokeCanary);
+        if (terminal?.outcome === "passed") {
+          const evidence = terminal.evidence;
+          return {
+            ...release,
+            requestIds: evidence.requestIds,
+            smokeCanary,
+            smokeEvidence: evidence,
+            evidenceOutcome: "passed",
+            phase: "recording-evidence",
+            next: {
+              kind: "record-sanitized-evidence",
+              executionSha: release.executionSha,
+              outcome: "passed",
+              releaseIdentity: `production:${release.executionSha}`,
+              sourceManifestSha256: release.sourceManifestSha256,
+              smokeEvidence: evidence,
+              timeoutMs: 30_000,
+            },
+          };
+        }
+        if (terminal?.outcome === "failed-cleanup-complete") {
+          return {
+            ...release,
+            requestIds: terminal.evidence.requestIds,
+            smokeCanary,
+            smokeFailureEvidence: terminal.evidence,
+            phase: "inspecting-before-rollback",
+            next: inspectCurrent("before-rollback"),
+          };
+        }
         return {
           ...release,
-          requestIds: event.requestIds,
-          phase: "inspecting-before-rollback",
-          next: inspectCurrent("before-rollback"),
+          smokeCanary,
+          next: runProductionSmoke(release, smokeCanary),
         };
       }
       break;
@@ -433,16 +570,7 @@ export function transitionProductionDeploymentRelease(
       if (event.kind !== "current-deployment-observed") break;
       if (event.deploymentId !== release.stagedDeploymentId) {
         if (event.deploymentId === release.baselineDeploymentId) {
-          return {
-            ...release,
-            evidenceOutcome: "rolled-back",
-            phase: "recording-evidence",
-            next: {
-              kind: "record-sanitized-evidence",
-              outcome: "rolled-back",
-              timeoutMs: 30_000,
-            },
-          };
+          return recordRolledBackEvidence(release);
         }
         return failed(release, "unexpected-current-deployment-before-rollback");
       }
@@ -470,16 +598,7 @@ export function transitionProductionDeploymentRelease(
     case "verifying-rollback": {
       if (event.kind !== "current-deployment-observed") break;
       if (event.deploymentId === release.baselineDeploymentId) {
-        return {
-          ...release,
-          evidenceOutcome: "rolled-back",
-          phase: "recording-evidence",
-          next: {
-            kind: "record-sanitized-evidence",
-            outcome: "rolled-back",
-            timeoutMs: 30_000,
-          },
-        };
+        return recordRolledBackEvidence(release);
       }
       if (event.deploymentId === release.stagedDeploymentId) {
         if (release.rollbackAttempts >= 2) {
@@ -510,6 +629,7 @@ export function transitionProductionDeploymentRelease(
     }
     case "succeeded":
     case "failed":
+    case "manual-recovery-required":
       break;
   }
   throw new ProductionDeploymentReleaseError("event is invalid for phase");

@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "contractVersion": 1,
+  "namespace": "release-smoke-v1",
+  "rowId": "7355773e-c3b5-4e5d-9f07-55ac0e22f384",
+  "objectPath": "release-smoke-v1/canary.json",
+  "identityFormat": "release-smoke-v1:<40-char-lowercase-git-sha>",
+  "payloadHashInput": ["namespace", "identity", "rowId", "objectPath"],
+  "bounds": {
+    "baseline": { "row": 0, "object": 0 },
+    "mutationMaximum": { "row": 1, "object": 1 },
+    "cleanup": { "row": 0, "object": 0 }
+  },
+  "checks": [
+    "custom-domain-owner-access",
+    "direct-origin-denied",
+    "authenticated-library-read",
+    "runtime-database-read",
+    "private-storage-direct-denied",
+    "canary-row-round-trip",
+    "canary-object-round-trip",
+    "canary-cleanup-counts"
+  ],
+  "residuePolicy": "Only an exact row/object pair with the current execution identity may be cleaned before retry.",
+  "evidenceAllowlist": ["namespace", "identity", "counts", "checks", "requestIds"]
+}

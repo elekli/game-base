@@ -4,6 +4,7 @@ import {
   VercelRestConfigurationError,
   VercelRestHttpError,
   VercelRestMalformedJsonError,
+  VercelRestMalformedResponseError,
   VercelRestNetworkError,
   VercelRestTimeoutError,
   VercelRestUnexpectedResponseError,
@@ -223,6 +224,26 @@ describe("Vercel read-only REST client", () => {
     expect((error as Error).message).not.toContain(secret);
   });
 
+  it("rejects a successful response beyond the strict body limit without retaining bytes", async () => {
+    const secret = "oversized_response_secret_must_not_escape";
+    const client = createVercelReadOnlyRestClient({
+      fetchImpl: async () =>
+        new Response(secret.repeat(20), {
+          headers: { "content-length": String(secret.length * 20) },
+        }),
+      maxResponseBytes: 64,
+      teamId: "team-id",
+      timeoutMs: 100,
+      token: "fixture-token",
+    });
+
+    const error = await client.getProject("project-id").catch((reason) => reason);
+
+    expect(error).toBeInstanceOf(VercelRestMalformedResponseError);
+    expect(JSON.stringify(error)).not.toContain(secret);
+    expect((error as Error).message).not.toContain(secret);
+  });
+
   it("classifies a response-body transport failure as a network error", async () => {
     const secret = "body_transport_detail_must_not_escape";
     const response = new Response(
@@ -284,9 +305,10 @@ describe("Vercel read-only REST client", () => {
   });
 
   it("keeps the timeout active while reading the response body", async () => {
-    const response = new Response("{}");
-    vi.spyOn(response, "text").mockImplementation(
-      async () => await new Promise<never>(() => undefined),
+    const response = new Response(
+      new ReadableStream({
+        pull: async () => await new Promise<never>(() => undefined),
+      }),
     );
     const client = createVercelReadOnlyRestClient({
       fetchImpl: async () => response,
