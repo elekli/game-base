@@ -9,6 +9,7 @@ export type {
   MediaService,
   MediaUploadResult,
   OriginalMediaRead,
+  RetryThumbnailCommand,
   UploadGrant,
 } from "./contracts";
 
@@ -23,6 +24,8 @@ export {
   MediaAssetUnavailableError,
   MediaStorageUnavailableError,
   MediaReadUnavailableError,
+  MediaThumbnailUnavailableError,
+  MediaThumbnailUnsupportedError,
   MediaUploadIdempotencyConflictError,
   MediaUploadIncompleteError,
 } from "./internal/errors";

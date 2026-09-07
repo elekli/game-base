@@ -12,6 +12,7 @@ export type BeginMediaUploadCommand = Readonly<{
 }>;
 
 export type FinalizeMediaUploadCommand = Readonly<{ idempotencyKey: string }>;
+export type RetryThumbnailCommand = Readonly<{ assetId: string }>;
 
 export type UploadGrant = Readonly<{
   status: "upload_grant";
@@ -70,5 +71,6 @@ export type FinalizeMediaUploadResult = MediaUploadResult | Readonly<{ status: "
 export type MediaService = Readonly<{
   beginMediaUpload(owner: OwnerIdentity, command: BeginMediaUploadCommand): Promise<BeginMediaUploadResult>;
   finalizeMediaUpload(owner: OwnerIdentity, command: FinalizeMediaUploadCommand): Promise<FinalizeMediaUploadResult>;
+  retryThumbnail(owner: OwnerIdentity, command: RetryThumbnailCommand): Promise<MediaDerivative>;
   issueOriginalRead(owner: OwnerIdentity, query: Readonly<{ assetId: string }>): Promise<OriginalMediaRead>;
 }>;

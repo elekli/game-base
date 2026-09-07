@@ -6,11 +6,24 @@ import {
 import type { MediaUploadResult } from "../contracts";
 import { matchesUploadCommand } from "./matches-upload-command";
 import { MEDIA_THUMBNAIL_SPEC, type BeginMediaRecord, type FinalizeClaim, type MediaIngest, type MediaStore, type ValidatedMediaObject } from "./types";
+import { decideThumbnailFailure } from "./thumbnail-state";
 
 export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readonly string[]; now?: () => Date }>): MediaStore {
   const games = new Set(input.activeGameIds);
   const ingests = new Map<string, MediaIngest>();
   const results = new Map<string, MediaUploadResult>();
+  const thumbnails = new Map<string, { state: "pending" | "processing" | "ready" | "failed"; attemptCount: number; cycleAttemptCount: number; cycle: number; leaseToken: string | null; leaseUntil: string | null; activeAttemptId: string | null }>();
+
+  function replaceThumbnail(assetId: string, state: "pending" | "processing" | "ready" | "failed"): MediaUploadResult | null {
+    for (const [key, result] of results) {
+      if (result.asset.id !== assetId || !result.thumbnail) continue;
+      const thumbnail = { ...result.thumbnail, state };
+      const updated = { ...result, thumbnail };
+      results.set(key, updated);
+      return updated;
+    }
+    return null;
+  }
 
   return {
     async begin(command, reserved): Promise<BeginMediaRecord> {
@@ -90,6 +103,7 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
       const thumbnail = ingest.purpose === "attachment" ? null : { assetId: asset.id, spec: MEDIA_THUMBNAIL_SPEC, state: "pending" as const };
       const result = { asset, thumbnail };
       results.set(key, result);
+      if (thumbnail) thumbnails.set(asset.id, { state: "pending", attemptCount: 0, cycleAttemptCount: 0, cycle: 1, leaseToken: null, leaseUntil: null, activeAttemptId: null });
       ingests.set(key, { ...ingest, state: "finalized", leaseToken: null, leaseUntil: null });
       return result;
     },
@@ -98,6 +112,46 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
       if (!result || result.asset.removedAt !== null) return null;
       const ingest = [...ingests.values()].find((candidate) => candidate.reservedAssetId === assetId && candidate.state === "finalized");
       return ingest ? { path: ingest.originalObjectPath, fileName: result.asset.originalFileName } : null;
+    },
+    async claimThumbnail(assetId, lease) {
+      const job = thumbnails.get(assetId);
+      if (!job) return { status: results.has(assetId) ? "not_found" as const : "not_found" as const };
+      const current = input.now?.() ?? new Date();
+      if (job.state === "ready" || job.state === "failed") return { status: "not_ready" as const };
+      if (job.state === "processing" && job.leaseUntil && new Date(job.leaseUntil) > current) return { status: "busy" as const };
+      const attemptCount = job.attemptCount + 1;
+      const cycleAttemptCount = job.cycleAttemptCount + 1;
+      const attemptId = `${assetId}:${attemptCount}`;
+      const leaseUntil = new Date(current.getTime() + 5 * 60 * 1000).toISOString();
+      thumbnails.set(assetId, { ...job, state: "processing", attemptCount, cycleAttemptCount, leaseToken: lease.token, leaseUntil, activeAttemptId: attemptId });
+      const ingest = [...ingests.values()].find((candidate) => candidate.reservedAssetId === assetId);
+      if (!ingest) return { status: "not_found" as const };
+      return { status: "claimed" as const, derivativeId: assetId, assetId, originalObjectPath: ingest.originalObjectPath, attempt: { id: attemptId, number: attemptCount, objectPath: `thumbnails/${assetId}/${attemptId}.webp`, cycleAttemptCount } };
+    },
+    async markThumbnailUploaded(claim) {
+      const job = thumbnails.get(claim.derivativeId);
+      if (!job || job.leaseToken !== claim.leaseToken || job.activeAttemptId !== claim.attemptId || job.attemptCount !== claim.attemptNumber) throw new MediaFinalizeUnavailableError();
+    },
+    async adoptThumbnail(claim) {
+      const job = thumbnails.get(claim.derivativeId);
+      if (!job || job.leaseToken !== claim.leaseToken || job.activeAttemptId !== claim.attemptId || job.attemptCount !== claim.attemptNumber) throw new MediaFinalizeUnavailableError();
+      if (!replaceThumbnail(claim.derivativeId, "ready")) throw new MediaFinalizeUnavailableError();
+      thumbnails.set(claim.derivativeId, { ...job, state: "ready", leaseToken: null, leaseUntil: null, activeAttemptId: null });
+    },
+    async failThumbnail(claim) {
+      const job = thumbnails.get(claim.derivativeId);
+      if (!job || job.leaseToken !== claim.leaseToken || job.activeAttemptId !== claim.attemptId || job.attemptCount !== claim.attemptNumber) throw new MediaFinalizeUnavailableError();
+      const outcome = decideThumbnailFailure({ cycleAttemptCount: job.cycleAttemptCount, deterministic: claim.deterministic });
+      if (!replaceThumbnail(claim.derivativeId, outcome.state)) throw new MediaFinalizeUnavailableError();
+      thumbnails.set(claim.derivativeId, { ...job, state: outcome.state, leaseToken: null, leaseUntil: null, activeAttemptId: null });
+      return { retryDelayMs: outcome.retryDelayMs };
+    },
+    async retryThumbnail(assetId) {
+      const job = thumbnails.get(assetId);
+      const updated = replaceThumbnail(assetId, "pending");
+      if (!job || !updated?.thumbnail || job.state !== "failed") throw new MediaFinalizeUnavailableError();
+      thumbnails.set(assetId, { ...job, state: "pending", cycle: job.cycle + 1, cycleAttemptCount: 0, leaseToken: null, leaseUntil: null, activeAttemptId: null });
+      return updated.thumbnail;
     },
   };
 }

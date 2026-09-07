@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { after } from "next/server";
 import { handlePrivateRequest, PrivateRequestInputError } from "@/shared/auth/private-request";
 import type { AccessTokenVerifier } from "@/shared/auth/verify-access-token";
 import { MEDIA_MAX_BYTES, type MediaService } from "@/modules/media";
@@ -8,6 +9,7 @@ type Dependencies = Readonly<{
   verifyAccessToken: AccessTokenVerifier;
   onAccessDenied: (context: Readonly<{ requestId: string }>) => void | Promise<void>;
   onUnhandledFailure: (context: Readonly<{ errorCode: string; requestId: string }>) => void | Promise<void>;
+  wakeThumbnail?: (assetId: string) => Promise<void>;
 }>;
 
 const beginSchema = z.object({
@@ -74,7 +76,14 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
       return withCors(request, await boundary(request, async (owner) => {
         const parsed = finalizeSchema.safeParse(await json(request));
         if (!parsed.success) throw new PrivateRequestInputError("媒體完成確認參數無效。");
-        return dependencies.service.finalizeMediaUpload(owner, parsed.data);
+        const result = await dependencies.service.finalizeMediaUpload(owner, parsed.data);
+        if ("asset" in result && result.thumbnail && dependencies.wakeThumbnail) {
+          after(async () => {
+            try { await dependencies.wakeThumbnail?.(result.asset.id); }
+            catch (error) { console.error("media_thumbnail_wake_failed", error instanceof Error ? error.name : "unknown"); }
+          });
+        }
+        return result;
       }));
     },
     async original(request: Request, assetId: string) {

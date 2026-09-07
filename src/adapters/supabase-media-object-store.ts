@@ -9,6 +9,7 @@ type FilesApi = Readonly<{
   createSignedUrl(path: string, expiresIn: number, options: Readonly<{ download: string }>): StorageResult<Readonly<{ signedUrl: string }>>;
   info(path: string): StorageResult<Readonly<{ name: string; size?: number; contentType?: string }>>;
   download(path: string): Readonly<{ asStream(): Promise<Readonly<{ data: ReadableStream<Uint8Array> | null; error: unknown }>> }>;
+  upload(path: string, body: Uint8Array, options: Readonly<{ contentType: "image/webp"; upsert: false; cacheControl: "0" }>): StorageResult<Readonly<{ path: string }>>;
 }>;
 
 function directTusEndpoint(supabaseUrl: string): string {
@@ -23,9 +24,14 @@ function directTusEndpoint(supabaseUrl: string): string {
 }
 
 const ORIGINAL_PATH = /^originals\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DERIVATIVE_PATH = /^thumbnails\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/thumb_webp_v1\/[1-9][0-9]*-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.webp$/i;
 
 function assertOriginalPath(path: string): void {
   if (!ORIGINAL_PATH.test(path)) throw new MediaStorageUnavailableError();
+}
+
+function assertDerivativePath(path: string): void {
+  if (!DERIVATIVE_PATH.test(path)) throw new MediaStorageUnavailableError();
 }
 
 function isNotFound(error: unknown): boolean {
@@ -118,6 +124,15 @@ export class SupabaseMediaObjectStore implements MediaObjectStore {
       const { data, error } = await this.files.download(path).asStream();
       if (error || !data) throw new MediaStorageUnavailableError();
       yield* streamChunks(data);
+    } catch (error) { throw error instanceof MediaStorageUnavailableError ? error : new MediaStorageUnavailableError(); }
+  }
+
+  async uploadDerivative(path: string, bytes: Uint8Array): Promise<void> {
+    assertDerivativePath(path);
+    if (bytes.byteLength === 0) throw new MediaStorageUnavailableError();
+    try {
+      const { data, error } = await this.files.upload(path, bytes, { contentType: "image/webp", upsert: false, cacheControl: "0" });
+      if (error || !data || data.path !== path) throw new MediaStorageUnavailableError();
     } catch (error) { throw error instanceof MediaStorageUnavailableError ? error : new MediaStorageUnavailableError(); }
   }
 }

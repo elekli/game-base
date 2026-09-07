@@ -4,6 +4,7 @@ import { MediaStorageUnavailableError } from "@/modules/media";
 
 describe("Supabase media Storage adapter", () => {
   const path = "originals/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222";
+  const thumbnailPath = "thumbnails/11111111-1111-4111-8111-111111111111/thumb_webp_v1/1-22222222-2222-4222-8222-222222222222.webp";
   it("只用 server credential 簽發不可覆寫的 path token 與 direct TUS endpoint", async () => {
     const createSignedUploadUrl = vi.fn(async () => ({ data: { path, token: "signed-path-token", signedUrl: "https://ignored" }, error: null }));
     const adapter = new SupabaseMediaObjectStore({
@@ -81,5 +82,13 @@ describe("Supabase media Storage adapter", () => {
     const adapter = new SupabaseMediaObjectStore({ supabaseUrl: "https://project.supabase.co", bucket: "game-media", files: { createSignedUploadUrl } as never });
     await expect(adapter.createUploadGrant("originals/../../secrets")).rejects.toBeInstanceOf(MediaStorageUnavailableError);
     await expect(adapter.createUploadGrant(path)).rejects.toBeInstanceOf(MediaStorageUnavailableError);
+  });
+
+  it("縮圖只接受 ledger attempt path，並以不可覆寫方式上傳", async () => {
+    const upload = vi.fn(async () => ({ data: { path: thumbnailPath }, error: null }));
+    const adapter = new SupabaseMediaObjectStore({ supabaseUrl: "https://project.supabase.co", bucket: "game-media", files: { upload } as never });
+    await adapter.uploadDerivative(thumbnailPath, new Uint8Array([1, 2, 3]));
+    expect(upload).toHaveBeenCalledWith(thumbnailPath, expect.any(Uint8Array), { contentType: "image/webp", upsert: false, cacheControl: "0" });
+    await expect(adapter.uploadDerivative("thumbnails/../../other.webp", new Uint8Array([1]))).rejects.toBeInstanceOf(MediaStorageUnavailableError);
   });
 });

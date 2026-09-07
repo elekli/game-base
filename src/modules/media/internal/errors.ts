@@ -50,3 +50,11 @@ export class MediaStorageUnavailableError extends MediaOperationError {
 export class MediaReadUnavailableError extends MediaOperationError {
   constructor() { super("media_read_unavailable", "媒體原檔暫時無法授權讀取，請重試。"); this.name = "MediaReadUnavailableError"; }
 }
+
+export class MediaThumbnailUnsupportedError extends MediaOperationError {
+  constructor() { super("media_thumbnail_unsupported", "媒體原檔已儲存，但無法建立縮圖。"); this.name = "MediaThumbnailUnsupportedError"; }
+}
+
+export class MediaThumbnailUnavailableError extends MediaOperationError {
+  constructor() { super("media_thumbnail_unavailable", "媒體縮圖暫時無法建立，系統將重試。"); this.name = "MediaThumbnailUnavailableError"; }
+}

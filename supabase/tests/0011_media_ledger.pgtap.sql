@@ -1,5 +1,5 @@
 begin;
-select plan(54);
+select plan(74);
 
 select has_column('app_private', 'media_ingests', 'idempotency_key', 'ingest 保存全域冪等鍵');
 select has_column('app_private', 'media_ingests', 'reserved_asset_id', 'ingest 預留固定 asset id');
@@ -113,31 +113,117 @@ insert into app_private.media_assets (
 insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind, object_key)
 values ('40000000-0000-4000-8000-000000000001', 'thumb_webp_v1', 'verified', 'pending', 'thumbnail_webp', 'pending:40000000-0000-4000-8000-000000000001');
 select ok(exists(select 1 from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001' and state = 'pending' and current_object_path is null), '圖片可建立尚無指標的 pending derivative');
+select extensions.throws_like(
+  $$insert into app_private.media_derivative_attempts (id, derivative_id, attempt_number, retry_cycle, object_path, state)
+    select '45000000-0000-4000-8000-000000000003', id, 1, null, 'thumbnails/40000000-0000-4000-8000-000000000001/thumb_webp_v1/null-cycle.webp', 'reserved'
+    from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%media derivative attempt retry cycle must match derivative%',
+  'verified derivative 的 attempt 不可省略 retry cycle'
+);
+select extensions.throws_like(
+  $$insert into app_private.media_derivative_attempts (id, derivative_id, attempt_number, retry_cycle, object_path, state)
+    select '45000000-0000-4000-8000-000000000004', id, 1, 2, 'thumbnails/40000000-0000-4000-8000-000000000001/thumb_webp_v1/wrong-cycle.webp', 'reserved'
+    from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%media derivative attempt retry cycle must match derivative%',
+  'verified derivative 的 attempt retry cycle 必須等於目前週期'
+);
+select extensions.throws_like(
+  $$insert into app_private.media_derivative_attempts (id, derivative_id, attempt_number, retry_cycle, object_path, state)
+    select '45000000-0000-4000-8000-000000000005', id, 2, 1, 'thumbnails/40000000-0000-4000-8000-000000000001/thumb_webp_v1/direct-adopted.webp', 'adopted'
+    from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%media derivative attempt must be reserved next attempt%',
+  'verified derivative 不可直接新增 adopted attempt'
+);
+select extensions.throws_like(
+  $$insert into app_private.media_derivative_attempts (id, derivative_id, attempt_number, retry_cycle, object_path, state)
+    select '45000000-0000-4000-8000-000000000006', id, 3, 1, 'thumbnails/40000000-0000-4000-8000-000000000001/thumb_webp_v1/wrong-number.webp', 'reserved'
+    from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%media derivative attempt must be reserved next attempt%',
+  'verified derivative 的 attempt number 必須連續'
+);
+insert into app_private.media_derivative_attempts (id, derivative_id, attempt_number, retry_cycle, object_path, state)
+select '45000000-0000-4000-8000-000000000001', id, 1, 1, 'thumbnails/40000000-0000-4000-8000-000000000001/thumb_webp_v1/1-45000000-0000-4000-8000-000000000001.webp', 'reserved'
+from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001';
+select extensions.throws_like(
+  $$update app_private.media_derivative_attempts set state = 'uploaded', uploaded_at = now() where id = '45000000-0000-4000-8000-000000000001'$$,
+  '%media derivative attempt transition requires active lease%',
+  '無 active lease 的 reserved attempt 不可標記 uploaded'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivative_attempts set object_path = 'thumbnails/tampered.webp' where id = '45000000-0000-4000-8000-000000000001'$$,
+  '%media derivative attempt identity is immutable%',
+  'app_runtime 不可竄改 attempt object path'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivative_attempts set attempt_number = 2 where id = '45000000-0000-4000-8000-000000000001'$$,
+  '%media derivative attempt identity is immutable%',
+  'app_runtime 不可竄改 attempt number'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivative_attempts set retry_cycle = 2 where id = '45000000-0000-4000-8000-000000000001'$$,
+  '%media derivative attempt identity is immutable%',
+  'app_runtime 不可竄改 attempt retry cycle'
+);
 select extensions.lives_ok(
-  $$update app_private.media_derivatives set state = 'processing', lease_token = '44000000-0000-4000-8000-000000000001', lease_until = now() + interval '5 minutes' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  $$update app_private.media_derivatives set state = 'processing', attempt_count = 1, cycle_attempt_count = 1, active_attempt_id = '45000000-0000-4000-8000-000000000001', lease_token = '44000000-0000-4000-8000-000000000001', lease_until = now() + interval '5 minutes' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
   'processing derivative 必須以成對租約進入處理中'
 );
 select extensions.throws_like(
+  $$update app_private.media_derivatives set attempt_count = 0 where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%verified thumbnail derivative claim transition is invalid%',
+  'processing derivative 不可倒退總 attempt count'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivatives set cycle_attempt_count = 0 where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%verified thumbnail derivative claim transition is invalid%',
+  'processing derivative 不可歸零自動 retry count'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivatives set retry_cycle = 2 where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%verified thumbnail derivative claim transition is invalid%',
+  'processing derivative 不可跳過 manual retry cycle'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivatives set state = 'pending', attempt_count = 0 where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%verified thumbnail derivative completion transition is invalid%',
+  'processing derivative 不可在 fail 時改寫 counters'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivative_attempts set state = 'uploaded' where id = '45000000-0000-4000-8000-000000000001'$$,
+  '%media derivative attempt timestamps violate state%',
+  'reserved attempt 不可只改 state 偽造 uploaded timestamp'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivatives set lease_until = clock_timestamp() - interval '1 second' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%verified thumbnail derivative claim transition is invalid%',
+  'processing derivative 不可藉 same-state 直接改寫 lease deadline'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivative_attempts set state = 'cleanup_pending' where id = '45000000-0000-4000-8000-000000000001'$$,
+  '%active media derivative attempt cannot be cleaned%',
+  'app_runtime 不可將 active attempt 轉 cleanup'
+);
+select extensions.throws_like(
   $$update app_private.media_derivatives set lease_token = null where asset_id = '40000000-0000-4000-8000-000000000001'$$,
-  '%verified media derivative violates ledger contract%',
+  '%verified thumbnail derivative claim transition is invalid%',
   'processing derivative 不可缺少任一租約欄位'
 );
 select extensions.throws_like(
   $$update app_private.media_derivatives set state = 'failed' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
-  '%verified media derivative violates ledger contract%',
+  '%verified media derivative violates%',
   '非 processing derivative 不可保留租約'
 );
 update app_private.media_derivatives
-set state = 'pending', lease_token = null, lease_until = null
+set state = 'pending', lease_token = null, lease_until = null, active_attempt_id = null
 where asset_id = '40000000-0000-4000-8000-000000000001';
 select extensions.throws_like(
   $$update app_private.media_derivatives set lease_token = '44000000-0000-4000-8000-000000000002' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
-  '%verified media derivative violates ledger contract%',
+  '%verified thumbnail derivative same-state transition is invalid%',
   '非 processing derivative 不可只殘留 lease token'
 );
 select extensions.throws_like(
   $$update app_private.media_derivatives set lease_until = now() + interval '5 minutes' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
-  '%verified media derivative violates ledger contract%',
+  '%verified thumbnail derivative same-state transition is invalid%',
   '非 processing derivative 不可只殘留 lease deadline'
 );
 select extensions.throws_like(
@@ -211,8 +297,56 @@ set constraints all immediate;
 
 select extensions.throws_like(
   $$update app_private.media_derivatives set state = 'ready' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
-  '%verified media derivative violates ledger contract%',
+  '%verified thumbnail derivative state transition is invalid%',
   'ready derivative 必須具有完整現行物件資訊'
+);
+
+insert into app_private.media_derivative_attempts (id, derivative_id, attempt_number, retry_cycle, object_path, state)
+select '45000000-0000-4000-8000-000000000002', id, 2, 1, 'thumbnails/40000000-0000-4000-8000-000000000001/thumb_webp_v1/2-45000000-0000-4000-8000-000000000002.webp', 'reserved'
+from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001';
+update app_private.media_derivatives
+set state = 'processing', attempt_count = 2, cycle_attempt_count = 2, active_attempt_id = '45000000-0000-4000-8000-000000000002',
+  lease_token = '44000000-0000-4000-8000-000000000001', lease_until = now() + interval '5 minutes'
+where asset_id = '40000000-0000-4000-8000-000000000001';
+update app_private.media_derivative_attempts set state = 'uploaded', uploaded_at = now()
+where id = '45000000-0000-4000-8000-000000000002';
+select extensions.throws_like(
+  $$update app_private.media_derivative_attempts set cleaned_at = now() where id = '45000000-0000-4000-8000-000000000002'$$,
+  '%media derivative attempt timestamps violate state%',
+  'uploaded attempt 不可偽造 cleaned timestamp'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivatives set lease_until = clock_timestamp() - interval '1 second' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%verified thumbnail derivative claim transition is invalid%',
+  'uploaded attempt 不可藉 same-state 直接改寫 lease deadline'
+);
+set constraints app_private.media_derivative_attempts_valid_references deferred;
+update app_private.media_derivative_attempts set state = 'adopted'
+where id = '45000000-0000-4000-8000-000000000002';
+update app_private.media_derivatives
+set state = 'ready', active_attempt_id = null, adopted_attempt_id = '45000000-0000-4000-8000-000000000002',
+  lease_token = null, lease_until = null,
+  current_object_path = 'thumbnails/40000000-0000-4000-8000-000000000001/thumb_webp_v1/2-45000000-0000-4000-8000-000000000002.webp',
+  object_key = 'thumbnails/40000000-0000-4000-8000-000000000001/thumb_webp_v1/2-45000000-0000-4000-8000-000000000002.webp',
+  width = 2, height = 3, byte_size = 24, completed_at = now()
+where asset_id = '40000000-0000-4000-8000-000000000001';
+set constraints app_private.media_derivative_attempts_valid_references immediate;
+insert into app_private.media_derivative_attempts (id, derivative_id, attempt_number, retry_cycle, object_path, state)
+select '45000000-0000-4000-8000-000000000007', id, 3, 1, 'thumbnails/40000000-0000-4000-8000-000000000001/thumb_webp_v1/3-45000000-0000-4000-8000-000000000007.webp', 'reserved'
+from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001';
+select extensions.throws_like(
+  $$delete from app_private.media_derivative_attempts where id = '45000000-0000-4000-8000-000000000007'$$,
+  '%media derivative attempt ledger cannot be deleted%',
+  'app_runtime 不可刪除未引用的 orphan attempt ledger'
+);
+select extensions.lives_ok(
+  $$update app_private.media_derivative_attempts set state = 'cleanup_pending' where id = '45000000-0000-4000-8000-000000000007'; update app_private.media_derivative_attempts set state = 'cleaned', cleaned_at = now() where id = '45000000-0000-4000-8000-000000000007'$$,
+  '非 active／adopted orphan attempt 可由 #66 cleanup 轉 cleaned'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivative_attempts set state = 'cleaned' where id = '45000000-0000-4000-8000-000000000002'$$,
+  '%media derivative attempt state transition is invalid%',
+  'app_runtime 不可將 adopted attempt 轉 cleaned'
 );
 
 update app_private.games set manual_cover_asset_id = '40000000-0000-4000-8000-000000000001'

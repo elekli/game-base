@@ -23,6 +23,7 @@ function setup() {
       }, expiresAt: "2026-09-06T02:00:00.000Z",
     })),
     finalizeMediaUpload: vi.fn<MediaService["finalizeMediaUpload"]>(async () => ({ status: "finalizing" })),
+    retryThumbnail: vi.fn<MediaService["retryThumbnail"]>(async () => ({ assetId, spec: "thumb_webp_v1", state: "pending" })),
     issueOriginalRead: vi.fn<MediaService["issueOriginalRead"]>(async () => ({ status: "original_read", url: "https://storage.example/signed?token=opaque&download=photo.png", expiresAt: "2026-09-06T00:01:00.000Z", disposition: "attachment" })),
   };
   const verifyAccessToken = vi.fn(async () => owner);

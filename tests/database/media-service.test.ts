@@ -1,11 +1,13 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
+import sharp from "sharp";
 import { createDatabase } from "@/adapters/database";
 import { PostgresMediaStore } from "@/adapters/postgres-media-store";
 import {
   MediaAssetUnavailableError,
   MediaStoredObjectInvalidError,
   MediaFinalizeUnavailableError,
+  MediaStorageUnavailableError,
   MediaGameUnavailableError,
   MediaUploadIdempotencyConflictError,
   type BeginMediaUploadResult,
@@ -14,6 +16,7 @@ import {
 } from "@/modules/media";
 import { createMediaService } from "@/modules/media/internal/create-media-service";
 import type { MediaObjectStore } from "@/modules/media/internal/types";
+import type { MediaStore } from "@/modules/media/internal/types";
 
 function grantFrom(result: BeginMediaUploadResult) {
   if (result.status !== "upload_grant") throw new Error("expected upload grant");
@@ -26,8 +29,8 @@ function finalizedFrom(result: FinalizeMediaUploadResult): MediaUploadResult {
 }
 
 const directDatabaseUrl = process.env.DIRECT_DATABASE_URL ?? "postgres://postgres:postgres@127.0.0.1:54322/postgres";
-const gameId = "51000000-0000-4000-8000-000000000001";
-const key = "52000000-0000-4000-8000-000000000001";
+let gameId: string;
+let key: string;
 const owner = { sub: "owner-subject" };
 const options = { max: 1, prepare: false } as const;
 
@@ -112,27 +115,13 @@ function objects(bytes = png(), mimeType = "image/png"): MediaObjectStore {
     async createOriginalReadGrant(path, fileName) { return { url: `https://storage.example.test/${encodeURIComponent(path)}?download=${encodeURIComponent(fileName)}`, expiresAt: "2026-09-06T00:01:00.000Z" }; },
     async inspect(path) { return { path, byteSize: bytes.byteLength, mimeType }; },
     async *read() { yield bytes; },
+    async uploadDerivative() {},
   };
 }
 
 let control: ReturnType<typeof postgres>;
 let runtime: ReturnType<typeof postgres>;
 let database: ReturnType<typeof createDatabase>;
-
-async function clean(): Promise<void> {
-  await control.unsafe("set session_replication_role = replica");
-  try {
-    await control.unsafe("update app_private.games set manual_cover_asset_id = null where id = $1", [gameId]);
-    await control.unsafe("delete from app_private.media_derivative_attempts where derivative_id in (select id from app_private.media_derivatives where asset_id in (select id from app_private.media_assets where game_id = $1))", [gameId]);
-    await control.unsafe("delete from app_private.media_derivatives where asset_id in (select id from app_private.media_assets where game_id = $1)", [gameId]);
-    await control.unsafe("delete from app_private.media_assets where game_id = $1", [gameId]);
-    await control.unsafe("delete from app_private.media_ingest_operations where game_id = $1", [gameId]);
-    await control.unsafe("delete from app_private.media_ingests where game_id = $1", [gameId]);
-    await control.unsafe("delete from app_private.games where id = $1", [gameId]);
-  } finally {
-    await control.unsafe("set session_replication_role = origin");
-  }
-}
 
 beforeAll(async () => {
   control = postgres(directDatabaseUrl, options);
@@ -142,15 +131,18 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await clean();
+  gameId = crypto.randomUUID();
+  key = crypto.randomUUID();
   await runtime.unsafe("insert into app_private.games (id, medium, display_name) values ($1, 'board_game', '媒體整合測試')", [gameId]);
 });
 
+afterEach(async () => {
+  await runtime.unsafe("update app_private.games set trashed_at = now() where id = $1", [gameId]);
+});
+
 afterAll(async () => {
-  await clean();
   await database.close();
   await runtime.end();
-  await control.unsafe("revoke app_runtime from postgres");
   await control.end();
 });
 
@@ -350,6 +342,7 @@ describe("MediaService 與真 PostgreSQL", () => {
         return { path, byteSize: bytes.byteLength, mimeType: "image/png" };
       },
       async *read() { readCount += 1; yield bytes; },
+      async uploadDerivative() {},
     };
     const service = serviceFor(storage);
     const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
@@ -452,5 +445,361 @@ describe("MediaService 與真 PostgreSQL", () => {
       from app_private.media_ingests where idempotency_key = $1
     `, [key]);
     expect(rows[0]).toEqual({ state: "cleanup_pending", asset_count: 0 });
+  });
+
+  it("雙連線 row-lock 下未到期 lease 不可搶，逾時後新 attempt 接手且舊 token 晚到無法寫入", async () => {
+    const service = serviceFor();
+    const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    const store = new PostgresMediaStore(database.db);
+    const first = await store.claimThumbnail(grant.assetId, { token: "53000000-0000-4000-8000-000000000101", durationMs: 250 });
+    expect(first.status).toBe("claimed");
+    if (first.status !== "claimed") throw new Error("expected thumbnail claim");
+    const lease = await runtime.unsafe<{ db_clock_lease: boolean }[]>(`
+      select lease_until > clock_timestamp() + interval '150 milliseconds'
+        and lease_until <= clock_timestamp() + interval '250 milliseconds' as db_clock_lease
+      from app_private.media_derivatives where asset_id = $1
+    `, [grant.assetId]);
+    expect(lease[0]?.db_clock_lease).toBe(true);
+
+    const raceName = "thumbnail_claim_row_lock";
+    const raceDatabase = createDatabase(namedRoleUrl("app_runtime", raceName));
+    const locked = deferred();
+    const release = deferred();
+    const holder = runtime.begin(async (tx) => {
+      await tx.unsafe("update app_private.media_derivatives set last_error_code = null where asset_id = $1", [grant.assetId]);
+      locked.resolve();
+      await release.promise;
+    });
+    try {
+      await locked.promise;
+      const raced = new PostgresMediaStore(raceDatabase.db).claimThumbnail(grant.assetId, { token: "53000000-0000-4000-8000-000000000102" });
+      await waitForDatabaseLock(raceName);
+      release.resolve();
+      await holder;
+      await expect(raced).resolves.toEqual({ status: "busy" });
+    } finally {
+      release.resolve();
+      await holder.catch(() => undefined);
+      await raceDatabase.close();
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const takeover = await store.claimThumbnail(grant.assetId, { token: "53000000-0000-4000-8000-000000000103" });
+    expect(takeover).toMatchObject({ status: "claimed", attempt: { number: 2 } });
+    await expect(store.markThumbnailUploaded({ derivativeId: first.derivativeId, attemptId: first.attempt.id, attemptNumber: first.attempt.number, leaseToken: "53000000-0000-4000-8000-000000000101" }))
+      .rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
+    await expect(store.findReadableOriginal(grant.assetId)).resolves.toMatchObject({ fileName: "photo.png" });
+  });
+
+  it("等待 row lock 跨過 lease 後，舊 worker 不可寫入且新 claim 取得完整新租約", async () => {
+    const service = serviceFor();
+    const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    const store = new PostgresMediaStore(database.db);
+    const first = await store.claimThumbnail(grant.assetId, {
+      token: "53000000-0000-4000-8000-000000000301",
+      durationMs: 500,
+    });
+    if (first.status !== "claimed") throw new Error("expected short lease claim");
+
+    const markName = "thumbnail_mark_clock_after_lock";
+    const markDatabase = createDatabase(namedRoleUrl("app_runtime", markName));
+    const locked = deferred();
+    const release = deferred();
+    const holder = runtime.begin(async (tx) => {
+      await tx.unsafe("update app_private.media_derivatives set last_error_code = null where asset_id = $1", [grant.assetId]);
+      locked.resolve();
+      await release.promise;
+    });
+    try {
+      await locked.promise;
+      const staleMark = new PostgresMediaStore(markDatabase.db).markThumbnailUploaded({
+        derivativeId: first.derivativeId,
+        attemptId: first.attempt.id,
+        attemptNumber: first.attempt.number,
+        leaseToken: "53000000-0000-4000-8000-000000000301",
+      });
+      await waitForDatabaseLock(markName);
+      const beforeExpiry = await runtime.unsafe<{ remaining_ms: number }[]>(`
+        select extract(epoch from lease_until - clock_timestamp()) * 1000 as remaining_ms
+        from app_private.media_derivatives where asset_id = $1
+      `, [grant.assetId]);
+      expect(Number(beforeExpiry[0]?.remaining_ms)).toBeGreaterThan(250);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      release.resolve();
+      await holder;
+      await expect(staleMark).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
+    } finally {
+      release.resolve();
+      await holder.catch(() => undefined);
+      await markDatabase.close();
+    }
+
+    const claimName = "thumbnail_claim_clock_after_lock";
+    const claimDatabase = createDatabase(namedRoleUrl("app_runtime", claimName));
+    const claimLocked = deferred();
+    const releaseClaim = deferred();
+    const claimHolder = runtime.begin(async (tx) => {
+      await tx.unsafe("update app_private.media_derivatives set last_error_code = null where asset_id = $1", [grant.assetId]);
+      claimLocked.resolve();
+      await releaseClaim.promise;
+    });
+    try {
+      await claimLocked.promise;
+      const waitedClaim = new PostgresMediaStore(claimDatabase.db).claimThumbnail(grant.assetId, {
+        token: "53000000-0000-4000-8000-000000000302",
+        durationMs: 500,
+      });
+      await waitForDatabaseLock(claimName);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      releaseClaim.resolve();
+      await claimHolder;
+      await expect(waitedClaim).resolves.toMatchObject({ status: "claimed", attempt: { number: 2 } });
+      const remaining = await runtime.unsafe<{ remaining_ms: number }[]>(`
+        select extract(epoch from lease_until - clock_timestamp()) * 1000 as remaining_ms
+        from app_private.media_derivatives where asset_id = $1
+      `, [grant.assetId]);
+      expect(Number(remaining[0]?.remaining_ms)).toBeGreaterThan(250);
+    } finally {
+      releaseClaim.resolve();
+      await claimHolder.catch(() => undefined);
+      await claimDatabase.close();
+    }
+  });
+
+  it("帳本 trigger 在取得 derivative lock 後重讀時鐘，adopt 後逾時不可轉 ready", async () => {
+    const service = serviceFor();
+    const firstGrant = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    const store = new PostgresMediaStore(database.db);
+    const first = await store.claimThumbnail(firstGrant.assetId, {
+      token: "53000000-0000-4000-8000-000000000401",
+      durationMs: 500,
+    });
+    if (first.status !== "claimed") throw new Error("expected direct trigger claim");
+
+    const transitionName = "thumbnail_attempt_trigger_clock_after_lock";
+    const transition = postgres(namedRoleUrl("app_runtime", transitionName), options);
+    const locked = deferred();
+    const release = deferred();
+    const holder = runtime.begin(async (tx) => {
+      await tx.unsafe("update app_private.media_derivatives set last_error_code = null where id = $1", [first.derivativeId]);
+      locked.resolve();
+      await release.promise;
+    });
+    try {
+      await locked.promise;
+      const upload = transition.unsafe(
+        "update app_private.media_derivative_attempts set state = 'uploaded', uploaded_at = clock_timestamp() where id = $1",
+        [first.attempt.id],
+      ).then(
+        () => ({ status: "fulfilled" as const }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      );
+      await waitForDatabaseLock(transitionName);
+      const beforeExpiry = await runtime.unsafe<{ remaining_ms: number }[]>(`
+        select extract(epoch from lease_until - clock_timestamp()) * 1000 as remaining_ms
+        from app_private.media_derivatives where id = $1
+      `, [first.derivativeId]);
+      expect(Number(beforeExpiry[0]?.remaining_ms)).toBeGreaterThan(250);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      release.resolve();
+      await holder;
+      const outcome = await upload;
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") expect(String(outcome.reason)).toContain("media derivative attempt transition requires active lease");
+    } finally {
+      release.resolve();
+      await holder.catch(() => undefined);
+      await transition.end();
+    }
+
+    const secondKey = crypto.randomUUID();
+    const secondGrant = grantFrom(await service.beginMediaUpload(owner, beginCommand({ idempotencyKey: secondKey })));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: secondKey });
+    const second = await store.claimThumbnail(secondGrant.assetId, {
+      token: "53000000-0000-4000-8000-000000000402",
+      durationMs: 500,
+    });
+    if (second.status !== "claimed") throw new Error("expected ready transition claim");
+
+    await store.markThumbnailUploaded({
+      derivativeId: second.derivativeId,
+      attemptId: second.attempt.id,
+      attemptNumber: second.attempt.number,
+      leaseToken: "53000000-0000-4000-8000-000000000402",
+    });
+    const completion = postgres(roleUrl("app_runtime"), options);
+    try {
+      await expect(completion.begin(async (tx) => {
+        const adopted = await tx.unsafe<{ state: string }[]>(
+          "update app_private.media_derivative_attempts set state = 'adopted' where id = $1 returning state",
+          [second.attempt.id],
+        );
+        expect(adopted).toEqual([{ state: "adopted" }]);
+        await tx.unsafe("select pg_sleep(0.6)");
+        await tx.unsafe(`
+          update app_private.media_derivatives
+          set state = 'ready', active_attempt_id = null, adopted_attempt_id = $2,
+              lease_token = null, lease_until = null,
+              current_object_path = (select object_path from app_private.media_derivative_attempts where id = $2),
+              object_key = (select object_path from app_private.media_derivative_attempts where id = $2),
+              width = 1, height = 1, byte_size = 1, completed_at = clock_timestamp(),
+              next_attempt_at = null, last_error_code = null
+          where id = $1
+        `, [second.derivativeId, second.attempt.id]);
+      })).rejects.toThrow("verified thumbnail derivative completion transition is invalid");
+    } finally {
+      await completion.end();
+    }
+  });
+
+  it("第三次暫時失敗封頂；手動 retry 開新週期但總 attempt 不歸零", async () => {
+    const service = serviceFor();
+    const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    const store = new PostgresMediaStore(database.db);
+    for (let number = 1; number <= 3; number += 1) {
+      const claim = await store.claimThumbnail(grant.assetId, { token: `53000000-0000-4000-8000-00000000020${number}` });
+      if (claim.status !== "claimed") throw new Error("expected automatic claim");
+      await store.failThumbnail({ derivativeId: claim.derivativeId, attemptId: claim.attempt.id, attemptNumber: claim.attempt.number, leaseToken: `53000000-0000-4000-8000-00000000020${number}`, deterministic: false });
+      if (number < 3) await runtime.unsafe("update app_private.media_derivatives set next_attempt_at = now() - interval '1 second' where asset_id = $1", [grant.assetId]);
+    }
+    const exhausted = await runtime.unsafe<{ state: string; attempt_count: number; cycle_attempt_count: number }[]>("select state, attempt_count, cycle_attempt_count from app_private.media_derivatives where asset_id = $1", [grant.assetId]);
+    expect(exhausted[0]).toEqual({ state: "failed", attempt_count: 3, cycle_attempt_count: 3 });
+    await expect(store.retryThumbnail(grant.assetId)).resolves.toMatchObject({ state: "pending" });
+    const manual = await store.claimThumbnail(grant.assetId, { token: "53000000-0000-4000-8000-000000000204" });
+    expect(manual).toMatchObject({ status: "claimed", attempt: { number: 4, cycleAttemptCount: 1 } });
+  });
+
+  it("第三次 worker crash 的過期 processing lease 收斂為 exhausted failed，手動 retry 可開新週期", async () => {
+    const service = serviceFor();
+    const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    const store = new PostgresMediaStore(database.db);
+
+    for (let number = 1; number <= 2; number += 1) {
+      const claim = await store.claimThumbnail(grant.assetId, { token: `53000000-0000-4000-8000-00000000031${number}` });
+      if (claim.status !== "claimed") throw new Error("expected pre-exhaustion claim");
+      await store.failThumbnail({
+        derivativeId: claim.derivativeId,
+        attemptId: claim.attempt.id,
+        attemptNumber: claim.attempt.number,
+        leaseToken: `53000000-0000-4000-8000-00000000031${number}`,
+        deterministic: false,
+      });
+      await runtime.unsafe("update app_private.media_derivatives set next_attempt_at = clock_timestamp() - interval '1 second' where asset_id = $1", [grant.assetId]);
+    }
+    const third = await store.claimThumbnail(grant.assetId, {
+      token: "53000000-0000-4000-8000-000000000313",
+      durationMs: 500,
+    });
+    if (third.status !== "claimed") throw new Error("expected third claim");
+    const beforeExpiry = await runtime.unsafe<{ remaining_ms: number }[]>(`
+      select extract(epoch from lease_until - clock_timestamp()) * 1000 as remaining_ms
+      from app_private.media_derivatives where asset_id = $1
+    `, [grant.assetId]);
+    expect(Number(beforeExpiry[0]?.remaining_ms)).toBeGreaterThan(250);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+
+    await expect(store.claimThumbnail(grant.assetId, { token: "53000000-0000-4000-8000-000000000314" }))
+      .resolves.toEqual({ status: "not_ready" });
+    const exhausted = await runtime.unsafe<{ state: string; attempt_count: number; cycle_attempt_count: number; last_error_code: string | null; attempt_rows: number }[]>(`
+      select derivative.state, derivative.attempt_count, derivative.cycle_attempt_count, derivative.last_error_code,
+        (select count(*)::int from app_private.media_derivative_attempts attempt where attempt.derivative_id = derivative.id) as attempt_rows
+      from app_private.media_derivatives derivative where derivative.asset_id = $1
+    `, [grant.assetId]);
+    expect(exhausted[0]).toEqual({
+      state: "failed", attempt_count: 3, cycle_attempt_count: 3,
+      last_error_code: "media_thumbnail_retry_exhausted", attempt_rows: 3,
+    });
+    await expect(store.claimThumbnail(grant.assetId, { token: "53000000-0000-4000-8000-000000000315" }))
+      .resolves.toEqual({ status: "not_ready" });
+    const afterRepeatClaim = await runtime.unsafe<{ attempt_rows: number }[]>(`
+      select count(*)::int as attempt_rows from app_private.media_derivative_attempts where derivative_id = $1
+    `, [third.derivativeId]);
+    expect(afterRepeatClaim[0]?.attempt_rows).toBe(3);
+
+    await expect(store.retryThumbnail(grant.assetId)).resolves.toMatchObject({ state: "pending" });
+    await expect(store.claimThumbnail(grant.assetId, { token: "53000000-0000-4000-8000-000000000316" }))
+      .resolves.toMatchObject({ status: "claimed", attempt: { number: 4, cycleAttemptCount: 1 } });
+  });
+
+  it("upload 成功後 pointer transaction 失敗不回滾 original，uploaded attempt 保留精確帳", async () => {
+    const source = new Uint8Array(await sharp({ create: { width: 20, height: 30, channels: 4, background: { r: 1, g: 2, b: 3, alpha: 1 } } }).png().toBuffer());
+    const uploads: string[] = [];
+    const objectStore: MediaObjectStore = {
+      async createUploadGrant(path) { void path; return { uploadUrl: "https://storage.example.test/upload", token: "opaque", expiresAt: "2026-09-06T02:00:00.000Z" }; },
+      async createOriginalReadGrant() { return { url: "https://storage.example.test/signed?token=opaque", expiresAt: "2026-09-06T00:01:00.000Z" }; },
+      async inspect(path) { return { path, byteSize: source.byteLength, mimeType: "image/png" }; },
+      async *read() { yield source; },
+      async uploadDerivative(path) { uploads.push(path); },
+    };
+    const actual = new PostgresMediaStore(database.db);
+    const failing: MediaStore = {
+      begin: actual.begin.bind(actual), renewGrant: actual.renewGrant.bind(actual), claimFinalize: actual.claimFinalize.bind(actual),
+      releaseIncomplete: actual.releaseIncomplete.bind(actual), rejectInvalid: actual.rejectInvalid.bind(actual), completeFinalize: actual.completeFinalize.bind(actual),
+      findReadableOriginal: actual.findReadableOriginal.bind(actual), claimThumbnail: actual.claimThumbnail.bind(actual),
+      markThumbnailUploaded: actual.markThumbnailUploaded.bind(actual), failThumbnail: actual.failThumbnail.bind(actual), retryThumbnail: actual.retryThumbnail.bind(actual),
+      async adoptThumbnail() { throw new Error("injected pointer transaction failure"); },
+    };
+    const delays: number[] = [];
+    let thumbnailAssetId: string | null = null;
+    const service = createMediaService({
+      store: failing,
+      objects: objectStore,
+      sleep: async (milliseconds) => {
+        delays.push(milliseconds);
+        await runtime.unsafe("update app_private.media_derivatives set next_attempt_at = now() - interval '1 second' where asset_id = $1", [thumbnailAssetId]);
+      },
+    });
+    const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand({ declaredByteSize: source.byteLength })));
+    thumbnailAssetId = grant.assetId;
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    await expect(service.processThumbnail(grant.assetId)).resolves.toBeUndefined();
+    expect({ uploads: uploads.length, delays }).toEqual({ uploads: 3, delays: [1_000, 5_000] });
+    await expect(actual.findReadableOriginal(grant.assetId)).resolves.toMatchObject({ fileName: "photo.png" });
+    const rows = await runtime.unsafe<{ state: string; current_object_path: string | null; uploaded_attempts: number }[]>(`
+      select derivative.state, derivative.current_object_path,
+        (select count(*)::int from app_private.media_derivative_attempts attempt where attempt.derivative_id = derivative.id and attempt.state = 'uploaded') as uploaded_attempts
+      from app_private.media_derivatives derivative
+      where derivative.asset_id = $1
+    `, [grant.assetId]);
+    expect(rows[0]).toEqual({ state: "failed", current_object_path: null, uploaded_attempts: 3 });
+  });
+
+  it("同一 invocation 以有界 backoff 重試 transient source stream failure，第二 attempt 採用為 ready", async () => {
+    const source = new Uint8Array(await sharp({ create: { width: 1_280, height: 320, channels: 4, background: { r: 1, g: 2, b: 3, alpha: 1 } } }).png().toBuffer());
+    let uploads = 0;
+    let reads = 0;
+    const objectStore: MediaObjectStore = {
+      async createUploadGrant(path) { void path; return { uploadUrl: "https://storage.example.test/upload", token: "opaque", expiresAt: "2026-09-06T02:00:00.000Z" }; },
+      async createOriginalReadGrant() { return { url: "https://storage.example.test/signed?token=opaque", expiresAt: "2026-09-06T00:01:00.000Z" }; },
+      async inspect(path) { return { path, byteSize: source.byteLength, mimeType: "image/png" }; },
+      async *read() { reads += 1; if (reads === 2) throw new MediaStorageUnavailableError(); yield source; },
+      async uploadDerivative() { uploads += 1; },
+    };
+    const delays: number[] = [];
+    let thumbnailAssetId: string | null = null;
+    const service = createMediaService({
+      store: new PostgresMediaStore(database.db),
+      objects: objectStore,
+      sleep: async (milliseconds) => {
+        delays.push(milliseconds);
+        await runtime.unsafe("update app_private.media_derivatives set next_attempt_at = now() - interval '1 second' where asset_id = $1", [thumbnailAssetId]);
+      },
+    });
+    const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand({ declaredByteSize: source.byteLength })));
+    thumbnailAssetId = grant.assetId;
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    await expect(service.processThumbnail(grant.assetId)).resolves.toBeUndefined();
+    expect({ reads, uploads, delays }).toEqual({ reads: 3, uploads: 1, delays: [1_000] });
+    const rows = await runtime.unsafe<{ state: string; attempt_count: number; cycle_attempt_count: number; width: number; height: number; adopted_attempts: number }[]>(`
+      select derivative.state, derivative.attempt_count, derivative.cycle_attempt_count, derivative.width, derivative.height,
+        (select count(*)::int from app_private.media_derivative_attempts attempt where attempt.derivative_id = derivative.id and attempt.state = 'adopted') as adopted_attempts
+      from app_private.media_derivatives derivative where derivative.asset_id = $1
+    `, [grant.assetId]);
+    expect(rows[0]).toEqual({ state: "ready", attempt_count: 2, cycle_attempt_count: 2, width: 640, height: 160, adopted_attempts: 1 });
   });
 });
