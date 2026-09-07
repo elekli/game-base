@@ -26,9 +26,7 @@ feature branch → PR → required CI／verify → main
 
 ## T03 application deployment 模型
 
-`scripts/production-deployment-release.ts` 是 T03 的純狀態轉換模型；唯一 application deployment writer 是 `.github/workflows/production-application-release.yml`，它只接受 current `main` 的完整 commit、成功的 `ci.yml`、strict migration target，且在 `Production` Environment 核准後才呼叫 repository-owned `scripts/production-application-release.ts`。現有 `.github/workflows/production-release.yml` 仍只管理 migration，禁止加入 Vercel deploy。
-
-目前 `.github/production-release-contract.json` 仍以 `productionDeploymentEnabled: false` 與 `blocked-external-prerequisites-and-staging-safety-verification` 停發。executor 會在建立 transport 前讀取此契約並停止，因此 workflow 存在不等於允許 live mutation。
+`scripts/production-deployment-release.ts` 是 T03 的純狀態轉換模型；`.github/production-release-contract.json` 目前以 `productionDeploymentEnabled: false` 與 `blocked-external-prerequisites-and-staging-safety-verification` 停發，預定的唯一 application deployment writer `.github/workflows/production-application-release.yml` 不存在。現有 `.github/workflows/production-release.yml` 仍只管理 migration，禁止加入 Vercel deploy。
 
 ```text
 exact main CI
