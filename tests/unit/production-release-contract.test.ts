@@ -165,6 +165,13 @@ describe("production release contract", () => {
       productionSmokeRunnerSha256:
         "284f6531ecea8693f7b1c68ae3d8f5c76b84ecacd4f00a77daa3242d2de5e800",
       productionRestoreModel: "scripts/production-restore-drill.ts",
+      productionRestoreExecutor: "scripts/production-restore-executor.ts",
+      productionRestoreIntegrityChecker:
+        "scripts/check-production-restore-integrity.ts",
+      productionRestoreRunner: "scripts/production-restore.ts",
+      productionRestoreWorkflow:
+        ".github/workflows/production-restore-drill.yml",
+      productionRestoreStatus: "ready-protected-manual",
       productionRestoreEvidenceSchema:
         ".github/production-restore-drill-evidence.schema.json",
       productionSmokePrincipalStatus: "unresolved",
@@ -200,7 +207,15 @@ describe("production release contract", () => {
       productionSmokeModelSha256:
         "18fa525b8fdeac5430e70ca7164d42a55228e1b9b21981f92dffdac052ea4890",
       productionRestoreModelSha256:
-        "4bedd522a39f3792141ebb79d83a6b3d461c3a53e5ce28f1bbfd4c6de4323ae8",
+        "96604eb799d32eefff62297efafe8e18cca595cc6d4505083f60ead85402f028",
+      productionRestoreExecutorSha256:
+        "cbecf90d4aa66f85cb766cb4fdd8062077925e3a0c556162a91c60d38e52cbd3",
+      productionRestoreIntegrityCheckerSha256:
+        "60a12f3fa541ff0dbbc14ee0c954893648d4a6b01d1a3a67bd23faafa9b6ee28",
+      productionRestoreRunnerSha256:
+        "2ae2be12554e82d36220558a17ade62600c823a38efd72bbda8148d6ecbb7558",
+      productionRestoreWorkflowSha256:
+        "28cf4c2e32761df2692ef234c103944beb4b267512f577b1a5d3ccbb7c826974",
       productionRestoreEvidenceSchemaSha256:
         "b801b6e3e46f64c3e273c33b5c3c3432ebc152247900e125459f2cecc5613d40",
     });

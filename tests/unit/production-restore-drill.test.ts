@@ -119,7 +119,7 @@ describe("production restore drill", () => {
     expect(PRODUCTION_RESTORE_LOCAL_TARGET).toEqual({
       host: "127.0.0.1",
       port: 55432,
-      database: "puizeru_restore_drill",
+      database: "postgres",
       user: "postgres",
     });
     expect(Object.isFrozen(PRODUCTION_RESTORE_LOCAL_TARGET)).toBe(true);
@@ -129,7 +129,7 @@ describe("production restore drill", () => {
 
     const overrides = [
       { ...PRODUCTION_RESTORE_LOCAL_TARGET, port: 5432 },
-      { ...PRODUCTION_RESTORE_LOCAL_TARGET, database: "postgres" },
+      { ...PRODUCTION_RESTORE_LOCAL_TARGET, database: "puizeru_restore_drill" },
       { ...PRODUCTION_RESTORE_LOCAL_TARGET, user: "arbitrary_local_user" },
     ];
     for (const target of overrides) {
@@ -182,6 +182,7 @@ describe("production restore drill", () => {
           "postgres",
           "--format=custom",
           "--data-only",
+          "--schema=app_private",
           "--no-owner",
           "--no-privileges",
           "--file",
@@ -196,20 +197,29 @@ describe("production restore drill", () => {
       },
       {
         kind: "create-local-target",
-        program: "createdb",
+        program: "supabase",
         argv: [
-          "--host",
-          "127.0.0.1",
-          "--port",
-          "55432",
-          "--username",
-          "postgres",
-          "puizeru_restore_drill",
+          "start",
+          "--workdir",
+          "/runner/private/restore-drill",
+          "--exclude",
+          "studio,imgproxy,realtime,gotrue,mailpit,postgres-meta,edge-runtime,logflare,vector,supavisor",
         ],
       },
       {
         kind: "replay-migrations",
-        program: "migration-replay",
+        program: "supabase",
+        argv: [
+          "db",
+          "reset",
+          "--workdir",
+          "/runner/private/restore-drill",
+          "--no-seed",
+        ],
+      },
+      {
+        kind: "clear-local-target-data",
+        program: "psql",
         argv: [
           "--host",
           "127.0.0.1",
@@ -218,7 +228,9 @@ describe("production restore drill", () => {
           "--username",
           "postgres",
           "--dbname",
-          "puizeru_restore_drill",
+          "postgres",
+          "--set",
+          "ON_ERROR_STOP=1",
         ],
       },
       {
@@ -232,7 +244,7 @@ describe("production restore drill", () => {
           "--username",
           "postgres",
           "--dbname",
-          "puizeru_restore_drill",
+          "postgres",
           "--data-only",
           "--no-owner",
           "--no-privileges",
@@ -252,21 +264,17 @@ describe("production restore drill", () => {
           "--username",
           "postgres",
           "--dbname",
-          "puizeru_restore_drill",
+          "postgres",
         ],
       },
       {
         kind: "drop-local-target",
-        program: "dropdb",
+        program: "supabase",
         argv: [
-          "--if-exists",
-          "--host",
-          "127.0.0.1",
-          "--port",
-          "55432",
-          "--username",
-          "postgres",
-          "puizeru_restore_drill",
+          "stop",
+          "--no-backup",
+          "--workdir",
+          "/runner/private/restore-drill",
         ],
       },
       { kind: "delete-dump", program: "unlink", argv: [DUMP_PATH] },
@@ -283,7 +291,13 @@ describe("production restore drill", () => {
           > => action.kind !== "stop",
         )
         .filter((action) => !["dump-source", "delete-dump"].includes(action.kind))
-        .every((action) => action.argv.includes("puizeru_restore_drill")),
+        .every((action) =>
+          action.kind === "restore-dump" ||
+          action.kind === "verify-integrity" ||
+          action.kind === "clear-local-target-data"
+            ? action.argv.includes("postgres")
+            : action.argv.includes("/runner/private/restore-drill"),
+        ),
     ).toBe(true);
     expect(final).toMatchObject({
       phase: "succeeded",
@@ -374,12 +388,12 @@ describe("production restore drill", () => {
     const drop = actions.at(-2);
     expect(drop).toMatchObject({
       kind: "drop-local-target",
-      argv: expect.arrayContaining(["puizeru_restore_drill"]),
+      argv: expect.arrayContaining(["/runner/private/restore-drill"]),
     });
     if (drop?.kind !== "drop-local-target") {
       throw new Error("drop-local-target cleanup was not planned");
     }
-    expect(drop.argv.at(-1)).toBe("puizeru_restore_drill");
+    expect(drop.argv.at(-1)).toBe("/runner/private/restore-drill");
     expect(failed).toMatchObject({
       phase: "failed",
       targetOwnership: "not-owned",

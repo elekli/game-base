@@ -87,7 +87,7 @@ export const PRODUCTION_RESTORE_LOCAL_TARGET: ProductionRestoreLocalTarget =
   Object.freeze({
     host: "127.0.0.1",
     port: 55_432,
-    database: "puizeru_restore_drill",
+    database: "postgres",
     user: "postgres",
   });
 
@@ -100,8 +100,9 @@ export type ProductionRestoreAction =
       outputPath: string;
       outputMode: 384;
     }>
-  | Readonly<{ kind: "create-local-target"; program: "createdb"; argv: ReadonlyArray<string> }>
-  | Readonly<{ kind: "replay-migrations"; program: "migration-replay"; argv: ReadonlyArray<string> }>
+  | Readonly<{ kind: "create-local-target"; program: "supabase"; argv: ReadonlyArray<string> }>
+  | Readonly<{ kind: "replay-migrations"; program: "supabase"; argv: ReadonlyArray<string> }>
+  | Readonly<{ kind: "clear-local-target-data"; program: "psql"; argv: ReadonlyArray<string> }>
   | Readonly<{
       kind: "restore-dump";
       program: "pg_restore";
@@ -109,7 +110,7 @@ export type ProductionRestoreAction =
       expectedSha256: string;
     }>
   | Readonly<{ kind: "verify-integrity"; program: "integrity-check"; argv: ReadonlyArray<string> }>
-  | Readonly<{ kind: "drop-local-target"; program: "dropdb"; argv: ReadonlyArray<string> }>
+  | Readonly<{ kind: "drop-local-target"; program: "supabase"; argv: ReadonlyArray<string> }>
   | Readonly<{ kind: "delete-dump"; program: "unlink"; argv: ReadonlyArray<string> }>
   | Readonly<{ kind: "stop" }>;
 
@@ -124,7 +125,7 @@ export type ProductionRestoreExecutorResult =
   | Readonly<{ outcome: "failed"; safeDetail: string }>;
 
 export type ProductionRestoreLocalExecutor = Readonly<{
-  kind: "fake-local";
+  kind: "fake-local" | "isolated-local";
   execute(action: Exclude<ProductionRestoreAction, { kind: "stop" }>): Promise<ProductionRestoreExecutorResult>;
 }>;
 
@@ -132,6 +133,7 @@ type RestorePhase =
   | "dumping"
   | "creating-local-target"
   | "replaying-migrations"
+  | "clearing-local-target-data"
   | "restoring"
   | "verifying-integrity"
   | "cleaning-target"
@@ -156,6 +158,7 @@ export type ProductionRestoreDrill = Readonly<{
   sourceKind: ProductionRestoreSource["kind"];
   source: ProductionRestoreSource;
   target: ProductionRestoreLocalTarget;
+  runnerTempDir: string;
   dumpPath: string;
   next: ProductionRestoreAction;
   targetOwnership: TargetOwnership;
@@ -178,28 +181,23 @@ export type ProductionRestoreInput = Readonly<{
   publishedArtifactPath?: string;
 }>;
 
-function createLocalTargetArgv(): string[] {
+function createLocalTargetArgv(runnerTempDir: string): string[] {
   return [
-    "--host",
-    PRODUCTION_RESTORE_LOCAL_TARGET.host,
-    "--port",
-    String(PRODUCTION_RESTORE_LOCAL_TARGET.port),
-    "--username",
-    PRODUCTION_RESTORE_LOCAL_TARGET.user,
-    PRODUCTION_RESTORE_LOCAL_TARGET.database,
+    "start",
+    "--workdir",
+    runnerTempDir,
+    "--exclude",
+    "studio,imgproxy,realtime,gotrue,mailpit,postgres-meta,edge-runtime,logflare,vector,supavisor",
   ];
 }
 
-function replayMigrationsArgv(): string[] {
+function replayMigrationsArgv(runnerTempDir: string): string[] {
   return [
-    "--host",
-    PRODUCTION_RESTORE_LOCAL_TARGET.host,
-    "--port",
-    String(PRODUCTION_RESTORE_LOCAL_TARGET.port),
-    "--username",
-    PRODUCTION_RESTORE_LOCAL_TARGET.user,
-    "--dbname",
-    PRODUCTION_RESTORE_LOCAL_TARGET.database,
+    "db",
+    "reset",
+    "--workdir",
+    runnerTempDir,
+    "--no-seed",
   ];
 }
 
@@ -221,6 +219,16 @@ function restoreDumpArgv(dumpPath: string): string[] {
   ];
 }
 
+function clearLocalTargetDataArgv(): string[] {
+  return [
+    "--host", PRODUCTION_RESTORE_LOCAL_TARGET.host,
+    "--port", String(PRODUCTION_RESTORE_LOCAL_TARGET.port),
+    "--username", PRODUCTION_RESTORE_LOCAL_TARGET.user,
+    "--dbname", PRODUCTION_RESTORE_LOCAL_TARGET.database,
+    "--set", "ON_ERROR_STOP=1",
+  ];
+}
+
 function verifyIntegrityArgv(): string[] {
   return [
     "--host",
@@ -234,16 +242,12 @@ function verifyIntegrityArgv(): string[] {
   ];
 }
 
-function dropLocalTargetArgv(): string[] {
+function dropLocalTargetArgv(runnerTempDir: string): string[] {
   return [
-    "--if-exists",
-    "--host",
-    PRODUCTION_RESTORE_LOCAL_TARGET.host,
-    "--port",
-    String(PRODUCTION_RESTORE_LOCAL_TARGET.port),
-    "--username",
-    PRODUCTION_RESTORE_LOCAL_TARGET.user,
-    PRODUCTION_RESTORE_LOCAL_TARGET.database,
+    "stop",
+    "--no-backup",
+    "--workdir",
+    runnerTempDir,
   ];
 }
 
@@ -317,6 +321,7 @@ function dumpAction(
       source.database,
       "--format=custom",
       "--data-only",
+      "--schema=app_private",
       "--no-owner",
       "--no-privileges",
       "--file",
@@ -340,6 +345,7 @@ export function createProductionRestoreDrill(input: ProductionRestoreInput): Pro
     sourceKind: source.kind,
     source,
     target: PRODUCTION_RESTORE_LOCAL_TARGET,
+    runnerTempDir: input.runnerTempDir,
     dumpPath: input.dumpPath,
     next: dumpAction(source, input.dumpPath),
     targetOwnership: "not-owned",
@@ -372,7 +378,7 @@ function cleanupTarget(
     ...drill,
     phase: "cleaning-target",
     primaryFailure,
-    next: { kind: "drop-local-target", program: "dropdb", argv: dropLocalTargetArgv() },
+    next: { kind: "drop-local-target", program: "supabase", argv: dropLocalTargetArgv(drill.runnerTempDir) },
   };
 }
 
@@ -461,7 +467,7 @@ function transition(
         phase: "creating-local-target",
         dumpByteLength: result.byteLength,
         dumpSha256: result.sha256,
-        next: { kind: "create-local-target", program: "createdb", argv: createLocalTargetArgv() },
+        next: { kind: "create-local-target", program: "supabase", argv: createLocalTargetArgv(drill.runnerTempDir) },
       };
     }
     case "creating-local-target":
@@ -469,9 +475,15 @@ function transition(
         ...drill,
         phase: "replaying-migrations",
         targetOwnership: "owned-by-this-drill",
-        next: { kind: "replay-migrations", program: "migration-replay", argv: replayMigrationsArgv() },
+        next: { kind: "replay-migrations", program: "supabase", argv: replayMigrationsArgv(drill.runnerTempDir) },
       };
     case "replaying-migrations":
+      return {
+        ...drill,
+        phase: "clearing-local-target-data",
+        next: { kind: "clear-local-target-data", program: "psql", argv: clearLocalTargetDataArgv() },
+      };
+    case "clearing-local-target-data":
       if (!drill.dumpSha256) {
         throw new ProductionRestoreInvalidTransitionError("restore digest is unavailable");
       }
@@ -508,9 +520,9 @@ export async function runProductionRestoreDrill(
   initial: ProductionRestoreDrill,
   executor: ProductionRestoreLocalExecutor,
 ): Promise<ProductionRestoreDrill> {
-  if (executor.kind !== "fake-local") {
+  if (executor.kind !== "fake-local" && executor.kind !== "isolated-local") {
     throw new ProductionRestoreInvalidTransitionError(
-      "only the fake-local executor seam is accepted",
+      "restore executor kind is invalid",
     );
   }
   let drill = initial;
