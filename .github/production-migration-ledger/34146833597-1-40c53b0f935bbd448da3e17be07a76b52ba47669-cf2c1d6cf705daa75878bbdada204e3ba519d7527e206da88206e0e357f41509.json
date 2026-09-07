@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "repository": "elekli/game-base",
+  "workflow": ".github/workflows/production-release.yml",
+  "releaseIdentity": "34146833597-1-40c53b0f935bbd448da3e17be07a76b52ba47669-cf2c1d6cf705daa75878bbdada204e3ba519d7527e206da88206e0e357f41509",
+  "commit": "40c53b0f935bbd448da3e17be07a76b52ba47669",
+  "migrations": [
+    {
+      "version": "0011",
+      "name": "media_ledger",
+      "filename": "0011_media_ledger.sql",
+      "sha256": "b55428bb74b78e596705ed7593c71b7cf546653d1ece8e7a92d03e3b9d61c5ec"
+    },
+    {
+      "version": "0012",
+      "name": "thumbnail_lease_ledger",
+      "filename": "0012_thumbnail_lease_ledger.sql",
+      "sha256": "59ba9df3f65aeeaa47a064de060c4ff6df2bf253903072ba9c00ea85a08a729b"
+    },
+    {
+      "version": "0013",
+      "name": "manual_cover_intent_order",
+      "filename": "0013_manual_cover_intent_order.sql",
+      "sha256": "bff062f3811ef51d07e4a5b158469c8f71130cfccbc462da7a0c3c641d57f64c"
+    },
+    {
+      "version": "0014",
+      "name": "media_reconciliation",
+      "filename": "0014_media_reconciliation.sql",
+      "sha256": "b70464a5a29acd0122d80d53d58da83c50422f6a3d534af0e66d88c6d50de070"
+    },
+    {
+      "version": "0015",
+      "name": "production_smoke_canary",
+      "filename": "0015_production_smoke_canary.sql",
+      "sha256": "ecc8b4b53f319f877a3e5dc50d9690e1a36d94d5ee123d81d33a4eb1820687f8"
+    }
+  ],
+  "pendingSetSha256": "cf2c1d6cf705daa75878bbdada204e3ba519d7527e206da88206e0e357f41509",
+  "sourceReleaseRun": {
+    "id": "34146833597",
+    "attempt": 1
+  },
+  "successBasis": "strict-exact-target",
+  "actor": "elekli",
+  "utcTime": "2026-09-07T17:18:55.927Z",
+  "result": "success",
+  "recoveryAction": {
+    "missingLedgerAfterSuccess": "ledger-recovery",
+    "incompatibleDatabase": "forward-fix",
+    "destructiveRollback": "never-reset"
+  },
+  "evidenceSha256": "1ba07a759f72f4bef962e6f8827e7987ed70546ca4743000809f46fbc2b66a06"
+}
