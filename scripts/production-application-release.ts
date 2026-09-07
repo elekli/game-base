@@ -12,6 +12,9 @@ import {
 import { createProductionSmokeRunner } from "./production-smoke-runner";
 import { createVercelDeploymentRestAdapter } from "./vercel-deployment-rest-adapter";
 import { createVercelMutationTransport } from "./vercel-rest-transport";
+import type { VercelDeploymentRestAdapter } from "./vercel-deployment-rest-adapter";
+import type { CanonicalProductionDeploymentSourceManifest } from "./production-deployment-source-manifest";
+import type { ProductionSmokeRunner } from "./production-smoke-runner";
 
 export type ProductionApplicationReleaseDriver = Readonly<{
   execute(action: ProductionDeploymentRelease["next"]): Promise<Parameters<typeof transitionProductionDeploymentRelease>[1]>;
@@ -32,6 +35,48 @@ export async function driveProductionApplicationRelease(
   }
   if (release.next.kind !== "stop") throw new ProductionApplicationReleaseDisabledError();
   return release;
+}
+
+function deploymentId(value: unknown): string {
+  if (typeof value !== "object" || value === null) throw new Error("deployment response malformed");
+  const id = (value as Record<string, unknown>).uid ?? (value as Record<string, unknown>).id;
+  if (typeof id !== "string" || !/^dpl_[A-Za-z0-9]+$/.test(id)) throw new Error("deployment response malformed");
+  return id;
+}
+
+export function createConcreteProductionApplicationReleaseDriver(input: Readonly<{
+  adapter: VercelDeploymentRestAdapter;
+  projectId: string;
+  projectName: string;
+  manifest: CanonicalProductionDeploymentSourceManifest;
+  readSourceFile(file: ProductionDeploymentSourceManifestFile): Promise<Uint8Array>;
+  smoke: ProductionSmokeRunner;
+  exactMainCi: boolean;
+  schemaGate: "strict-current-schema" | "migration-strict-and-ledger-complete";
+  mainSha(): Promise<string>;
+  writeEvidence(action: Extract<ProductionDeploymentRelease["next"], { kind: "record-sanitized-evidence" }>): Promise<void>;
+  sleep(milliseconds: number): Promise<void>;
+}>): ProductionApplicationReleaseDriver {
+  return { async execute(action) {
+    switch (action.kind) {
+      case "verify-release-gate": return { kind: "release-gate-observed", executionSha: action.kind && input.manifest.manifest.commitSha, exactMainCi: input.exactMainCi, schemaGate: input.schemaGate };
+      case "inspect-current-deployment": return { kind: "current-deployment-observed", deploymentId: deploymentId(await input.adapter.getDeployment("current")) };
+      case "ensure-staged-deployment": {
+        const value = await input.adapter.ensureStagedDeployment({ projectName: input.projectName, projectId: input.projectId, commitSha: action.executionSha, releaseIdentity: action.releaseIdentity, sourceManifestArtifact: input.manifest, readFileBytes: input.readSourceFile });
+        return { kind: "staged-deployment-resolved", commitSha: action.executionSha, deploymentId: value.deploymentId, releaseIdentity: action.releaseIdentity, sourceManifestSha256: action.sourceManifestSha256, source: value.source };
+      }
+      case "await-staged-ready": {
+        for (let attempt = 0; attempt < action.maxAttempts; attempt += 1) { const value = await input.adapter.getDeployment(action.deploymentId); const state = typeof value === "object" && value !== null ? ((value as Record<string, unknown>).readyState ?? (value as Record<string, unknown>).state) : undefined; if (state === "READY") return { kind: "staged-deployment-ready", deploymentId: action.deploymentId, commitSha: input.manifest.manifest.commitSha, releaseIdentity: `production:${input.manifest.manifest.commitSha}`, sourceManifestSha256: action.sourceManifestSha256 }; await input.sleep(action.intervalMs); }
+        return { kind: "operation-failed" };
+      }
+      case "recheck-promotion-guard": return { kind: "promotion-guard-observed", currentDeploymentId: deploymentId(await input.adapter.getDeployment("current")), mainSha: await input.mainSha() };
+      case "promote-staged": await input.adapter.promote(action.deploymentId, input.projectId); return { kind: "promotion-attempt-finished", outcome: "reported-success" };
+      case "rollback-baseline": await input.adapter.rollback(action.deploymentId, input.projectId); return { kind: "rollback-attempt-finished", outcome: "reported-success" };
+      case "run-production-smoke": return { kind: "smoke-canary-event", event: await input.smoke.execute(action.canaryAction) };
+      case "record-sanitized-evidence": await input.writeEvidence(action); return { kind: "evidence-recorded" };
+      case "stop": throw new Error("terminal action");
+    }
+  } };
 }
 
 export class ProductionApplicationReleaseDisabledError extends Error {
