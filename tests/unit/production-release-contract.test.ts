@@ -105,7 +105,7 @@ describe("production release contract", () => {
       stagedProductionSafetyStatus: "auto-assign-disablement-unverified",
       vercelRestTransport: "scripts/vercel-rest-transport.ts",
       vercelRestTransportSha256:
-        "7a0c7d4facaf30bdd2b3fd0581465fe036bc10393f360218b9969e61acaa6183",
+        "66828fd2876a4186e876cfe60a22700ab52457031ee7238513bf4fe7c622e5e6",
       productionDeploymentSourceManifestBuilder:
         "scripts/production-deployment-source-manifest.ts",
       productionDeploymentSourceManifestSchema:
@@ -137,13 +137,13 @@ describe("production release contract", () => {
       productionDeploymentSourceManifestSchemaSha256:
         "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
       vercelDeploymentAdapterSha256:
-        "92f6d87f6c001020ee5a1780a5b3be3a7473b503cb34bd74e82f734ab6d83a51",
+        "41525fdd1ee5ea1c92f65238821b2e28ec53cfa1e034aa6271e1a09ba50fb399",
       productionSmokeContractSha256:
         "30301fbfa2b15ca5a0e33a65fcb68998ce5bbf112e9499baca21ca1ef9b37166",
       productionSmokeModelSha256:
         "f2062c6830759da1bcf7799156c2231b348fad20f105f1a72851d01d838f7d84",
       productionRestoreModelSha256:
-        "4bedd522a39f3792141ebb79d83a6b3d461c3a53e5ce28f1bbfd4c6de4323ae8",
+        "3352e9a3d4390a4df4ebc56b63c7f9a95c4323acc13b7fefa05c1383542a3aa4",
       productionRestoreEvidenceSchemaSha256:
         "b801b6e3e46f64c3e273c33b5c3c3432ebc152247900e125459f2cecc5613d40",
     });
