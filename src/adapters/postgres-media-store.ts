@@ -2,21 +2,24 @@ import "server-only";
 import { sql } from "drizzle-orm";
 import type { ProductionExecutor, QueryExecutor } from "./database-game-store";
 import {
-  MEDIA_THUMBNAIL_SPEC,
   MediaFinalizeUnavailableError,
   MediaGameUnavailableError,
   MediaUploadIdempotencyConflictError,
-  type BeginMediaRecord,
   type BeginMediaUploadCommand,
-  type FinalizeClaim,
   type MediaAsset,
   type MediaDerivative,
-  type MediaIngest,
   type MediaPurpose,
-  type MediaStore,
   type MediaUploadResult,
-  type ValidatedMediaObject,
 } from "@/modules/media";
+import { matchesUploadCommand } from "@/modules/media/internal/matches-upload-command";
+import {
+  MEDIA_THUMBNAIL_SPEC,
+  type BeginMediaRecord,
+  type FinalizeClaim,
+  type MediaIngest,
+  type MediaStore,
+  type ValidatedMediaObject,
+} from "@/modules/media/internal/types";
 
 type Row = Readonly<Record<string, unknown>>;
 
@@ -38,17 +41,11 @@ function ingestFrom(row: Row): MediaIngest {
   };
 }
 
-function sameCommand(ingest: MediaIngest, command: BeginMediaUploadCommand): boolean {
-  return ingest.gameId === command.gameId && ingest.purpose === command.purpose && ingest.originalFileName === command.originalFileName && ingest.declaredMimeType === command.declaredMimeType && ingest.declaredByteSize === command.declaredByteSize;
-}
-
 function assetFrom(row: Row): MediaAsset {
   return {
     id: String(row.asset_id),
-    ingestId: String(row.ingest_id),
     gameId: String(row.game_id),
     purpose: row.purpose as MediaPurpose,
-    originalObjectPath: String(row.original_object_path),
     originalFileName: String(row.original_file_name),
     actualMimeType: String(row.actual_mime_type),
     byteSize: Number(row.byte_size),
@@ -121,7 +118,7 @@ export class PostgresMediaStore implements MediaStore {
         where id = (select ingest_id from app_private.media_ingest_operations where idempotency_key = ${command.idempotencyKey})
       `) as Row[];
       const ingest = ingestFrom(rows[0]);
-      if (!sameCommand(ingest, command)) throw new MediaUploadIdempotencyConflictError();
+      if (!matchesUploadCommand(ingest, command)) throw new MediaUploadIdempotencyConflictError();
       if (ingest.state === "finalized") {
         const result = await readResult(tx, ingest.id);
         if (!result) throw new MediaFinalizeUnavailableError();
@@ -150,7 +147,7 @@ export class PostgresMediaStore implements MediaStore {
       }
       if (ingest.state === "cleanup_pending" || ingest.state === "expired") throw new MediaFinalizeUnavailableError();
       if (ingest.state === "issued" && rows[0].reservation_valid !== true) throw new MediaFinalizeUnavailableError();
-      if (ingest.state === "finalizing" && rows[0].lease_valid === true) throw new MediaFinalizeUnavailableError();
+      if (ingest.state === "finalizing" && rows[0].lease_valid === true) return { status: "finalizing" };
       const claimedRows = await tx.execute(sql`
         update app_private.media_ingests
         set state = 'finalizing', lease_token = ${lease.token}, lease_until = ${lease.until}, last_error_code = null

@@ -1,5 +1,5 @@
 begin;
-select plan(49);
+select plan(54);
 
 select has_column('app_private', 'media_ingests', 'idempotency_key', 'ingest 保存全域冪等鍵');
 select has_column('app_private', 'media_ingests', 'reserved_asset_id', 'ingest 預留固定 asset id');
@@ -113,6 +113,33 @@ insert into app_private.media_assets (
 insert into app_private.media_derivatives (asset_id, spec, authority_state, state, kind, object_key)
 values ('40000000-0000-4000-8000-000000000001', 'thumb_webp_v1', 'verified', 'pending', 'thumbnail_webp', 'pending:40000000-0000-4000-8000-000000000001');
 select ok(exists(select 1 from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001' and state = 'pending' and current_object_path is null), '圖片可建立尚無指標的 pending derivative');
+select extensions.lives_ok(
+  $$update app_private.media_derivatives set state = 'processing', lease_token = '44000000-0000-4000-8000-000000000001', lease_until = now() + interval '5 minutes' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  'processing derivative 必須以成對租約進入處理中'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivatives set lease_token = null where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%verified media derivative violates ledger contract%',
+  'processing derivative 不可缺少任一租約欄位'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivatives set state = 'failed' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%verified media derivative violates ledger contract%',
+  '非 processing derivative 不可保留租約'
+);
+update app_private.media_derivatives
+set state = 'pending', lease_token = null, lease_until = null
+where asset_id = '40000000-0000-4000-8000-000000000001';
+select extensions.throws_like(
+  $$update app_private.media_derivatives set lease_token = '44000000-0000-4000-8000-000000000002' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%verified media derivative violates ledger contract%',
+  '非 processing derivative 不可只殘留 lease token'
+);
+select extensions.throws_like(
+  $$update app_private.media_derivatives set lease_until = now() + interval '5 minutes' where asset_id = '40000000-0000-4000-8000-000000000001'$$,
+  '%verified media derivative violates ledger contract%',
+  '非 processing derivative 不可只殘留 lease deadline'
+);
 select extensions.throws_like(
   $$delete from app_private.media_derivatives where asset_id = '40000000-0000-4000-8000-000000000001'$$,
   '%cannot delete verified image derivative%',

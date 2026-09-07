@@ -377,6 +377,42 @@ describe("production migration safety lint", () => {
     );
   });
 
+  it("只接受媒體 derivative 狀態約束的具名、同表、同名擴充", async () => {
+    const root = await migrationFixture({
+      "0011_media_ledger.sql": `
+        alter table app_private.media_derivatives
+          drop constraint media_derivatives_state_check,
+          add constraint media_derivatives_state_check
+            check (state in ('pending', 'processing', 'ready', 'failed'));
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).resolves.toEqual({ migrationCount: 1 });
+  });
+
+  it("相同 CHECK replacement 出現在非 0011 migration 時仍拒絕", async () => {
+    const root = await migrationFixture({
+      "0012_repeat_media_state_expansion.sql": `
+        alter table app_private.media_derivatives
+          drop constraint media_derivatives_state_check,
+          add constraint media_derivatives_state_check
+            check (state in ('pending', 'processing', 'ready', 'failed'));
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).rejects.toThrow("ProductionMigrationSafetyError");
+  });
+
+  it.each([
+    "alter table app_private.media_derivatives drop constraint other_check, add constraint other_check check (state in ('pending', 'processing', 'ready', 'failed'))",
+    "alter table app_private.other_derivatives drop constraint media_derivatives_state_check, add constraint media_derivatives_state_check check (state in ('pending', 'processing', 'ready', 'failed'))",
+    "alter table app_private.media_derivatives drop constraint media_derivatives_state_check, add constraint media_derivatives_state_check check (true)",
+  ])("拒絕偽裝成媒體狀態擴充的 destructive DDL: %s", async (ddl) => {
+    const root = await migrationFixture({ "0001_not_the_approved_expansion.sql": `${ddl};` });
+
+    await expect(lintProductionMigrations(root)).rejects.toThrow("ProductionMigrationSafetyError");
+  });
+
   it("ignores SQL-looking text inside comments and strings", async () => {
     const root = await migrationFixture({
       "0001_safe_strings.sql": `

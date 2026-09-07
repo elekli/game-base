@@ -3,11 +3,9 @@ import {
   MediaGameUnavailableError,
   MediaUploadIdempotencyConflictError,
 } from "./errors";
-import { MEDIA_THUMBNAIL_SPEC, type BeginMediaRecord, type BeginMediaUploadCommand, type FinalizeClaim, type MediaIngest, type MediaStore, type MediaUploadResult, type ValidatedMediaObject } from "./types";
-
-function sameCommand(ingest: MediaIngest, command: BeginMediaUploadCommand): boolean {
-  return ingest.gameId === command.gameId && ingest.purpose === command.purpose && ingest.originalFileName === command.originalFileName && ingest.declaredMimeType === command.declaredMimeType && ingest.declaredByteSize === command.declaredByteSize;
-}
+import type { MediaUploadResult } from "../contracts";
+import { matchesUploadCommand } from "./matches-upload-command";
+import { MEDIA_THUMBNAIL_SPEC, type BeginMediaRecord, type FinalizeClaim, type MediaIngest, type MediaStore, type ValidatedMediaObject } from "./types";
 
 export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readonly string[]; now?: () => Date }>): MediaStore {
   const games = new Set(input.activeGameIds);
@@ -19,7 +17,7 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
       if (!games.has(command.gameId)) throw new MediaGameUnavailableError();
       const existing = ingests.get(command.idempotencyKey);
       if (existing) {
-        if (!sameCommand(existing, command)) throw new MediaUploadIdempotencyConflictError();
+        if (!matchesUploadCommand(existing, command)) throw new MediaUploadIdempotencyConflictError();
         const result = results.get(command.idempotencyKey);
         if (existing.state === "finalized" && result) return { status: "already_finalized", result };
         if (existing.state === "finalizing") return { status: "finalizing" };
@@ -56,7 +54,7 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
       if (!ingest || ingest.state === "cleanup_pending" || ingest.state === "expired") throw new MediaFinalizeUnavailableError();
       const current = input.now?.() ?? new Date();
       if (ingest.state === "issued" && new Date(ingest.staleAfter) <= current) throw new MediaFinalizeUnavailableError();
-      if (ingest.state === "finalizing" && ingest.leaseUntil && new Date(ingest.leaseUntil) > current) throw new MediaFinalizeUnavailableError();
+      if (ingest.state === "finalizing" && ingest.leaseUntil && new Date(ingest.leaseUntil) > current) return { status: "finalizing" };
       const claimed = { ...ingest, state: "finalizing" as const, leaseToken: lease.token, leaseUntil: lease.until };
       ingests.set(key, claimed);
       return { status: "claimed", ingest: claimed };
@@ -79,10 +77,8 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
       const now = new Date().toISOString();
       const asset = {
         id: ingest.reservedAssetId,
-        ingestId: ingest.id,
         gameId: ingest.gameId,
         purpose: ingest.purpose,
-        originalObjectPath: ingest.originalObjectPath,
         originalFileName: ingest.originalFileName,
         actualMimeType: object.actualMimeType,
         byteSize: object.byteSize,

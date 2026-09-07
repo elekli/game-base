@@ -73,6 +73,10 @@ alter table app_private.media_derivatives
   add column lease_until timestamptz,
   add column last_error_code text;
 
+alter table app_private.media_derivatives
+  drop constraint media_derivatives_state_check,
+  add constraint media_derivatives_state_check check (state in ('pending', 'processing', 'ready', 'failed'));
+
 create table app_private.media_derivative_attempts (
   id uuid primary key default gen_random_uuid(),
   derivative_id uuid not null references app_private.media_derivatives(id) on delete restrict,
@@ -239,9 +243,13 @@ begin
     raise exception 'media attachment cannot have a derivative';
   end if;
   if new.authority_state = 'verified' and (
-    new.state not in ('pending', 'ready', 'failed') or
+    new.state not in ('pending', 'processing', 'ready', 'failed') or
     new.attempt_count is null or new.attempt_count < 0 or
     new.object_key is null or
+    not (
+      (new.state = 'processing' and new.lease_token is not null and new.lease_until is not null) or
+      (new.state <> 'processing' and new.lease_token is null and new.lease_until is null)
+    ) or
     (new.state = 'ready' and (new.current_object_path is null or new.object_key is distinct from new.current_object_path or new.width is null or new.height is null or new.byte_size is null or new.width <= 0 or new.height <= 0 or new.byte_size <= 0 or new.completed_at is null)) or
     (new.state <> 'ready' and (new.current_object_path is not null or new.width is not null or new.height is not null or new.byte_size is not null or new.completed_at is not null))
   ) then

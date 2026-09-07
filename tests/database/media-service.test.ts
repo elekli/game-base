@@ -7,13 +7,20 @@ import {
   MediaFinalizeUnavailableError,
   MediaGameUnavailableError,
   MediaUploadIdempotencyConflictError,
-  createMediaService,
   type BeginMediaUploadResult,
-  type MediaObjectStore,
+  type FinalizeMediaUploadResult,
+  type MediaUploadResult,
 } from "@/modules/media";
+import { createMediaService } from "@/modules/media/internal/create-media-service";
+import type { MediaObjectStore } from "@/modules/media/internal/types";
 
 function grantFrom(result: BeginMediaUploadResult) {
   if (result.status !== "upload_grant") throw new Error("expected upload grant");
+  return result;
+}
+
+function finalizedFrom(result: FinalizeMediaUploadResult): MediaUploadResult {
+  if ("status" in result) throw new Error("expected finalized upload");
   return result;
 }
 
@@ -39,6 +46,20 @@ function deferred(): Readonly<{ promise: Promise<void>; resolve: () => void }> {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => { resolve = done; });
   return { promise, resolve };
+}
+
+async function within<Value>(promise: Promise<Value>, milliseconds = 2_000): Promise<Value> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`operation exceeded ${milliseconds} ms`)), milliseconds);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function waitForDatabaseLock(applicationName: string): Promise<void> {
@@ -86,7 +107,7 @@ function png(): Uint8Array {
 
 function objects(bytes = png(), mimeType = "image/png"): MediaObjectStore {
   return {
-    async createUploadGrant(path) { return { token: `token:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }; },
+    async createUploadGrant(path) { return { uploadUrl: `https://storage.example.test/upload/${encodeURIComponent(path)}`, token: `token:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }; },
     async inspect(path) { return { path, byteSize: bytes.byteLength, mimeType }; },
     async *read() { yield bytes; },
   };
@@ -276,8 +297,8 @@ describe("MediaService 與真 PostgreSQL", () => {
     const service = serviceFor();
     const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand({ purpose: "custom_cover" })));
 
-    const first = await service.finalizeMediaUpload(owner, { idempotencyKey: key });
-    const replay = await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    const first = finalizedFrom(await service.finalizeMediaUpload(owner, { idempotencyKey: key }));
+    const replay = finalizedFrom(await service.finalizeMediaUpload(owner, { idempotencyKey: key }));
     const beginReplay = await service.beginMediaUpload(owner, beginCommand({ purpose: "custom_cover" }));
 
     expect(replay).toEqual(first);
@@ -297,6 +318,43 @@ describe("MediaService 與真 PostgreSQL", () => {
       .rejects.toThrow("verified media derivative identity fields are immutable");
     await expect(runtime.unsafe("delete from app_private.media_derivatives where asset_id = $1", [grant.assetId]))
       .rejects.toThrow("cannot delete verified image derivative");
+  });
+
+  it("同鍵 finalize 已在驗證物件時，並行呼叫回報 finalizing，完成後重播同一資產", async () => {
+    const inspectStarted = deferred();
+    const releaseInspect = deferred();
+    let inspectCount = 0;
+    let readCount = 0;
+    const bytes = png();
+    const storage: MediaObjectStore = {
+      async createUploadGrant(path) { return { uploadUrl: `https://storage.example.test/upload/${encodeURIComponent(path)}`, token: `token:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }; },
+      async inspect(path) {
+        inspectCount += 1;
+        inspectStarted.resolve();
+        await releaseInspect.promise;
+        return { path, byteSize: bytes.byteLength, mimeType: "image/png" };
+      },
+      async *read() { readCount += 1; yield bytes; },
+    };
+    const service = serviceFor(storage);
+    const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+
+    const firstFinalize = service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    try {
+      await within(inspectStarted.promise);
+      const concurrent = await within(service.finalizeMediaUpload(owner, { idempotencyKey: key }));
+
+      expect(concurrent).toEqual({ status: "finalizing" });
+      expect({ inspectCount, readCount }).toEqual({ inspectCount: 1, readCount: 0 });
+    } finally {
+      releaseInspect.resolve();
+    }
+
+    const first = finalizedFrom(await within(firstFinalize));
+    const replay = finalizedFrom(await within(service.finalizeMediaUpload(owner, { idempotencyKey: key })));
+    expect(first.asset.id).toBe(grant.assetId);
+    expect(replay).toEqual(first);
+    expect({ inspectCount, readCount }).toEqual({ inspectCount: 1, readCount: 1 });
   });
 
   it("PostgreSQL 時鐘判定 lease 過期後拒絕舊 token 完成", async () => {
@@ -348,6 +406,8 @@ describe("MediaService 與真 PostgreSQL", () => {
 
   it("finalizing ingest 不可在未轉 finalized 時單獨提交 verified asset", async () => {
     const grant = grantFrom(await serviceFor().beginMediaUpload(owner, beginCommand()));
+    const paths = await runtime.unsafe<{ original_object_path: string }[]>("select original_object_path from app_private.media_ingests where id = $1", [grant.ingestId]);
+    const objectPath = paths[0].original_object_path;
     await runtime.unsafe(`
       update app_private.media_ingests
       set actual_mime_type = 'image/png', actual_byte_size = $2, image_width = 20, image_height = 30,
@@ -360,7 +420,7 @@ describe("MediaService 與真 PostgreSQL", () => {
         id, ingest_id, game_id, purpose, original_object_path, original_file_name,
         actual_mime_type, byte_size, width, height, authority_state, kind, object_key, mime_type
       ) values ($1, $2, $3, 'gallery_image', $4, 'photo.png', 'image/png', $5, 20, 30, 'verified', 'user_cover', $4, 'image/png')
-    `, [grant.assetId, grant.ingestId, gameId, grant.objectPath, png().byteLength])).rejects.toThrow("media asset must match its finalized ingest ledger");
+    `, [grant.assetId, grant.ingestId, gameId, objectPath, png().byteLength])).rejects.toThrow("media asset must match its finalized ingest ledger");
     const rows = await runtime.unsafe<{ asset_count: number }[]>("select count(*)::int as asset_count from app_private.media_assets where ingest_id = $1", [grant.ingestId]);
     expect(rows[0].asset_count).toBe(0);
   });

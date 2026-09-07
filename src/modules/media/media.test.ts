@@ -7,11 +7,11 @@ import {
   MediaStoredObjectInvalidError,
   MediaFinalizeUnavailableError,
   MediaUploadIdempotencyConflictError,
-  createInMemoryMediaStore,
-  createMediaService,
   type BeginMediaUploadResult,
-  type MediaObjectStore,
 } from "./index";
+import { createMediaService } from "./internal/create-media-service";
+import { createInMemoryMediaStore } from "./internal/in-memory-store";
+import type { MediaObjectStore } from "./internal/types";
 
 function grantFrom(result: BeginMediaUploadResult) {
   if (result.status !== "upload_grant") throw new Error("expected upload grant");
@@ -130,7 +130,7 @@ function animatedWebp(input: Readonly<{
 
 function objectStore(object: Readonly<{ bytes: Uint8Array; mimeType: string; byteSize?: number }>): MediaObjectStore {
   return {
-    async createUploadGrant(path) { return { token: `grant:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }; },
+    async createUploadGrant(path) { return { uploadUrl: `https://storage.example.test/upload/${encodeURIComponent(path)}`, token: `grant:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }; },
     async inspect(path) { return { path, byteSize: object.byteSize ?? object.bytes.byteLength, mimeType: object.mimeType }; },
     async *read(path) { void path; yield object.bytes; },
   };
@@ -159,14 +159,14 @@ describe("媒體公開介面", () => {
     const replay = grantFrom(await service.beginMediaUpload(owner, command()));
 
     expect(replay).toEqual(first);
-    expect(first.objectPath).toMatch(new RegExp(`^originals/${first.assetId}/[0-9a-f-]{36}$`));
+    expect(first).not.toHaveProperty("objectPath");
     await expect(service.beginMediaUpload(owner, command({ originalFileName: "另一張.png" })))
       .rejects.toBeInstanceOf(MediaUploadIdempotencyConflictError);
   });
 
   it("grant ledger CAS 必須在 Storage 簽發能力之前完成", async () => {
     const base = createInMemoryMediaStore({ activeGameIds: [gameId] });
-    const createUploadGrant = vi.fn(async (path: string) => ({ token: path, expiresAt: "2026-09-06T02:00:00.000Z" }));
+    const createUploadGrant = vi.fn(async (path: string) => ({ uploadUrl: `https://storage.example.test/upload/${encodeURIComponent(path)}`, token: path, expiresAt: "2026-09-06T02:00:00.000Z" }));
     const service = createMediaService({
       store: { ...base, renewGrant: async () => { throw new Error("cleanup won"); } },
       objects: { ...objectStore({ bytes: png(), mimeType: "image/png" }), createUploadGrant },
@@ -182,7 +182,7 @@ describe("媒體公開介面", () => {
     const objects = { ...objectStore({ bytes: png(), mimeType: "image/png" }), async createUploadGrant(path: string) {
       attempts += 1;
       if (attempts === 1) throw new Error("raw grant failure");
-      return { token: path, expiresAt: "2026-09-06T02:00:00.000Z" };
+      return { uploadUrl: `https://storage.example.test/upload/${encodeURIComponent(path)}`, token: path, expiresAt: "2026-09-06T02:00:00.000Z" };
     } };
     const service = createMediaService({ store, objects });
     await expect(service.beginMediaUpload(owner, command())).rejects.toBeInstanceOf(MediaBeginUnavailableError);
@@ -220,7 +220,7 @@ describe("媒體公開介面", () => {
 
   it("begin 重播 finalized／finalizing ingest 不再簽發可覆寫原檔的 grant", async () => {
     const store = createInMemoryMediaStore({ activeGameIds: [gameId] });
-    const createUploadGrant = vi.fn(async (path: string) => ({ token: `grant:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }));
+    const createUploadGrant = vi.fn(async (path: string) => ({ uploadUrl: `https://storage.example.test/upload/${encodeURIComponent(path)}`, token: `grant:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }));
     const service = createMediaService({ store, objects: { ...objectStore({ bytes: png(), mimeType: "image/png" }), createUploadGrant } });
     await service.beginMediaUpload(owner, command());
     const finalized = await service.finalizeMediaUpload(owner, { idempotencyKey });
@@ -445,6 +445,8 @@ describe("媒體公開介面", () => {
 
     const result = await service.finalizeMediaUpload(owner, { idempotencyKey });
 
+    expect(result).not.toEqual({ status: "finalizing" });
+    if ("status" in result) throw new Error("expected finalized upload");
     expect(result.asset.actualMimeType).toBe("application/octet-stream");
     expect(result.thumbnail).toBeNull();
   });
