@@ -7,6 +7,7 @@ import {
   type ProductionDeploymentSourceManifestFile,
   verifyProductionDeploymentSourceFileBytes,
 } from "./production-deployment-source-manifest";
+import type { VercelRestTransport } from "./vercel-rest-transport";
 
 const FULL_SHA = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -81,6 +82,31 @@ type DeploymentIdentity = Readonly<{
 type ResolvedDeployment = Readonly<{
   deploymentId: string;
   url: string;
+}>;
+
+export type VercelDeploymentRestAdapter = Readonly<{
+  inspectCurrentDeployment(customDomain: string, signal?: AbortSignal): Promise<string>;
+  ensureStagedDeployment(signal?: AbortSignal): Promise<Readonly<{
+    commitSha: string;
+    deploymentId: string;
+    releaseIdentity: string;
+    sourceManifestSha256: string;
+    source: "created" | "reused";
+    url: string;
+  }>>;
+  awaitStagedReady(input: Readonly<{
+    deploymentId: string;
+    intervalMs: number;
+    maxAttempts: number;
+  }>, signal?: AbortSignal): Promise<Readonly<{
+    commitSha: string;
+    deploymentId: string;
+    releaseIdentity: string;
+    sourceManifestSha256: string;
+    url: string;
+  }>>;
+  promote(deploymentId: string, signal?: AbortSignal): Promise<void>;
+  rollback(deploymentId: string, signal?: AbortSignal): Promise<void>;
 }>;
 
 type ParsedDeployment = ResolvedDeployment &
@@ -384,6 +410,24 @@ function parseDeployment(value: unknown): ParsedDeployment {
   };
 }
 
+function parseExpectedDeployment(
+  value: unknown,
+  expected: DeploymentIdentity & Readonly<{ deploymentId: string }>,
+) {
+  validateIdentity(expected);
+  if (!DEPLOYMENT_ID.test(expected.deploymentId)) {
+    throw new VercelDeploymentRequestContractError();
+  }
+  const deployment = parseDeployment(value);
+  if (
+    deployment.deploymentId !== expected.deploymentId ||
+    !matchesIdentity(deployment, expected)
+  ) {
+    throw new VercelDeploymentValidationError();
+  }
+  return deployment;
+}
+
 function matchesIdentity(
   deployment: ParsedDeployment,
   expected: DeploymentIdentity,
@@ -468,21 +512,186 @@ export function parseReadyVercelProductionDeployment(
   value: unknown,
   expected: DeploymentIdentity & Readonly<{ deploymentId: string }>,
 ): ResolvedDeployment {
-  validateIdentity(expected);
-  if (!DEPLOYMENT_ID.test(expected.deploymentId)) {
-    throw new VercelDeploymentRequestContractError();
-  }
-  const deployment = parseDeployment(value);
-  if (
-    deployment.deploymentId !== expected.deploymentId ||
-    deployment.state !== "READY" ||
-    !matchesIdentity(deployment, expected)
-  ) {
+  const deployment = parseExpectedDeployment(value, expected);
+  if (deployment.state !== "READY") {
     throw new VercelDeploymentValidationError();
   }
   return { deploymentId: deployment.deploymentId, url: deployment.url };
 }
 
-export function createVercelDeploymentRestAdapter(): never {
-  throw new VercelDeploymentMutationDisabledError();
+function paginationNext(value: unknown): number | null {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.pagination) ||
+    !Object.hasOwn(value.pagination, "next")
+  ) {
+    throw new VercelDeploymentMalformedResponseError();
+  }
+  const next = value.pagination.next;
+  if (
+    next !== null &&
+    (!Number.isSafeInteger(next) || (next as number) < 0)
+  ) {
+    throw new VercelDeploymentMalformedResponseError();
+  }
+  return next as number | null;
+}
+
+export function createVercelDeploymentRestAdapter(config?: Readonly<{
+  projectId: string;
+  projectName: string;
+  releaseIdentity: string;
+  sourceManifestArtifact: CanonicalProductionDeploymentSourceManifest;
+  stagedProductionSafetyVerified: boolean;
+  transport: VercelRestTransport;
+  loadSourceFile(file: ProductionDeploymentSourceManifestFile): Promise<Uint8Array>;
+  sleep?(milliseconds: number): Promise<void>;
+}>): VercelDeploymentRestAdapter {
+  if (!config || config.stagedProductionSafetyVerified !== true) {
+    throw new VercelDeploymentMutationDisabledError();
+  }
+  const createRequest = buildCreateVercelDeploymentRequest({
+    projectId: config.projectId,
+    projectName: config.projectName,
+    releaseIdentity: config.releaseIdentity,
+    sourceManifestArtifact: config.sourceManifestArtifact,
+    stagedProductionSafetyVerified: config.stagedProductionSafetyVerified,
+  });
+  const verifiedSource = verifyCanonicalSourceManifestArtifact(
+    config.sourceManifestArtifact,
+  );
+  const expected: DeploymentIdentity = {
+    commitSha: verifiedSource.manifest.commitSha,
+    projectId: config.projectId,
+    releaseIdentity: config.releaseIdentity,
+    sourceManifestSha256: verifiedSource.sourceManifestSha256,
+  };
+  const sleep = config.sleep ?? ((milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)));
+
+  const listMatchingDeployment = async (signal?: AbortSignal) => {
+    const pages: unknown[] = [];
+    let until: number | undefined;
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      const request = buildListVercelProductionDeploymentsRequest({
+        commitSha: expected.commitSha,
+        projectId: expected.projectId,
+        until,
+      });
+      const response = await config.transport.getJson(
+        request.path,
+        request.query,
+        signal,
+      );
+      pages.push({ requestUntil: until, response });
+      const next = paginationNext(response);
+      if (next === null) {
+        return resolveReusableVercelProductionDeployment({ expected, pages });
+      }
+      until = next;
+    }
+    throw new VercelDeploymentMalformedResponseError();
+  };
+
+  return {
+    async inspectCurrentDeployment(customDomain, signal) {
+      const request = buildGetVercelProductionAliasRequest({
+        customDomain,
+        projectId: config.projectId,
+      });
+      return parseVercelProductionAlias(
+        await config.transport.getJson(request.path, request.query, signal),
+        { customDomain, projectId: config.projectId },
+      );
+    },
+    async ensureStagedDeployment(signal) {
+      const reusable = await listMatchingDeployment(signal);
+      if (reusable.kind === "reuse") {
+        return { ...expected, ...reusable.deployment, source: "reused" };
+      }
+      for (const file of verifiedSource.manifest.files) {
+        const upload = buildUploadVercelFileRequest(
+          await config.loadSourceFile(file),
+          file,
+        );
+        await config.transport.postBytes(
+          upload.path,
+          upload.body!,
+          upload.headers!,
+          upload.query,
+          signal,
+        );
+      }
+      try {
+        const created = await config.transport.postJson(
+          createRequest.path,
+          createRequest.body,
+          createRequest.query,
+          signal,
+        );
+        const parsed = parseDeployment(created);
+        if (!matchesIdentity(parsed, expected)) {
+          throw new VercelDeploymentValidationError();
+        }
+        return {
+          ...expected,
+          deploymentId: parsed.deploymentId,
+          url: parsed.url,
+          source: "created",
+        };
+      } catch (error) {
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          if (signal?.aborted) throw error;
+          const recovered = await listMatchingDeployment(signal);
+          if (recovered.kind === "reuse") {
+            return { ...expected, ...recovered.deployment, source: "reused" };
+          }
+          if (attempt < 3) await sleep(1_000);
+        }
+        throw error;
+      }
+    },
+    async awaitStagedReady({ deploymentId, intervalMs, maxAttempts }, signal) {
+      if (
+        !DEPLOYMENT_ID.test(deploymentId) ||
+        !Number.isSafeInteger(intervalMs) ||
+        intervalMs < 1 ||
+        intervalMs > 30_000 ||
+        !Number.isSafeInteger(maxAttempts) ||
+        maxAttempts < 1 ||
+        maxAttempts > 60
+      ) {
+        throw new VercelDeploymentRequestContractError();
+      }
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const request = buildGetVercelDeploymentRequest(deploymentId);
+        const deployment = parseExpectedDeployment(
+          await config.transport.getJson(request.path, request.query, signal),
+          { ...expected, deploymentId },
+        );
+        if (deployment.state === "READY") {
+          return { ...expected, deploymentId, url: deployment.url };
+        }
+        if (["ERROR", "CANCELED"].includes(deployment.state)) {
+          throw new VercelDeploymentValidationError();
+        }
+        if (attempt < maxAttempts) await sleep(intervalMs);
+      }
+      throw new VercelDeploymentValidationError();
+    },
+    async promote(deploymentId, signal) {
+      const request = buildPromoteVercelDeploymentRequest({
+        deploymentId,
+        projectId: config.projectId,
+      });
+      await config.transport.postJson(request.path, request.body, request.query, signal);
+    },
+    async rollback(deploymentId, signal) {
+      const request = buildRollbackVercelDeploymentRequest({
+        deploymentId,
+        projectId: config.projectId,
+      });
+      await config.transport.postJson(request.path, request.body, request.query, signal);
+    },
+  };
 }

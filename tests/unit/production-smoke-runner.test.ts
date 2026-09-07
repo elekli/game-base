@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { calculateProductionSmokePayloadSha256 } from "../../scripts/production-smoke-canary";
 import {
+  createProductionSmokeActionRunner,
   createProductionSmokeRunner,
   ProductionSmokePrerequisiteError,
   ProductionSmokeTransportError,
@@ -193,6 +194,30 @@ describe("production smoke runner", () => {
     expect(routeActions).toContain("cleanup-exact-canary");
     expect(routeActions.at(-1)).toBe("inspect-canary-counts");
     expect(deps.checkPrivateStorageDenial).toHaveBeenCalledTimes(2);
+  });
+
+  it("turns an exhausted private Storage denial action into a cleanup event", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+    const runAction = createProductionSmokeActionRunner({
+      customDomain: "game.example.com",
+      deploymentOrigin: "https://deployment.example.com",
+      supabaseUrl: "https://project.supabase.co",
+      publishableKey: "sb_publishable_public",
+      cfAccessClientId: "client-id",
+      cfAccessClientSecret: "client-secret",
+      ownerAccessJwt: "owner-jwt",
+    }, fetchImpl as typeof fetch);
+
+    await expect(runAction({
+      kind: "verify-private-storage-denial",
+      generation: GENERATION,
+      actionSequence: 6,
+      objectPath: "release-smoke-v1/canary.json",
+    }, SHA, new AbortController().signal)).resolves.toEqual({
+      kind: "operation-failed",
+      safeDetail: "private Storage public path was not denied",
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("makes zero requests when live prerequisites are invalid", () => {

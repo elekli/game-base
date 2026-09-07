@@ -1,0 +1,157 @@
+name: Production Application Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact current main commit to release
+        required: true
+        type: string
+      release_kind:
+        description: Schema relationship for this application release
+        required: true
+        type: choice
+        options: [code-only, migration-bearing]
+      migration_tail:
+        description: Exact latest repository migration version
+        required: true
+        type: string
+      migration_ledger_path:
+        description: Required for migration-bearing releases
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  verify-release-candidate:
+    name: Verify application candidate without Production secrets
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      execution_sha: ${{ steps.candidate.outputs.execution_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      - name: Verify exact current main commit and successful CI
+        id: candidate
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_KIND: ${{ inputs.release_kind }}
+          MIGRATION_TAIL: ${{ inputs.migration_tail }}
+          MIGRATION_LEDGER_PATH: ${{ inputs.migration_ledger_path }}
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$MIGRATION_TAIL" =~ ^[0-9]{4,}$ ]]
+          [[ "$RELEASE_KIND" = code-only || "$RELEASE_KIND" = migration-bearing ]]
+          git fetch --no-tags origin main
+          execution_sha="$(git rev-parse origin/main)"
+          test "$execution_sha" = "$COMMIT_SHA"
+          latest_tail="$(find supabase/migrations -maxdepth 1 -type f -name '[0-9]*_*.sql' -print | sed -E 's#^.*/([0-9]+)_.*#\1#' | sort | tail -1)"
+          test "$latest_tail" = "$MIGRATION_TAIL"
+          if [ "$RELEASE_KIND" = migration-bearing ]; then
+            [[ "$MIGRATION_LEDGER_PATH" =~ ^\.github/production-migration-ledger/[0-9]+-[1-9][0-9]*-[a-f0-9]{40}-[a-f0-9]{64}\.json$ ]]
+            test -f "$MIGRATION_LEDGER_PATH"
+            ledger_commit="$(jq -er '.commit | select(test("^[a-f0-9]{40}$"))' "$MIGRATION_LEDGER_PATH")"
+            ledger_tail="$(jq -er '.migrations[-1].version | select(test("^[0-9]{4,}$"))' "$MIGRATION_LEDGER_PATH")"
+            test "$ledger_tail" = "$MIGRATION_TAIL"
+            git merge-base --is-ancestor "$ledger_commit" "$execution_sha"
+          else
+            test -z "$MIGRATION_LEDGER_PATH"
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${execution_sha}&branch=main&event=push&status=success&per_page=100" |
+            jq -e --arg sha "$execution_sha" 'any(.workflow_runs[]; .head_sha == $sha and .head_branch == "main" and .event == "push" and .conclusion == "success")' >/dev/null
+          echo "execution_sha=$execution_sha" >> "$GITHUB_OUTPUT"
+      - name: Check out verified release commit
+        env:
+          EXECUTION_SHA: ${{ steps.candidate.outputs.execution_sha }}
+        run: git checkout --detach "$EXECUTION_SHA"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm release:contract:check
+
+  release-production-application:
+    name: Deploy exact application commit and run bounded smoke
+    needs: verify-release-candidate
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    environment:
+      name: Production
+    env:
+      EXECUTION_SHA: ${{ needs.verify-release-candidate.outputs.execution_sha }}
+      RELEASE_KIND: ${{ inputs.release_kind }}
+      MIGRATION_TAIL: ${{ inputs.migration_tail }}
+      RELEASE_EVIDENCE_PATH: ${{ runner.temp }}/evidence/application-release.json
+      GITHUB_TOKEN: ${{ github.token }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      PRODUCTION_CUSTOM_DOMAIN: ${{ vars.PRODUCTION_CUSTOM_DOMAIN }}
+      PRODUCTION_SMOKE_SUPABASE_URL: ${{ vars.PRODUCTION_SMOKE_SUPABASE_URL }}
+      PRODUCTION_SMOKE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.PRODUCTION_SMOKE_SUPABASE_PUBLISHABLE_KEY }}
+      PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID: ${{ secrets.PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID }}
+      PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET: ${{ secrets.PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET }}
+      PRODUCTION_SMOKE_OWNER_ACCESS_JWT: ${{ secrets.PRODUCTION_SMOKE_OWNER_ACCESS_JWT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.verify-release-candidate.outputs.execution_sha }}
+      - name: Confirm pinned execution is still current main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$EXECUTION_SHA"
+          test "$(git rev-parse origin/main)" = "$EXECUTION_SHA"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm release:contract:check
+      - name: Install protected CA file
+        env:
+          PRODUCTION_MIGRATION_CA_CERT: ${{ secrets.PRODUCTION_MIGRATION_CA_CERT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          cert="$RUNNER_TEMP/production-ca.pem"
+          printf '%s' "$PRODUCTION_MIGRATION_CA_CERT" > "$cert"
+          echo "PGSSLROOTCERT=$cert" >> "$GITHUB_ENV"
+      - name: Strictly verify current Production schema
+        env:
+          PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
+        run: pnpm release:migration:verify
+      - name: Deploy, smoke, and recover application
+        run: pnpm release:application:run
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-application-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RELEASE_EVIDENCE_PATH }}
+          retention-days: 90
+          if-no-files-found: error

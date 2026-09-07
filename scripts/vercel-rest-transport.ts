@@ -62,6 +62,7 @@ export type VercelReadOnlyTransport = Readonly<{
   getJson(
     path: string,
     query?: Readonly<Record<string, string | number>>,
+    signal?: AbortSignal,
   ): Promise<unknown>;
 }>;
 
@@ -71,12 +72,14 @@ export type VercelRestTransport = VercelReadOnlyTransport &
       path: string,
       body?: unknown,
       query?: Readonly<Record<string, string | number>>,
+      signal?: AbortSignal,
     ): Promise<unknown>;
     postBytes(
       path: string,
       body: Uint8Array,
       headers: Readonly<Record<string, string>>,
       query?: Readonly<Record<string, string | number>>,
+      signal?: AbortSignal,
     ): Promise<void>;
   }>;
 
@@ -158,6 +161,7 @@ export function createVercelRestTransport({
     parseJson,
     path,
     query = {},
+    parentSignal,
   }: Readonly<{
     body?: BodyInit;
     headers?: Readonly<Record<string, string>>;
@@ -165,6 +169,7 @@ export function createVercelRestTransport({
     parseJson: boolean;
     path: string;
     query?: Readonly<Record<string, string | number>>;
+    parentSignal?: AbortSignal;
   }>): Promise<unknown> => {
       if (!path.startsWith("/") || path.startsWith("//") || /[?#]/.test(path)) {
         throw new VercelRestConfigurationError();
@@ -198,6 +203,9 @@ export function createVercelRestTransport({
       }
 
       const controller = new AbortController();
+      const abortFromParent = () => controller.abort();
+      parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+      if (parentSignal?.aborted) controller.abort();
       let timedOut = false;
       let timeout: ReturnType<typeof setTimeout> | undefined;
       const timeoutPromise = new Promise<never>((_resolve, reject) => {
@@ -253,14 +261,15 @@ export function createVercelRestTransport({
         }
       } finally {
         if (timeout !== undefined) clearTimeout(timeout);
+        parentSignal?.removeEventListener("abort", abortFromParent);
       }
   };
 
   return {
-    getJson(path, query = {}) {
-      return request({ method: "GET", parseJson: true, path, query });
+    getJson(path, query = {}, signal) {
+      return request({ method: "GET", parseJson: true, path, query, parentSignal: signal });
     },
-    postJson(path, value = undefined, query = {}) {
+    postJson(path, value = undefined, query = {}, signal) {
       let encoded: string | undefined;
       try {
         encoded = JSON.stringify(value);
@@ -281,9 +290,10 @@ export function createVercelRestTransport({
         parseJson: true,
         path,
         query,
+        parentSignal: signal,
       });
     },
-    async postBytes(path, body, headers, query = {}) {
+    async postBytes(path, body, headers, query = {}, signal) {
       if (!(body instanceof Uint8Array)) {
         throw new VercelRestConfigurationError();
       }
@@ -294,6 +304,7 @@ export function createVercelRestTransport({
         parseJson: false,
         path,
         query,
+        parentSignal: signal,
       });
     },
   };

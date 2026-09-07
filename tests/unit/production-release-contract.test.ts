@@ -99,18 +99,31 @@ describe("production release contract", () => {
       vercelSettingsReadStatus: "ready-official-rest-read-only",
       productionDeploymentWriter:
         ".github/workflows/production-application-release.yml",
+      productionApplicationRunner: "scripts/production-application-release.ts",
+      productionApplicationRunnerSha256:
+        "6cbaa7e9bddcf9db00e5fc364c3625a097fa129a58d422081f90f2b87815add3",
+      productionApplicationStateRunner:
+        "scripts/production-application-release-runner.ts",
+      productionApplicationStateRunnerSha256:
+        "c329cc1605f0a9eda2d6df16d55a7c2eae6c698ea56373e7044cf88813589b07",
+      productionDeploymentEvidenceWriter:
+        "scripts/production-deployment-evidence.ts",
+      productionDeploymentEvidenceWriterSha256:
+        "749bcc8f8bc3a494b8b526c005d28ce5169da312b8e9a17e35694ef30f2155f4",
+      productionDeploymentWriterSha256:
+        "13e5d3fe4aff5adf809ca1132b7af0434e25ee67d3de837f2e429849342cd0af",
       productionDeploymentModel: "scripts/production-deployment-release.ts",
       productionDeploymentModelSha256:
         "e491156ff423e03872d95175236f86f3cde936b3254fe81d706e53776a96d093",
       productionDeploymentStatus:
-        "blocked-external-prerequisites-and-staging-safety-verification",
+        "ready-fail-closed-pending-external-prerequisites",
       vercelDeploymentAdapter: "scripts/vercel-deployment-rest-adapter.ts",
       vercelDeploymentAdapterStatus:
-        "request-contract-ready-live-mutations-disabled",
+        "live-rest-contract-gated",
       stagedProductionSafetyStatus: "auto-assign-disablement-unverified",
       vercelRestTransport: "scripts/vercel-rest-transport.ts",
       vercelRestTransportSha256:
-        "1c10b85c3dd0d8b8712193edc33c3d1812bf8cc5f981e3adcc4f257da0ad3e65",
+        "92569dcc9e85de5efe083da1ddf7951326ae3793ccfe535fda7024aedde139d4",
       productionDeploymentSourceManifestBuilder:
         "scripts/production-deployment-source-manifest.ts",
       productionDeploymentSourceManifestSchema:
@@ -150,7 +163,7 @@ describe("production release contract", () => {
       productionSmokeAdapterSha256:
         "d976e4810f341690b3f8a236adb48f5c78a6a11660278e44da7fb316f30a53c6",
       productionSmokeRunnerSha256:
-        "20e4281d886258a139fc6fb04795b8f8ee075eff2993b489c9cab8a2bbcde045",
+        "284f6531ecea8693f7b1c68ae3d8f5c76b84ecacd4f00a77daa3242d2de5e800",
       productionRestoreModel: "scripts/production-restore-drill.ts",
       productionRestoreEvidenceSchema:
         ".github/production-restore-drill-evidence.schema.json",
@@ -159,24 +172,29 @@ describe("production release contract", () => {
       productionDeploymentEnabled: false,
       productionDeploymentRequiredSecrets: [
         "VERCEL_TOKEN",
+        "PRODUCTION_MIGRATION_DATABASE_URL",
+        "PRODUCTION_MIGRATION_CA_CERT",
         "PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID",
         "PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET",
+        "PRODUCTION_SMOKE_OWNER_ACCESS_JWT",
       ],
       productionDeploymentRequiredVariables: [
         "VERCEL_ORG_ID",
         "VERCEL_PROJECT_ID",
         "PRODUCTION_CUSTOM_DOMAIN",
+        "PRODUCTION_SMOKE_SUPABASE_URL",
+        "PRODUCTION_SMOKE_SUPABASE_PUBLISHABLE_KEY",
       ],
       productionDeploymentEvidenceSchema:
         ".github/production-deployment-evidence.schema.json",
       productionDeploymentEvidenceSchemaSha256:
         "850c9a9830611364d82d673ab2408b25fbff5573963cb77569e82bd010c84a1b",
       productionDeploymentSourceManifestBuilderSha256:
-        "2d6e5c5f805cf8a39ae186bebf63535bf128039d9b1b52ea6f478e879df90a67",
+        "589afce50b16f0d4e6896ad091b9621a96065ad6f2a15c7d9c16d7e95ed1405a",
       productionDeploymentSourceManifestSchemaSha256:
         "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
       vercelDeploymentAdapterSha256:
-        "e95dbbcd680c012ff5c56dc0aa5886a89b0ad9ef368f02a79ee27e31458cd014",
+        "fcea0fd520df434b1c549e0d7b848530c60b43b87711814dae6f6ff3ffa464c3",
       productionSmokeContractSha256:
         "0086cb94455b9b75eb092bb20e7fb2343952b843f6ca9e6b46f29ab0d35d9199",
       productionSmokeModelSha256:
@@ -508,6 +526,34 @@ describe("production release contract", () => {
     expect(workflow).toContain("inputs.mode == 'apply' && 'record' || 'recovery'");
     expect(workflow).not.toContain("if: always()");
     expect(workflow).not.toContain("supabase migration up");
+    expect(workflow).not.toMatch(
+      /vercel\s+(?:deploy|--prod)|supabase\s+(?:db\s+(?:reset|push)|migration\s+repair)/,
+    );
+  });
+
+  it("keeps application mutation behind exact-main, strict-schema, and Production gates", async () => {
+    const workflow = await readFile(
+      ".github/workflows/production-application-release.yml",
+      "utf8",
+    );
+    const candidate = workflow.indexOf("verify-release-candidate:");
+    const mutation = workflow.indexOf("release-production-application:");
+    const mutationSteps = workflow.indexOf("    steps:", mutation);
+
+    expect(candidate).toBeGreaterThan(-1);
+    expect(mutation).toBeGreaterThan(candidate);
+    expect(workflow.slice(0, mutation)).not.toContain("secrets.");
+    expect(workflow.slice(mutation, mutationSteps)).toContain(
+      "environment:\n      name: Production",
+    );
+    expect(workflow).toContain('test "$execution_sha" = "$COMMIT_SHA"');
+    expect(workflow).toContain(
+      'test "$(git rev-parse origin/main)" = "$EXECUTION_SHA"',
+    );
+    expect(workflow).toContain("pnpm release:migration:verify");
+    expect(workflow).toContain("pnpm release:application:run");
+    expect(workflow).toContain("production-application-evidence-");
+    expect(workflow).toContain("retention-days: 90");
     expect(workflow).not.toMatch(
       /vercel\s+(?:deploy|--prod)|supabase\s+(?:db\s+(?:reset|push)|migration\s+repair)/,
     );

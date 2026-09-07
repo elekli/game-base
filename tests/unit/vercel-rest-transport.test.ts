@@ -4,6 +4,7 @@ import {
   VercelRestConfigurationError,
   VercelRestHttpError,
   VercelRestMalformedJsonError,
+  VercelRestNetworkError,
   createVercelRestTransport,
 } from "../../scripts/vercel-rest-transport";
 
@@ -15,7 +16,7 @@ const config = {
 
 describe("Vercel REST mutation transport", () => {
   it("posts bounded JSON with the team scope and fixed authorization", async () => {
-    const fetchImpl = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
       new Response(JSON.stringify({ id: "dpl_Example" }), {
         headers: { "content-type": "application/json" },
         status: 200,
@@ -47,7 +48,7 @@ describe("Vercel REST mutation transport", () => {
   });
 
   it("posts without a body for mutation endpoints whose contract has no JSON payload", async () => {
-    const fetchImpl = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
       new Response(JSON.stringify({ id: "dpl_Example" }), { status: 200 }),
     );
     const transport = createVercelRestTransport({ ...config, fetchImpl });
@@ -70,7 +71,7 @@ describe("Vercel REST mutation transport", () => {
   });
 
   it("uploads exact bytes with caller-declared content headers", async () => {
-    const fetchImpl = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
       new Response(null, { status: 200 }),
     );
     const transport = createVercelRestTransport({ ...config, fetchImpl });
@@ -98,7 +99,7 @@ describe("Vercel REST mutation transport", () => {
   });
 
   it("rejects unsafe requests before fetch", async () => {
-    const fetchImpl = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
       new Response(null, { status: 200 }),
     );
     const transport = createVercelRestTransport({ ...config, fetchImpl });
@@ -141,5 +142,29 @@ describe("Vercel REST mutation transport", () => {
     expect(jsonError).toBeInstanceOf(VercelRestMalformedJsonError);
     expect(JSON.stringify(jsonError)).not.toContain(secretBody.metadata);
     expect(JSON.stringify(jsonError)).not.toContain("private_response_body");
+  });
+
+  it("aborts an in-flight mutation when its parent action is cancelled", async () => {
+    const fetchImpl = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("aborted", "AbortError")),
+            { once: true },
+          );
+        }),
+    );
+    const transport = createVercelRestTransport({ ...config, fetchImpl });
+    const controller = new AbortController();
+    const request = transport.postJson(
+      "/v13/deployments",
+      { target: "production" },
+      {},
+      controller.signal,
+    );
+    controller.abort();
+
+    await expect(request).rejects.toBeInstanceOf(VercelRestNetworkError);
   });
 });

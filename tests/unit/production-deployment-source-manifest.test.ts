@@ -15,6 +15,7 @@ import {
   canonicalizeProductionDeploymentSourceManifest,
   parseProductionGitTree,
   parseProductionDeploymentSourceManifest,
+  readProductionDeploymentSourceFileBytes,
   verifyProductionDeploymentSourceFileBytes,
 } from "../../scripts/production-deployment-source-manifest";
 
@@ -99,6 +100,13 @@ describe("production deployment source manifest", () => {
     expect(parseProductionDeploymentSourceManifest(result.canonicalJson)).toEqual(
       result.manifest,
     );
+    await expect(
+      readProductionDeploymentSourceFileBytes({
+        commitSha,
+        file: result.manifest.files[0]!,
+        repositoryRoot: root,
+      }),
+    ).resolves.toEqual(Buffer.from("committed\n"));
   });
 
   it("uses one byte-identical canonical JSON representation and fingerprints those bytes", () => {

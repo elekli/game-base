@@ -1,4 +1,4 @@
-import { access, readFile, readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
@@ -15,6 +15,12 @@ type ProductionReleaseContract = Readonly<{
   productionBranch: string;
   productionCustomDomain: string | null;
   productionDeploymentEnabled: boolean;
+  productionApplicationRunner: string;
+  productionApplicationRunnerSha256: string;
+  productionApplicationStateRunner: string;
+  productionApplicationStateRunnerSha256: string;
+  productionDeploymentEvidenceWriter: string;
+  productionDeploymentEvidenceWriterSha256: string;
   productionDeploymentEvidenceSchema: string;
   productionDeploymentEvidenceSchemaSha256: string;
   productionDeploymentModel: string;
@@ -27,6 +33,7 @@ type ProductionReleaseContract = Readonly<{
   productionDeploymentRequiredVariables: ReadonlyArray<string>;
   productionDeploymentStatus: string;
   productionDeploymentWriter: string;
+  productionDeploymentWriterSha256: string;
   productionRestoreEvidenceSchema: string;
   productionRestoreEvidenceSchemaSha256: string;
   productionRestoreModel: string;
@@ -129,10 +136,12 @@ const SOURCE_SCAN_EXCLUDED_DIRECTORIES = new Set([
 ]);
 const SOURCE_SCAN_AUTHORIZED_CONTRACT_FILES = new Set([
   "scripts/check-production-release-contract.ts",
+  "scripts/production-application-release.ts",
   "scripts/production-smoke-runner.ts",
   "scripts/vercel-deployment-rest-adapter.ts",
   "tests/unit/production-release-contract.test.ts",
   "tests/unit/vercel-deployment-rest-adapter.test.ts",
+  "tests/unit/vercel-rest-transport.test.ts",
 ]);
 
 export async function readRepositoryExecutableSources(
@@ -343,6 +352,34 @@ export async function checkProductionReleaseContract(root: string) {
     path.join(root, contract.productionDeploymentModel),
     "utf8",
   );
+  const productionApplicationWorkflow = await assertPinnedArtifact(
+    root,
+    contract.productionDeploymentWriter,
+    ".github/workflows/production-application-release.yml",
+    contract.productionDeploymentWriterSha256,
+    "Production application workflow",
+  );
+  await assertPinnedArtifact(
+    root,
+    contract.productionApplicationRunner,
+    "scripts/production-application-release.ts",
+    contract.productionApplicationRunnerSha256,
+    "Production application runner",
+  );
+  await assertPinnedArtifact(
+    root,
+    contract.productionApplicationStateRunner,
+    "scripts/production-application-release-runner.ts",
+    contract.productionApplicationStateRunnerSha256,
+    "Production application state runner",
+  );
+  await assertPinnedArtifact(
+    root,
+    contract.productionDeploymentEvidenceWriter,
+    "scripts/production-deployment-evidence.ts",
+    contract.productionDeploymentEvidenceWriterSha256,
+    "Production deployment evidence writer",
+  );
   const vercelSettingsReadAdapter = await readFile(
     path.join(root, contract.vercelSettingsReadAdapter),
     "utf8",
@@ -452,6 +489,10 @@ export async function checkProductionReleaseContract(root: string) {
       contract.productionDeploymentSourceManifestBuilderSha256,
       contract.productionDeploymentSourceManifestSchemaSha256,
       contract.productionDeploymentModelSha256,
+      contract.productionDeploymentWriterSha256,
+      contract.productionApplicationRunnerSha256,
+      contract.productionApplicationStateRunnerSha256,
+      contract.productionDeploymentEvidenceWriterSha256,
       contract.vercelDeploymentAdapterSha256,
       contract.vercelRestTransportSha256,
       contract.productionSmokeContractSha256,
@@ -468,16 +509,20 @@ export async function checkProductionReleaseContract(root: string) {
       contract.productionRestoreModelSha256,
       contract.productionRestoreEvidenceSchemaSha256,
     ]) === JSON.stringify([
-      "2d6e5c5f805cf8a39ae186bebf63535bf128039d9b1b52ea6f478e879df90a67",
+      "589afce50b16f0d4e6896ad091b9621a96065ad6f2a15c7d9c16d7e95ed1405a",
       "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
       "e491156ff423e03872d95175236f86f3cde936b3254fe81d706e53776a96d093",
-      "e95dbbcd680c012ff5c56dc0aa5886a89b0ad9ef368f02a79ee27e31458cd014",
-      "1c10b85c3dd0d8b8712193edc33c3d1812bf8cc5f981e3adcc4f257da0ad3e65",
+      "13e5d3fe4aff5adf809ca1132b7af0434e25ee67d3de837f2e429849342cd0af",
+      "6cbaa7e9bddcf9db00e5fc364c3625a097fa129a58d422081f90f2b87815add3",
+      "c329cc1605f0a9eda2d6df16d55a7c2eae6c698ea56373e7044cf88813589b07",
+      "749bcc8f8bc3a494b8b526c005d28ce5169da312b8e9a17e35694ef30f2155f4",
+      "fcea0fd520df434b1c549e0d7b848530c60b43b87711814dae6f6ff3ffa464c3",
+      "92569dcc9e85de5efe083da1ddf7951326ae3793ccfe535fda7024aedde139d4",
       "0086cb94455b9b75eb092bb20e7fb2343952b843f6ca9e6b46f29ab0d35d9199",
       "18fa525b8fdeac5430e70ca7164d42a55228e1b9b21981f92dffdac052ea4890",
       "ecc8b4b53f319f877a3e5dc50d9690e1a36d94d5ee123d81d33a4eb1820687f8",
       "f1cc8366f5dafa9b9aa28fa7334c9a2e4ffa555e6e62b7e0f09d7d31eb8998e3",
-      "20e4281d886258a139fc6fb04795b8f8ee075eff2993b489c9cab8a2bbcde045",
+      "284f6531ecea8693f7b1c68ae3d8f5c76b84ecacd4f00a77daa3242d2de5e800",
       "d976e4810f341690b3f8a236adb48f5c78a6a11660278e44da7fb316f30a53c6",
       "b2e22f7ffb8089ae408c201ef9da20ec5249ca4afc7256b74741bd232457486c",
       "bd090591c481088c9202b089ad5af2a4a8ce71b8282104fc4b3dd9329202ed98",
@@ -573,7 +618,7 @@ export async function checkProductionReleaseContract(root: string) {
     ).href
   );
   assertContract(
-    contract.vercelDeploymentAdapterStatus === "request-contract-ready-live-mutations-disabled" &&
+    contract.vercelDeploymentAdapterStatus === "live-rest-contract-gated" &&
       contract.stagedProductionSafetyStatus === "auto-assign-disablement-unverified" &&
       typeof adapterModule.buildCreateVercelDeploymentRequest === "function" &&
       typeof adapterModule.buildPromoteVercelDeploymentRequest === "function" &&
@@ -587,7 +632,7 @@ export async function checkProductionReleaseContract(root: string) {
   } catch (error) {
     mutationDisabled = error?.constructor?.name === "VercelDeploymentMutationDisabledError";
   }
-  assertContract(mutationDisabled, "Vercel REST adapter must fail closed before live mutation");
+  assertContract(mutationDisabled, "Vercel REST adapter must fail closed without an enabled runtime configuration");
   const disabledCreateArtifact =
     sourceManifestModule.canonicalizeProductionDeploymentSourceManifest({
       schemaVersion: 1,
@@ -597,9 +642,11 @@ export async function checkProductionReleaseContract(root: string) {
   let createDisabled = false;
   try {
     adapterModule.buildCreateVercelDeploymentRequest({
+      projectId: contract.vercelProjectId,
       projectName: contract.vercelProjectName,
       releaseIdentity: `production:${"a".repeat(40)}`,
       sourceManifestArtifact: disabledCreateArtifact,
+      stagedProductionSafetyVerified: false,
     });
   } catch (error) {
     createDisabled =
@@ -620,7 +667,7 @@ export async function checkProductionReleaseContract(root: string) {
   );
   assertContract(
     contract.productionDeploymentStatus ===
-      "blocked-external-prerequisites-and-staging-safety-verification" &&
+      "ready-fail-closed-pending-external-prerequisites" &&
       contract.productionSmokePrincipalStatus === "unresolved" &&
       contract.productionCustomDomain === null &&
       contract.productionDeploymentEnabled === false,
@@ -630,14 +677,19 @@ export async function checkProductionReleaseContract(root: string) {
     JSON.stringify(contract.productionDeploymentRequiredSecrets) ===
       JSON.stringify([
         "VERCEL_TOKEN",
+        "PRODUCTION_MIGRATION_DATABASE_URL",
+        "PRODUCTION_MIGRATION_CA_CERT",
         "PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID",
         "PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET",
+        "PRODUCTION_SMOKE_OWNER_ACCESS_JWT",
       ]) &&
       JSON.stringify(contract.productionDeploymentRequiredVariables) ===
         JSON.stringify([
           "VERCEL_ORG_ID",
           "VERCEL_PROJECT_ID",
           "PRODUCTION_CUSTOM_DOMAIN",
+          "PRODUCTION_SMOKE_SUPABASE_URL",
+          "PRODUCTION_SMOKE_SUPABASE_PUBLISHABLE_KEY",
         ]),
     "Production application deployment prerequisite names must stay fixed and secret-free",
   );
@@ -653,13 +705,19 @@ export async function checkProductionReleaseContract(root: string) {
         contract.productionDeploymentEvidenceSchemaSha256,
     "Production deployment evidence schema fingerprint does not match the approved redaction boundary",
   );
-  let applicationWriterExists = true;
-  try {
-    await access(path.join(root, contract.productionDeploymentWriter));
-  } catch {
-    applicationWriterExists = false;
-  }
-  assertContract(!applicationWriterExists, "disabled Production application deployment writer must not be executable");
+  assertContract(
+    productionApplicationWorkflow.includes("verify-release-candidate:") &&
+      productionApplicationWorkflow.includes("environment:\n      name: Production") &&
+      !productionApplicationWorkflow.slice(
+        0,
+        productionApplicationWorkflow.indexOf("release-production-application:"),
+      ).includes("secrets.") &&
+      productionApplicationWorkflow.includes("pnpm release:application:run") &&
+      productionApplicationWorkflow.includes("pnpm release:migration:verify") &&
+      productionApplicationWorkflow.includes("group: production-release") &&
+      !VERCEL_CLI_MUTATION.test(productionApplicationWorkflow),
+    "Production application workflow must keep candidate verification secret-free and mutation protected",
+  );
   const evidenceFields = [
     "schemaVersion",
     "repository",

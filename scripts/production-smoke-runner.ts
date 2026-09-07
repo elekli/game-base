@@ -329,10 +329,10 @@ async function readBoundedJson(response: Response, signal: AbortSignal) {
   }
 }
 
-export function createProductionSmokeRunner(
+function createProductionSmokeRunnerDependencies(
   config: ProductionSmokeRunnerConfig,
   fetchImpl: typeof fetch = fetch,
-) {
+): ProductionSmokeRunnerDependencies {
   if (
     !config ||
     !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(config.customDomain) ||
@@ -409,6 +409,86 @@ export function createProductionSmokeRunner(
       return "passed";
     },
   };
+  return dependencies;
+}
+
+export function createProductionSmokeActionRunner(
+  config: ProductionSmokeRunnerConfig,
+  fetchImpl: typeof fetch = fetch,
+) {
+  const dependencies = createProductionSmokeRunnerDependencies(
+    config,
+    fetchImpl,
+  );
+  const retryTransport = async <T>(
+    signal: AbortSignal,
+    operation: () => Promise<T>,
+  ) => {
+    for (let attempt = 1; attempt <= MAX_TRANSPORT_ATTEMPTS; attempt += 1) {
+      try {
+        return await operation();
+      } catch (error) {
+        if (
+          !(error instanceof ProductionSmokeTransportError) ||
+          signal.aborted ||
+          attempt === MAX_TRANSPORT_ATTEMPTS
+        ) throw error;
+      }
+    }
+    throw new ProductionSmokeTransportError(
+      "production smoke transport retry bound exceeded",
+    );
+  };
+  return async (
+    action: ProductionSmokeCanaryAction,
+    executionSha: string,
+    signal: AbortSignal,
+  ): Promise<ProductionSmokeCanaryEventPayload> => {
+    if (action.kind === "verify-private-storage-denial") {
+      try {
+        return {
+          kind: "private-storage-denial-observed",
+          status: await retryTransport(
+            signal,
+            () => dependencies.checkPrivateStorageDenial(signal),
+          ),
+        };
+      } catch (error) {
+        if (signal.aborted) throw error;
+        return {
+          kind: "operation-failed",
+          safeDetail: error instanceof ProductionSmokeTransportError
+            ? error.safeDetail
+            : "private Storage denial check failed",
+        };
+      }
+    }
+    const externalChecks =
+      action.kind === "run-fixed-read-checks"
+        ? await retryTransport(
+            signal,
+            () => dependencies.runBoundaryChecks(signal),
+          )
+        : undefined;
+    return routeEvent(
+      action,
+      await retryTransport(
+        signal,
+        () => dependencies.callRoute(action, executionSha, signal),
+      ),
+      externalChecks,
+    );
+  };
+}
+
+export function createProductionSmokeRunner(
+  config: ProductionSmokeRunnerConfig,
+  fetchImpl: typeof fetch = fetch,
+) {
+  const dependencies = createProductionSmokeRunnerDependencies(
+    config,
+    fetchImpl,
+  );
   return (input: Readonly<{ executionSha: string; generation: string }>) =>
     runProductionSmokeCanary(input, dependencies);
 }
