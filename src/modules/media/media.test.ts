@@ -8,6 +8,7 @@ import {
   MediaFinalizeUnavailableError,
   MediaUploadIdempotencyConflictError,
   MediaStorageUnavailableError,
+  MediaStorageQuotaExceededError,
   type BeginMediaUploadResult,
 } from "./index";
 import { createMediaService } from "./internal/create-media-service";
@@ -154,6 +155,33 @@ function command(overrides: Partial<Readonly<{ purpose: "gallery_image" | "custo
 }
 
 describe("媒體公開介面", () => {
+  it.each([
+    [749, "ok"],
+    [750, "warning"],
+    [900, "stop_writes"],
+  ] as const)("容量使用 %i／1000 時回報 %s", async (usedBytes, expected) => {
+    const service = createMediaService({
+      store: createInMemoryMediaStore({ activeGameIds: [gameId] }),
+      objects: objectStore({ bytes: png(), mimeType: "image/png" }),
+      readCapacitySnapshot: async () => ({ usedBytes, capacityBytes: 1_000 }),
+    });
+    await expect(service.reconcileMedia()).resolves.toMatchObject({ quotaState: expected });
+  });
+
+  it("容量達 90% 或快照無效時在建立 ingest／Storage grant 前 fail closed", async () => {
+    const base = createInMemoryMediaStore({ activeGameIds: [gameId] });
+    const begin = vi.fn(base.begin);
+    const createUploadGrant = vi.fn(objectStore({ bytes: png(), mimeType: "image/png" }).createUploadGrant);
+    const service = createMediaService({
+      store: { ...base, begin },
+      objects: { ...objectStore({ bytes: png(), mimeType: "image/png" }), createUploadGrant },
+      readCapacitySnapshot: async () => ({ usedBytes: 90, capacityBytes: 100 }),
+    });
+    await expect(service.beginMediaUpload(owner, command())).rejects.toBeInstanceOf(MediaStorageQuotaExceededError);
+    expect(begin).not.toHaveBeenCalled();
+    expect(createUploadGrant).not.toHaveBeenCalled();
+  });
+
   it("unbound reconcile callback 仍會透過閉包喚醒縮圖", async () => {
     const base = createInMemoryMediaStore({ activeGameIds: [gameId] });
     const claimThumbnail = vi.fn<MediaStore["claimThumbnail"]>(async () => ({ status: "not_ready" }));

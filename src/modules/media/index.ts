@@ -30,6 +30,7 @@ export {
   MediaStoredObjectInvalidError,
   MediaAssetUnavailableError,
   MediaStorageUnavailableError,
+  MediaStorageQuotaExceededError,
   MediaReadUnavailableError,
   MediaThumbnailUnavailableError,
   MediaThumbnailUnsupportedError,

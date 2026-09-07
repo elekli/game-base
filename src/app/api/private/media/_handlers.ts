@@ -83,6 +83,12 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
       }
     });
   };
+  const authorizedBoundary = <Result extends object>(request: Request, operation: Parameters<typeof handlePrivateRequest<Result>>[1]["operation"]) =>
+    boundary(request, async (owner) => {
+      const result = await operation(owner);
+      scheduleReconcile(request);
+      return result;
+    });
   return {
     options(request: Request) {
       const origin = corsOrigin(request);
@@ -98,17 +104,15 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async begin(request: Request) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = beginSchema.safeParse(await json(request));
         if (!parsed.success) throw new PrivateRequestInputError("媒體上傳參數無效。");
-        const result = await dependencies.service.beginMediaUpload(owner, parsed.data);
-        scheduleReconcile(request);
-        return result;
+        return dependencies.service.beginMediaUpload(owner, parsed.data);
       }));
     },
     async finalize(request: Request) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = finalizeSchema.safeParse(await json(request));
         if (!parsed.success) throw new PrivateRequestInputError("媒體完成確認參數無效。");
         const result = await dependencies.service.finalizeMediaUpload(owner, parsed.data);
@@ -123,20 +127,18 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async original(request: Request, assetId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(assetId);
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
         const parameters = new URL(request.url).searchParams;
         const query = originalReadSchema.safeParse(Object.fromEntries(parameters));
         if (parameters.size > 1 || (!query.success && parameters.size > 0)) throw new PrivateRequestInputError("媒體讀取參數無效。");
-        const result = await dependencies.service.issueOriginalRead(owner, { assetId: parsed.data, disposition: query.success ? query.data.disposition : "attachment" });
-        scheduleReconcile(request);
-        return result;
+        return dependencies.service.issueOriginalRead(owner, { assetId: parsed.data, disposition: query.success ? query.data.disposition : "attachment" });
       }));
     },
     async thumbnail(request: Request, assetId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(assetId);
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
         return dependencies.service.issueThumbnailRead(owner, { assetId: parsed.data });
@@ -144,7 +146,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async list(request: Request, gameId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(gameId);
         if (!parsed.success) throw new PrivateRequestInputError("遊戲參數無效。");
         const result = await dependencies.service.listGameMedia(owner, { gameId: parsed.data });
@@ -156,7 +158,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async metadata(request: Request, assetId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsedId = assetIdSchema.safeParse(assetId);
         const parsed = metadataSchema.safeParse(await json(request));
         if (!parsedId.success || !parsed.success) throw new PrivateRequestInputError("媒體說明參數無效。");
@@ -165,7 +167,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async cover(request: Request, gameId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsedGame = assetIdSchema.safeParse(gameId);
         const parsed = coverSchema.safeParse(await json(request));
         if (!parsedGame.success || !parsed.success) throw new PrivateRequestInputError("封面選擇參數無效。");
@@ -176,7 +178,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async retryThumbnail(request: Request, assetId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(assetId);
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
         const result = await dependencies.service.retryThumbnail(owner, { assetId: parsed.data });
@@ -189,7 +191,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async remove(request: Request, assetId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(assetId);
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
         return dependencies.service.removeMedia(owner, { assetId: parsed.data });
@@ -197,7 +199,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async restore(request: Request, assetId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(assetId);
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
         return dependencies.service.restoreMedia(owner, { assetId: parsed.data });

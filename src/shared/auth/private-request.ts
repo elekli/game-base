@@ -85,6 +85,7 @@ export async function handlePrivateRequest<Result extends object>(
       const status = error.code === "media_file_empty" || error.code === "media_file_too_large" || error.code === "media_stored_object_invalid" ? 400
         : error.code === "media_asset_unavailable" ? 404
           : error.code === "media_upload_idempotency_conflict" || error.code === "media_game_unavailable" || error.code === "media_upload_incomplete" ? 409
+            : error.code === "media_storage_quota_exceeded" ? 507
             : 503;
       if (status >= 500) await observeFailureWithoutChangingResponse(requestId, () => dependencies.onUnhandledFailure({ errorCode: error.code, requestId }));
       return safeErrorResponse(status, error.message, requestId);

@@ -39,6 +39,10 @@ export class MediaBeginUnavailableError extends MediaOperationError {
   constructor() { super("media_begin_unavailable", "媒體上傳暫時無法開始，請重試。"); this.name = "MediaBeginUnavailableError"; }
 }
 
+export class MediaStorageQuotaExceededError extends MediaOperationError {
+  constructor() { super("media_storage_quota_exceeded", "媒體儲存空間已達安全上限，暫停新增檔案。"); this.name = "MediaStorageQuotaExceededError"; }
+}
+
 export class MediaAssetUnavailableError extends MediaOperationError {
   constructor() { super("media_asset_unavailable", "找不到可讀取的媒體原檔。"); this.name = "MediaAssetUnavailableError"; }
 }

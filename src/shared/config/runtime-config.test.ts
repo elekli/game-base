@@ -31,6 +31,16 @@ describe("parseRuntimeConfig", () => {
     });
   });
 
+  it("驗證並輸出由環境注入的媒體容量快照", () => {
+    expect(parseRuntimeConfig({
+      ...validPreviewEnvironment,
+      MEDIA_STORAGE_USED_BYTES: "805306368",
+      MEDIA_STORAGE_CAPACITY_BYTES: "1073741824",
+    }).mediaStorageCapacity).toEqual({ usedBytes: 805306368, capacityBytes: 1073741824 });
+    expect(() => parseRuntimeConfig({ ...validPreviewEnvironment, MEDIA_STORAGE_USED_BYTES: "1" })).toThrow(RuntimeConfigError);
+    expect(() => parseRuntimeConfig({ ...validPreviewEnvironment, MEDIA_STORAGE_USED_BYTES: "secret", MEDIA_STORAGE_CAPACITY_BYTES: "100" })).toThrow(RuntimeConfigError);
+  });
+
   it("accepts a local Supabase and transaction-pooler binding", () => {
     const config = parseRuntimeConfig({
       ...validPreviewEnvironment,

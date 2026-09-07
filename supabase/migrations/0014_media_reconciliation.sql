@@ -51,8 +51,15 @@ deferrable initially deferred for each row execute function app_private.assert_m
 
 alter table app_private.media_reconciliation_runs enable row level security;
 alter table app_private.media_cleanup_jobs enable row level security;
-create policy runtime_media_reconciliation_runs on app_private.media_reconciliation_runs for all to app_runtime using (true) with check (true);
-create policy runtime_media_cleanup_jobs on app_private.media_cleanup_jobs for all to app_runtime using (true) with check (true);
+create policy runtime_media_reconciliation_runs_select on app_private.media_reconciliation_runs for select to app_runtime using (true);
+create policy runtime_media_reconciliation_runs_insert on app_private.media_reconciliation_runs for insert to app_runtime with check (true);
+create policy runtime_media_reconciliation_runs_update on app_private.media_reconciliation_runs for update to app_runtime using (true) with check (true);
+create policy runtime_media_cleanup_jobs_select on app_private.media_cleanup_jobs for select to app_runtime using (true);
+create policy runtime_media_cleanup_jobs_insert on app_private.media_cleanup_jobs for insert to app_runtime with check (true);
+create policy runtime_media_cleanup_jobs_update on app_private.media_cleanup_jobs for update to app_runtime using (true) with check (true);
+
+revoke delete on app_private.media_reconciliation_runs, app_private.media_cleanup_jobs
+  from app_runtime, anon, authenticated, service_role;
 
 revoke execute on function app_private.assert_media_cleanup_job() from public, anon, authenticated, service_role;
 

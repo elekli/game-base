@@ -11,4 +11,5 @@ const database = createDatabase(config.databaseUrl);
 export const mediaService = createMediaService({
   store: new PostgresMediaStore(database.db),
   objects: new SupabaseMediaObjectStore({ supabaseUrl: config.supabase.url, secretKey: config.supabase.secretKey, bucket: "game-media" }),
+  readCapacitySnapshot: async () => config.mediaStorageCapacity,
 });

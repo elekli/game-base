@@ -4,6 +4,7 @@ import { NamedError } from "@/shared/errors/named-error";
 import { deploymentBindings } from "./deployment-bindings";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const byteCountSchema = z.string().regex(/^\d+$/).transform(Number).refine(Number.isSafeInteger);
 
 const environmentSchema = z.object({
   VERCEL_ENV: z.enum(["development", "preview", "production"]),
@@ -26,6 +27,8 @@ const environmentSchema = z.object({
   CLOUDFLARE_ACCESS_JWKS_URL: z.url(),
   OWNER_EMAIL: z.email(),
   OWNER_SUB: z.string().trim().min(1),
+  MEDIA_STORAGE_USED_BYTES: byteCountSchema.optional(),
+  MEDIA_STORAGE_CAPACITY_BYTES: byteCountSchema.optional(),
 });
 
 export class RuntimeConfigError extends NamedError {
@@ -100,10 +103,16 @@ export function parseRuntimeConfig(
   assertEqual(issuer.protocol === "https:" || allowsLocalDevelopmentAuth, true);
   assertEqual(jwksUrl.protocol === "https:" || allowsLocalDevelopmentAuth, true);
   assertEqual(jwksUrl.origin, issuer.origin);
+  assertEqual(env.MEDIA_STORAGE_USED_BYTES === undefined, env.MEDIA_STORAGE_CAPACITY_BYTES === undefined);
+  if (env.MEDIA_STORAGE_CAPACITY_BYTES !== undefined) assertEqual(env.MEDIA_STORAGE_CAPACITY_BYTES > 0, true);
 
   return {
     environment: env.VERCEL_ENV,
     databaseUrl: env.DATABASE_URL,
+    mediaStorageCapacity: env.MEDIA_STORAGE_USED_BYTES === undefined ? null : {
+      usedBytes: env.MEDIA_STORAGE_USED_BYTES,
+      capacityBytes: env.MEDIA_STORAGE_CAPACITY_BYTES as number,
+    },
     cloudflare: {
       audience: env.CLOUDFLARE_ACCESS_AUDIENCE,
       issuer: env.CLOUDFLARE_ACCESS_ISSUER,

@@ -4,6 +4,7 @@ import { serializeBootstrapLogEvent } from "@/shared/observability/structured-lo
 import { serializeLogEvent } from "@/shared/observability/structured-log";
 import { mediaReconcileEvents } from "@/modules/media/internal/reconcile-observability";
 import type { MediaReconcileResult } from "@/modules/media/internal/types";
+import { mediaService } from "@/app/media/service";
 
 export function getPrivateMediaDependencies() {
   const config = getRuntimeConfig();
@@ -21,6 +22,7 @@ export function getPrivateMediaDependencies() {
     verifyAccessToken: getProductionAccessTokenVerifier(config.cloudflare),
     onAccessDenied: ({ requestId }: { requestId: string }) => console.warn(serializeBootstrapLogEvent({ event: "access_denied", level: "warn", requestId, operation: "media", errorCode: "access_denied", resourceType: "media", resourceId: null, attempt: null, durationMs: null })),
     onUnhandledFailure: ({ requestId, errorCode }: { requestId: string; errorCode: string }) => console.error(serializeBootstrapLogEvent({ event: "private_operation_failed", level: "error", requestId, operation: "media", errorCode, resourceType: "media", resourceId: null, attempt: null, durationMs: null })),
+    reconcileMedia: mediaService.reconcileMedia,
     onReconcile,
   } as const;
 }

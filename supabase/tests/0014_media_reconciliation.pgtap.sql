@@ -1,5 +1,5 @@
 begin;
-select plan(9);
+select plan(11);
 
 select has_table('app_private', 'media_reconciliation_runs', '每日 reconcile run 狀態帳存在');
 select has_table('app_private', 'media_cleanup_jobs', '可重試 cleanup job 狀態帳存在');
@@ -23,6 +23,8 @@ select extensions.throws_like(
 );
 
 select ok(has_table_privilege('app_runtime', 'app_private.media_reconciliation_runs', 'select,insert,update'), 'runtime 只經 RLS policy 使用 reconcile 狀態帳');
+select ok(not has_table_privilege('app_runtime', 'app_private.media_reconciliation_runs', 'delete'), 'runtime 不可刪除 reconcile 狀態帳');
+select ok(not has_table_privilege('app_runtime', 'app_private.media_cleanup_jobs', 'delete'), 'runtime 不可刪除 cleanup 狀態帳');
 select ok(not has_table_privilege('anon', 'app_private.media_cleanup_jobs', 'select'), 'anon 不可讀 cleanup 狀態帳');
 
 reset role;

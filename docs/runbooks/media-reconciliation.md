@@ -27,3 +27,6 @@ MVP 不永久刪除 owner content。finalized original、資產、軟移除資�
 以 `media_reconcile_completed`、`media_reconcile_skipped`、`media_reconcile_failed`、`media_cleanup_completed`、`media_cleanup_failed` 與 quota 事件查 Vercel log。事件只含 request ID、計數、命名 error code 與環境；禁止複製 Authorization、Cookie、secret、signed URL、檔名或 Storage path。
 
 遇到 `media_cleanup_failed` 時，不手動掃描／刪除 bucket。先確認對應 job 仍為 failed、attempt 仍為 `cleanup_pending`，等待下一次受驗證 reconcile 重試。若反覆失敗，先修 Storage binding 或容量根因，再重試；不可改寫 attempt identity 或刪除 ledger。
+# 容量快照
+
+部署必須注入 `MEDIA_STORAGE_USED_BYTES` 與 `MEDIA_STORAGE_CAPACITY_BYTES`，兩者均為非負整數 byte，且容量必須大於 0。這是經營者核對 Supabase 用量後更新的已驗證快照；任一欄缺漏、格式無效或讀取失敗時，新上傳一律 fail closed。使用率達 75% 產生 warning，達 90% 暫停新寫入；既有讀取、reconcile 與 cleanup 繼續運作。

@@ -87,6 +87,11 @@ export type MediaReconcileResult = Readonly<{
   quotaState: "ok" | "warning" | "stop_writes";
 }>;
 
+export type MediaCapacitySnapshot = Readonly<{
+  usedBytes: number;
+  capacityBytes: number;
+}>;
+
 export type MediaStore = Readonly<{
   begin(command: BeginMediaUploadCommand, reserved: Readonly<{ ingestId: string; assetId: string; objectPath: string; staleAfter: string }>): Promise<BeginMediaRecord>;
   renewGrant(idempotencyKey: string, objectPath: string, staleAfter: string): Promise<void>;

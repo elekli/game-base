@@ -12,12 +12,13 @@ import {
   MediaUploadIncompleteError,
   MediaAssetUnavailableError,
   MediaStorageUnavailableError,
+  MediaStorageQuotaExceededError,
   MediaReadUnavailableError,
   MediaThumbnailUnavailableError,
   MediaThumbnailUnsupportedError,
 } from "./errors";
 import { identifyAttachmentMime, validateRasterImage } from "./image-header";
-import type { MediaIngest, MediaObjectStore, MediaReconcileResult, MediaStore, ValidatedMediaObject } from "./types";
+import type { MediaCapacitySnapshot, MediaIngest, MediaObjectStore, MediaReconcileResult, MediaStore, ValidatedMediaObject } from "./types";
 import { transformThumbnail } from "./thumbnail-transform";
 
 export type InternalMediaService = MediaService & Readonly<{
@@ -43,9 +44,25 @@ async function validateStoredObject(objects: MediaObjectStore, ingest: MediaInge
   return { actualMimeType: image.mimeType, byteSize: metadata.byteSize, width: image.width, height: image.height };
 }
 
-export function createMediaService(dependencies: Readonly<{ store: MediaStore; objects: MediaObjectStore; now?: () => Date; sleep?: (milliseconds: number) => Promise<void> }>): InternalMediaService {
+export function createMediaService(dependencies: Readonly<{
+  store: MediaStore;
+  objects: MediaObjectStore;
+  readCapacitySnapshot?: () => Promise<MediaCapacitySnapshot | null>;
+  now?: () => Date;
+  sleep?: (milliseconds: number) => Promise<void>;
+}>): InternalMediaService {
   const now = dependencies.now ?? (() => new Date());
   const sleep = dependencies.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+  const quotaState = async (): Promise<MediaReconcileResult["quotaState"]> => {
+    if (!dependencies.readCapacitySnapshot) return "ok";
+    try {
+      const snapshot = await dependencies.readCapacitySnapshot();
+      if (!snapshot || !Number.isSafeInteger(snapshot.usedBytes) || snapshot.usedBytes < 0
+        || !Number.isSafeInteger(snapshot.capacityBytes) || snapshot.capacityBytes <= 0) return "stop_writes";
+      const usage = snapshot.usedBytes / snapshot.capacityBytes;
+      return usage >= 0.9 ? "stop_writes" : usage >= 0.75 ? "warning" : "ok";
+    } catch { return "stop_writes"; }
+  };
   const processThumbnail = async (assetId: string): Promise<void> => {
     for (let retry = 0; retry < 3; retry += 1) {
       const token = randomUUID();
@@ -70,7 +87,8 @@ export function createMediaService(dependencies: Readonly<{ store: MediaStore; o
   };
   const reconcileMedia = async (): Promise<MediaReconcileResult> => {
     const runToken = randomUUID();
-    const empty = { thumbnailsWoken: 0, cleanupCleaned: 0, cleanupFailed: 0, quotaState: "ok" as const };
+    const currentQuotaState = await quotaState();
+    const empty = { thumbnailsWoken: 0, cleanupCleaned: 0, cleanupFailed: 0, quotaState: currentQuotaState };
     try {
       if (!await dependencies.store.claimReconciliationRun(runToken)) return { status: "skipped", ...empty };
       const assets = await dependencies.store.findReconcileThumbnails(10);
@@ -92,7 +110,7 @@ export function createMediaService(dependencies: Readonly<{ store: MediaStore; o
         }
       }
       await dependencies.store.completeReconciliationRun(runToken);
-      return { status: "completed", thumbnailsWoken: assets.length, cleanupCleaned, cleanupFailed, quotaState: "ok" };
+      return { status: "completed", thumbnailsWoken: assets.length, cleanupCleaned, cleanupFailed, quotaState: currentQuotaState };
     } catch { return { status: "failed", ...empty }; }
   };
   return {
@@ -101,6 +119,7 @@ export function createMediaService(dependencies: Readonly<{ store: MediaStore; o
       try {
         assertMediaFileSize(command.declaredByteSize);
         if (!command.originalFileName.trim() || !command.declaredMimeType.trim()) throw new MediaStoredObjectInvalidError();
+        if (await quotaState() === "stop_writes") throw new MediaStorageQuotaExceededError();
         const ingestId = randomUUID();
         const assetId = randomUUID();
         const objectPath = `originals/${assetId}/${randomUUID()}`;
