@@ -6,6 +6,28 @@
   "productionEnvironment": "Production",
   "vercelProjectId": "prj_iTlWeDkcKItHTKYIayoNjQQ0vHec",
   "vercelProjectName": "game-base",
+  "vercelTeamId": "team_vpaufHhAabxSup7QLCbCGwlF",
+  "vercelDeploymentCliCandidateVersion": "59.11.7",
+  "vercelDeploymentCliStatus": "blocked-security-audit",
+  "vercelDeploymentAdapterEvaluation": ".github/vercel-deployment-adapter-evaluation.json",
+  "productionDeploymentWriter": ".github/workflows/production-application-release.yml",
+  "productionDeploymentModel": "scripts/production-deployment-release.ts",
+  "productionDeploymentStatus": "blocked-external-prerequisites-and-deployment-adapter",
+  "productionSmokePrincipalStatus": "unresolved",
+  "productionCustomDomain": null,
+  "productionDeploymentEnabled": false,
+  "productionDeploymentRequiredSecrets": [
+    "VERCEL_TOKEN",
+    "PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID",
+    "PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET"
+  ],
+  "productionDeploymentRequiredVariables": [
+    "VERCEL_ORG_ID",
+    "VERCEL_PROJECT_ID",
+    "PRODUCTION_CUSTOM_DOMAIN"
+  ],
+  "productionDeploymentEvidenceSchema": ".github/production-deployment-evidence.schema.json",
+  "productionDeploymentEvidenceSchemaSha256": "d5438760d86aff69cb7dc46573941e0a4d16302257155b5f9a61c018c6833bdc",
   "supabaseProjectRef": "wbtyuvufhrhybquzwfip",
   "supabaseRegion": "ap-south-1",
   "supabaseGitProductionBranch": "production-deploy-disabled-use-github-actions",

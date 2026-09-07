@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-09-07",
+  "candidatePackage": "vercel",
+  "candidateVersion": "59.11.7",
+  "candidateNodeEngine": ">= 18",
+  "requiredCommandsPresent": ["deploy --prod --skip-domain", "promote", "rollback"],
+  "audit": {
+    "critical": 1,
+    "high": 18,
+    "vulnerablePackages": ["js-yaml", "minimatch", "path-to-regexp", "tar", "undici"],
+    "sampledVersionsWithCriticalOrHigh": ["55.0.0", "56.5.0", "57.0.0", "58.11.0", "59.11.7"]
+  },
+  "decision": "blocked-no-executable-deployment-cli",
+  "nextAdapter": "official-rest-api-or-security-cleared-exact-cli"
+}
