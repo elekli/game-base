@@ -11,6 +11,7 @@ import {
 } from "../../scripts/production-restore-drill";
 import {
   createProductionRestoreExecutor,
+  ProductionRestoreCommandError,
   runBoundedCommand,
   type ProductionRestoreCommandInvocation,
 } from "../../scripts/production-restore-executor";
@@ -40,7 +41,69 @@ afterEach(async () => {
   })));
 });
 
+async function captureCommandFailure(
+  purpose: ProductionRestoreCommandInvocation["purpose"],
+  stderr: string,
+) {
+  let failure: unknown;
+  try {
+    await runBoundedCommand({
+      purpose,
+      program: "pnpm",
+      argv: ["exec", "node", "-e", `process.stderr.write(${JSON.stringify(stderr)}); process.exit(1)`],
+      cwd: process.cwd(),
+      environmentNames: [],
+      timeoutMs: 1_000,
+      maxOutputBytes: 1_024,
+    }, {});
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(ProductionRestoreCommandError);
+  return failure as ProductionRestoreCommandError;
+}
+
 describe("production restore executor", () => {
+  it.each([
+    ["permission failure", "pg_restore: error: COPY failed: ERROR: permission denied for table owner_private_game", "permission-denied"],
+    ["foreign-key failure", "pg_restore: error: COPY failed: ERROR: owner row violates foreign key constraint owner_relation", "constraint-violation"],
+    ["not-null failure", "pg_restore: error: COPY failed: ERROR: null value in column owner_private_field violates not-null constraint", "constraint-violation"],
+    ["duplicate data", "pg_restore: error: COPY failed: ERROR: duplicate key value violates unique constraint owner_private_key", "duplicate-data"],
+    ["repository trigger invariant", "pg_restore: error: COPY failed: ERROR: verified media derivative violates ledger contract", "trigger-invariant"],
+    ["schema drift", "pg_restore: error: could not execute query: ERROR: relation owner_private_game does not exist", "schema-mismatch"],
+    ["incompatible archive", "pg_restore: error: unsupported version in file header", "archive-incompatible"],
+    ["target connection failure", "pg_restore: error: connection to server at private-host failed", "target-unreachable"],
+    ["unknown database rejection", "pg_restore: error: could not execute query: ERROR: owner private payload", "database-rejection"],
+    [
+      "private context decoy",
+      "pg_restore: error: COPY failed for table owner: ERROR: invalid input syntax for type uuid\nCONTEXT: COPY owner, line 1: permission denied",
+      "database-rejection",
+    ],
+    [
+      "quoted schema identifier",
+      "pg_restore: error: could not execute query: ERROR: relation \"media asset\" does not exist",
+      "schema-mismatch",
+    ],
+    [
+      "quoted error marker decoy",
+      "pg_restore: error: COPY failed for table \"ERROR: permission denied\": ERROR: invalid input syntax for type uuid",
+      "database-rejection",
+    ],
+  ])("classifies %s without echoing command output", async (_label, privateDetail, category) => {
+    const failure = await captureCommandFailure("restore-dump", privateDetail);
+
+    expect(failure.safeDetail).toBe(`restore-dump failed (${category})`);
+    expect(failure.message).not.toContain(privateDetail);
+  });
+
+  it("does not classify command output outside the restore boundary", async () => {
+    const privateDetail = "permission denied for owner_private_integrity_table";
+    const failure = await captureCommandFailure("verify-integrity", privateDetail);
+
+    expect(failure.safeDetail).toBe("verify-integrity failed");
+    expect(failure.message).not.toContain(privateDetail);
+  });
+
   it("waits for a timed-out process group to exit before rejecting", async () => {
     await expect(runBoundedCommand({
       purpose: "verify-integrity",
