@@ -38,6 +38,16 @@ type ProductionReleaseContract = Readonly<{
   productionSmokeRunnerSha256: string;
   productionSmokeRunnerStatus: string;
   productionSmokePrincipalStatus: string;
+  releaseSmokeAccessTokenVerifier: string;
+  releaseSmokeAccessTokenVerifierSha256: string;
+  releaseSmokeDeploymentBindings: string;
+  releaseSmokeDeploymentBindingsSha256: string;
+  releaseSmokeHandler: string;
+  releaseSmokeHandlerSha256: string;
+  releaseSmokeProductionAccessTokenVerifier: string;
+  releaseSmokeProductionAccessTokenVerifierSha256: string;
+  releaseSmokeRoute: string;
+  releaseSmokeRouteSha256: string;
   productionEnvironment: string;
   productionSchemaWriter: string;
   repository: string;
@@ -216,6 +226,61 @@ async function assertPinnedArtifact(
   return text;
 }
 
+export type ReleaseSmokeAuthArtifactContract = Pick<
+  ProductionReleaseContract,
+  | "releaseSmokeAccessTokenVerifier"
+  | "releaseSmokeAccessTokenVerifierSha256"
+  | "releaseSmokeDeploymentBindings"
+  | "releaseSmokeDeploymentBindingsSha256"
+  | "releaseSmokeHandler"
+  | "releaseSmokeHandlerSha256"
+  | "releaseSmokeProductionAccessTokenVerifier"
+  | "releaseSmokeProductionAccessTokenVerifierSha256"
+  | "releaseSmokeRoute"
+  | "releaseSmokeRouteSha256"
+>;
+
+export async function assertReleaseSmokeAuthArtifactsPinned(
+  root: string,
+  contract: ReleaseSmokeAuthArtifactContract,
+) {
+  await assertPinnedArtifact(
+    root,
+    contract.releaseSmokeRoute,
+    "src/app/api/internal/release-smoke/route.ts",
+    contract.releaseSmokeRouteSha256,
+    "release-smoke route",
+  );
+  await assertPinnedArtifact(
+    root,
+    contract.releaseSmokeHandler,
+    "src/app/api/internal/release-smoke/handler.ts",
+    contract.releaseSmokeHandlerSha256,
+    "release-smoke handler",
+  );
+  await assertPinnedArtifact(
+    root,
+    contract.releaseSmokeAccessTokenVerifier,
+    "src/shared/auth/verify-release-smoke-access-token.ts",
+    contract.releaseSmokeAccessTokenVerifierSha256,
+    "release-smoke access token verifier",
+  );
+  await assertPinnedArtifact(
+    root,
+    contract.releaseSmokeProductionAccessTokenVerifier,
+    "src/shared/auth/production-release-smoke-access-token-verifier.ts",
+    contract.releaseSmokeProductionAccessTokenVerifierSha256,
+    "release-smoke production verifier provider",
+  );
+  await assertPinnedArtifact(
+    root,
+    contract.releaseSmokeDeploymentBindings,
+    "src/shared/config/deployment-bindings.ts",
+    contract.releaseSmokeDeploymentBindingsSha256,
+    "release-smoke deployment bindings",
+  );
+}
+
 export async function checkProductionReleaseContract(root: string) {
   const contract = JSON.parse(
     await readFile(path.join(root, CONTRACT_PATH), "utf8"),
@@ -366,6 +431,7 @@ export async function checkProductionReleaseContract(root: string) {
   await assertPinnedArtifact(root, contract.productionSmokeModel, "scripts/production-smoke-canary.ts", contract.productionSmokeModelSha256, "smoke model");
   await assertPinnedArtifact(root, contract.productionSmokeRunner, "scripts/production-smoke-runner.ts", contract.productionSmokeRunnerSha256, "smoke runner");
   assertContract(contract.productionSmokeRunnerStatus === "fail-closed-pending-principal-route-and-schema", "smoke runner status must remain fail closed");
+  await assertReleaseSmokeAuthArtifactsPinned(root, contract);
   await assertPinnedArtifact(root, contract.productionRestoreModel, "scripts/production-restore-drill.ts", contract.productionRestoreModelSha256, "restore model");
   await assertPinnedArtifact(root, contract.productionRestoreEvidenceSchema, ".github/production-restore-drill-evidence.schema.json", contract.productionRestoreEvidenceSchemaSha256, "restore evidence schema");
   await assertPinnedArtifact(root, contract.vercelDeploymentAdapter, "scripts/vercel-deployment-rest-adapter.ts", contract.vercelDeploymentAdapterSha256, "Vercel deployment adapter");
@@ -379,6 +445,11 @@ export async function checkProductionReleaseContract(root: string) {
       contract.productionSmokeContractSha256,
       contract.productionSmokeModelSha256,
       contract.productionSmokeRunnerSha256,
+      contract.releaseSmokeRouteSha256,
+      contract.releaseSmokeHandlerSha256,
+      contract.releaseSmokeAccessTokenVerifierSha256,
+      contract.releaseSmokeProductionAccessTokenVerifierSha256,
+      contract.releaseSmokeDeploymentBindingsSha256,
       contract.productionRestoreModelSha256,
       contract.productionRestoreEvidenceSchemaSha256,
     ]) === JSON.stringify([
@@ -389,6 +460,11 @@ export async function checkProductionReleaseContract(root: string) {
       "30301fbfa2b15ca5a0e33a65fcb68998ce5bbf112e9499baca21ca1ef9b37166",
       "f2062c6830759da1bcf7799156c2231b348fad20f105f1a72851d01d838f7d84",
       "1b62169b8e2078522de549691eac8a4dfab5a3dcff6297623bbc6dcc40bde21d",
+      "99594c244e4fc78c00d4d282b9fafb3974fe1b96760248fa07db1665c5461428",
+      "7e85a4fc08c429cbb9b1e8c9f825eb31882d75e8c6da1f9020706e2aecd162f4",
+      "185701f85c21333153a6b8655df22dfd10545061ccd27e771033fe1196c8b767",
+      "2a1463331e350d5284f75ae7eb51ebbf7da74e0951b826a4e21130f2b4648b76",
+      "dd9041ce7ef885a4aab4cd555c418b84f9c1867dfc5849fd2510ae2398891948",
       "4bedd522a39f3792141ebb79d83a6b3d461c3a53e5ce28f1bbfd4c6de4323ae8",
       "b801b6e3e46f64c3e273c33b5c3c3432ebc152247900e125459f2cecc5613d40",
     ]),

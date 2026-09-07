@@ -3,6 +3,7 @@ import type { ReleaseSmokeAccessTokenVerifier } from "@/shared/auth/verify-relea
 import { getRequestId } from "@/shared/observability/request-id";
 
 const MAX_REQUEST_BODY_BYTES = 1024;
+const REQUEST_BODY_DEADLINE_MS = 1_000;
 const RESPONSE_HEADERS = { "cache-control": "private, no-store" } as const;
 
 const requestSchema = z
@@ -69,21 +70,41 @@ class ReleaseSmokeBodyTooLargeError extends Error {
   }
 }
 
+class ReleaseSmokeBodyTimeoutError extends Error {
+  constructor() {
+    super("release-smoke request body deadline exceeded");
+    this.name = "ReleaseSmokeBodyTimeoutError";
+  }
+}
+
 async function readBoundedBody(request: Request) {
   if (!request.body) throw new SyntaxError("missing request body");
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let bytesRead = 0;
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    deadlineTimer = setTimeout(
+      () => reject(new ReleaseSmokeBodyTimeoutError()),
+      REQUEST_BODY_DEADLINE_MS,
+    );
+  });
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    bytesRead += value.byteLength;
-    if (bytesRead > MAX_REQUEST_BODY_BYTES) {
-      await reader.cancel();
-      throw new ReleaseSmokeBodyTooLargeError();
+  try {
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), deadline]);
+      if (done) break;
+      bytesRead += value.byteLength;
+      if (bytesRead > MAX_REQUEST_BODY_BYTES) {
+        throw new ReleaseSmokeBodyTooLargeError();
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+  } catch (error) {
+    void reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
   }
 
   const body = new Uint8Array(bytesRead);
@@ -217,6 +238,14 @@ export function createReleaseSmokeRouteHandler(
       const parsed = requestSchema.safeParse(JSON.parse(await readBoundedBody(request)));
       if (!parsed.success) throw new SyntaxError("invalid release-smoke request");
     } catch (error) {
+      if (error instanceof ReleaseSmokeBodyTimeoutError) {
+        return response(
+          408,
+          "請求內容讀取逾時。",
+          "release_smoke_request_timeout",
+          requestId,
+        );
+      }
       const errorCode =
         error instanceof ReleaseSmokeBodyTooLargeError
           ? "release_smoke_request_too_large"

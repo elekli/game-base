@@ -85,8 +85,8 @@ describe("release-smoke access token verifier", () => {
   });
 
   const rejectedTokens: Array<[string, () => Promise<string>]> = [
-    ["owner assertion", () => signToken({ commonName: "owner", subject: "owner-subject" })],
-    ["organization assertion", () => signToken({ subject: "organization-subject", type: "org" })],
+    ["non-empty owner subject", () => signToken({ subject: "owner-subject" })],
+    ["organization type", () => signToken({ type: "org" })],
     ["wrong common_name", () => signToken({ commonName: "other-service" })],
     ["wrong issuer", () => signToken({ issuer: "https://wrong.example.test" })],
     ["wrong audience", () => signToken({ audience: "wrong-audience" })],

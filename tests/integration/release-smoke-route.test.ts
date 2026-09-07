@@ -147,6 +147,46 @@ describe("POST /api/internal/release-smoke", () => {
     expect(harness.createCanaryDependencies).not.toHaveBeenCalled();
   });
 
+  it("times out one never-settling body deadline without waiting for cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = makeHarness();
+      const cancel = vi.fn(() => new Promise<void>(() => undefined));
+      const body = new ReadableStream<Uint8Array>({
+        cancel,
+        pull: () => new Promise<void>(() => undefined),
+      });
+      const incomingRequest = new Request(
+        "https://gamebase.example.test/api/internal/release-smoke",
+        {
+          body,
+          duplex: "half",
+          headers: {
+            "content-type": "application/json",
+            "Cf-Access-Jwt-Assertion": "service-assertion-secret",
+          },
+          method: "POST",
+        } as RequestInit,
+      );
+
+      const responsePromise = harness.handler(incomingRequest);
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(1_000);
+      const response = await responsePromise;
+
+      expect(response.status).toBe(408);
+      expect(await response.json()).toMatchObject({
+        errorCode: "release_smoke_request_timeout",
+      });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(harness.createCanaryDependencies).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     ["additional fields", { ...JSON.parse(validBody), objectPath: "caller/path" }],
     ["caller-selected owner", { ...JSON.parse(validBody), owner: "other-owner" }],
