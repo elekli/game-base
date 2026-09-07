@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   calculateProductionSmokePayloadSha256,
   type ProductionSmokeCanaryEvent,
+  type ProductionSmokeCanaryEventPayload,
 } from "../../scripts/production-smoke-canary";
 
 import {
@@ -14,11 +15,13 @@ import {
 const SHA = "a".repeat(40);
 const MANIFEST_SHA256 = "b".repeat(64);
 const SMOKE_REQUEST_ID = "00000000-0000-4000-8000-000000000001";
+const SMOKE_GENERATION = "11111111-1111-4111-8111-111111111111";
 
 function smokeEvidence(executionSha = SHA) {
   return {
     namespace: "release-smoke-v1" as const,
     executionSha,
+    generation: SMOKE_GENERATION,
     identity: `release-smoke-v1:${executionSha}`,
     payloadSha256: calculateProductionSmokePayloadSha256(executionSha),
     counts: {
@@ -43,6 +46,7 @@ function smokeEvidence(executionSha = SHA) {
 function failedCleanupEvidence() {
   return {
     outcome: "failed" as const,
+    generation: SMOKE_GENERATION,
     requestIds: [SMOKE_REQUEST_ID],
     counts: { cleanup: { row: 0, object: 0 } },
     checks: { "canary-cleanup-counts": "passed" as const },
@@ -53,6 +57,7 @@ function reachPromotionAttempt() {
   let release = createProductionDeploymentRelease({
     executionSha: SHA,
     releaseKind: "migration-bearing",
+    smokeGeneration: SMOKE_GENERATION,
     sourceManifestSha256: MANIFEST_SHA256,
   });
   release = transitionProductionDeploymentRelease(release, {
@@ -104,11 +109,15 @@ function reachSmoke() {
 
 function sendCanaryEvent(
   release: ReturnType<typeof reachSmoke>,
-  event: ProductionSmokeCanaryEvent,
+  event: ProductionSmokeCanaryEventPayload,
 ) {
   return transitionProductionDeploymentRelease(release, {
     kind: "smoke-canary-event",
-    event,
+    event: {
+      ...event,
+      generation: release.smokeCanary?.generation ?? SMOKE_GENERATION,
+      actionSequence: release.smokeCanary?.next.actionSequence ?? 1,
+    } as ProductionSmokeCanaryEvent,
   });
 }
 
@@ -169,6 +178,9 @@ function completedSmoke(release: ReturnType<typeof reachSmoke>) {
     objectCount: 1,
     rowIdentity: `release-smoke-v1:${SHA}`,
     objectIdentity: `release-smoke-v1:${SHA}`,
+    rowGeneration: SMOKE_GENERATION,
+    objectGeneration: SMOKE_GENERATION,
+    rowPhase: "object_written",
     rowPayloadSha256: calculateProductionSmokePayloadSha256(SHA),
     objectPayloadSha256: calculateProductionSmokePayloadSha256(SHA),
     requestIds: [SMOKE_REQUEST_ID],
@@ -187,6 +199,7 @@ describe("production deployment release model", () => {
     const migrationRelease = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "migration-bearing",
+      smokeGeneration: SMOKE_GENERATION,
       sourceManifestSha256: MANIFEST_SHA256,
     });
 
@@ -208,6 +221,7 @@ describe("production deployment release model", () => {
     const codeOnlyRelease = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "code-only",
+      smokeGeneration: SMOKE_GENERATION,
       sourceManifestSha256: MANIFEST_SHA256,
     });
     const accepted = transitionProductionDeploymentRelease(codeOnlyRelease, {
@@ -229,6 +243,7 @@ describe("production deployment release model", () => {
     let release = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "migration-bearing",
+      smokeGeneration: SMOKE_GENERATION,
       sourceManifestSha256: MANIFEST_SHA256,
     });
     release = transitionProductionDeploymentRelease(release, {
@@ -318,6 +333,8 @@ describe("production deployment release model", () => {
       executionSha: SHA,
       canaryAction: {
         kind: "inspect-canary-counts",
+        generation: SMOKE_GENERATION,
+        actionSequence: 1,
         purpose: "baseline",
         rowId: "7355773e-c3b5-4e5d-9f07-55ac0e22f384",
         objectPath: "release-smoke-v1/canary.json",
@@ -573,6 +590,7 @@ describe("production deployment release model", () => {
     let release = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "code-only",
+      smokeGeneration: SMOKE_GENERATION,
       sourceManifestSha256: MANIFEST_SHA256,
     });
     release = transitionProductionDeploymentRelease(release, {
@@ -631,6 +649,17 @@ describe("production deployment release model", () => {
     expect(inspectionFailure.next).toEqual({ kind: "stop" });
   });
 
+  it("promotes an uncertain inner smoke result to release-level manual recovery", () => {
+    const release = sendCanaryEvent(reachSmoke(), {
+      kind: "operation-uncertain",
+      safeDetail: "Storage response was not observed",
+    });
+
+    expect(release.phase).toBe("manual-recovery-required");
+    expect(release.failure).toBe("smoke-cleanup-unverified");
+    expect(release.next).toEqual({ kind: "stop" });
+  });
+
   it("names evidence persistence failure instead of reporting release success", () => {
     let release = completedSmoke(reachSmoke());
     release = transitionProductionDeploymentRelease(release, {
@@ -675,6 +704,7 @@ describe("production deployment release model", () => {
     let release = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "code-only",
+      smokeGeneration: SMOKE_GENERATION,
       sourceManifestSha256: MANIFEST_SHA256,
     });
     release = transitionProductionDeploymentRelease(release, {
@@ -703,6 +733,7 @@ describe("production deployment release model", () => {
     let mismatched = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "code-only",
+      smokeGeneration: SMOKE_GENERATION,
       sourceManifestSha256: MANIFEST_SHA256,
     });
     mismatched = transitionProductionDeploymentRelease(mismatched, {
@@ -730,6 +761,7 @@ describe("production deployment release model", () => {
     let metadataMismatch = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "code-only",
+      smokeGeneration: SMOKE_GENERATION,
       sourceManifestSha256: MANIFEST_SHA256,
     });
     metadataMismatch = transitionProductionDeploymentRelease(metadataMismatch, {
@@ -764,6 +796,7 @@ describe("production deployment release model", () => {
     let guardChanged = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "migration-bearing",
+      smokeGeneration: SMOKE_GENERATION,
       sourceManifestSha256: MANIFEST_SHA256,
     });
     guardChanged = transitionProductionDeploymentRelease(guardChanged, {
@@ -803,6 +836,7 @@ describe("production deployment release model", () => {
     let release = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "code-only",
+      smokeGeneration: SMOKE_GENERATION,
       sourceManifestSha256: MANIFEST_SHA256,
     });
     release = transitionProductionDeploymentRelease(release, {
@@ -868,6 +902,7 @@ describe("production deployment release model", () => {
     let mismatch = createProductionDeploymentRelease({
       executionSha: SHA,
       releaseKind: "code-only",
+      smokeGeneration: SMOKE_GENERATION,
       sourceManifestSha256: MANIFEST_SHA256,
     });
     mismatch = transitionProductionDeploymentRelease(mismatch, {

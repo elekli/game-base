@@ -19,7 +19,8 @@ export const PRODUCTION_SMOKE_CHECKS = [
 
 const FULL_SHA = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
-const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export const MAX_PRODUCTION_SMOKE_REQUEST_IDS = 16;
 
 export class ProductionCanaryError extends Error {
@@ -47,6 +48,35 @@ export class ProductionCanaryCleanupMismatchError extends ProductionCanaryError 
   }
 }
 
+export class ProductionCanaryGenerationMismatchError extends ProductionCanaryError {
+  constructor(safeDetail: string) {
+    super(safeDetail, "ProductionCanaryGenerationMismatchError");
+  }
+}
+
+export class ProductionCanaryActionMismatchError extends ProductionCanaryError {
+  constructor(safeDetail: string) {
+    super(safeDetail, "ProductionCanaryActionMismatchError");
+  }
+}
+
+export class ProductionCanaryUncertainStateError extends ProductionCanaryError {
+  constructor(safeDetail: string) {
+    super(safeDetail, "ProductionCanaryUncertainStateError");
+  }
+}
+
+export const PRODUCTION_SMOKE_PERSISTED_PHASES = [
+  "row_claimed",
+  "object_write_pending",
+  "object_written",
+  "object_write_uncertain",
+  "cleanup_pending",
+  "cleanup_uncertain",
+] as const;
+export type ProductionSmokePersistedPhase =
+  (typeof PRODUCTION_SMOKE_PERSISTED_PHASES)[number];
+
 type CountPair = Readonly<{ row: number; object: number }>;
 export type ProductionSmokeCheck = (typeof PRODUCTION_SMOKE_CHECKS)[number];
 const FIXED_READ_CHECKS = [
@@ -62,6 +92,7 @@ type PassedCheckMap = Readonly<Record<ProductionSmokeCheck, "passed">>;
 export type ProductionSmokeCanaryEvidence = Readonly<{
   namespace: typeof PRODUCTION_SMOKE_NAMESPACE;
   executionSha: string;
+  generation: string;
   identity: string;
   payloadSha256: string;
   counts: Readonly<{
@@ -75,36 +106,42 @@ export type ProductionSmokeCanaryEvidence = Readonly<{
 
 export type ProductionSmokeFailedCleanupEvidence = Readonly<{
   outcome: "failed";
+  generation: string;
   requestIds: ReadonlyArray<string>;
   counts: Readonly<{ cleanup: CountPair }>;
   checks: Readonly<{ "canary-cleanup-counts": "passed" }>;
 }>;
 
-export type ProductionSmokeCanaryAction =
+export type ProductionSmokeCanaryAction = (
   | Readonly<{
       kind: "inspect-canary-counts";
+      generation: string;
       purpose: "baseline" | "cleanup";
       rowId: typeof PRODUCTION_SMOKE_ROW_ID;
       objectPath: typeof PRODUCTION_SMOKE_OBJECT_PATH;
     }>
   | Readonly<{
       kind: "run-fixed-read-checks";
+      generation: string;
       checks: ReadonlyArray<FixedReadCheck>;
     }>
   | Readonly<{
       kind: "write-canary-row";
+      generation: string;
       rowId: string;
       identity: string;
       payloadSha256: string;
     }>
   | Readonly<{
       kind: "write-canary-object";
+      generation: string;
       objectPath: string;
       identity: string;
       payloadSha256: string;
     }>
   | Readonly<{
       kind: "verify-round-trip";
+      generation: string;
       identity: string;
       rowId: string;
       objectPath: string;
@@ -114,12 +151,15 @@ export type ProductionSmokeCanaryAction =
     }>
   | Readonly<{
       kind: "cleanup-exact-canary";
+      expectedPhase: "row_claimed" | "cleanup_pending";
+      generation: string;
       identity: string;
       rowId: string;
       objectPath: string;
       payloadSha256: string;
     }>
-  | Readonly<{ kind: "stop" }>;
+  | Readonly<{ kind: "stop" }>
+) & Readonly<{ actionSequence: number }>;
 
 type CanaryPhase =
   | "inspecting-baseline"
@@ -130,12 +170,14 @@ type CanaryPhase =
   | "verifying-round-trip"
   | "cleaning-canary"
   | "verifying-cleanup"
+  | "manual-recovery-required"
   | "succeeded"
   | "failed";
 
 export type ProductionSmokeCanary = Readonly<{
   phase: CanaryPhase;
   executionSha: string;
+  generation: string;
   namespace: typeof PRODUCTION_SMOKE_NAMESPACE;
   identity: string;
   payloadSha256: string;
@@ -166,7 +208,7 @@ const terminalCanaryCapabilities = new WeakMap<
   ProductionSmokeCanaryTerminal
 >();
 
-export type ProductionSmokeCanaryEvent =
+export type ProductionSmokeCanaryEventPayload =
   | Readonly<{
       kind: "counts-observed";
       purpose: "baseline" | "cleanup";
@@ -174,6 +216,9 @@ export type ProductionSmokeCanaryEvent =
       objectCount: number;
       rowIdentity?: string;
       objectIdentity?: string;
+      rowGeneration?: string;
+      objectGeneration?: string;
+      rowPhase?: ProductionSmokePersistedPhase;
       rowPayloadSha256?: string;
       objectPayloadSha256?: string;
     }>
@@ -190,25 +235,47 @@ export type ProductionSmokeCanaryEvent =
       objectCount: number;
       rowIdentity?: string;
       objectIdentity?: string;
+      rowGeneration?: string;
+      objectGeneration?: string;
+      rowPhase?: ProductionSmokePersistedPhase;
       rowPayloadSha256?: string;
       objectPayloadSha256?: string;
       requestIds: ReadonlyArray<string>;
     }>
   | Readonly<{ kind: "cleanup-finished" }>
+  | Readonly<{ kind: "operation-uncertain"; safeDetail: string }>
   | Readonly<{ kind: "operation-failed"; safeDetail: string }>;
 
-function inspectCounts(purpose: "baseline" | "cleanup"): ProductionSmokeCanaryAction {
+export type ProductionSmokeCanaryEvent = ProductionSmokeCanaryEventPayload &
+  Readonly<{ generation: string; actionSequence: number }>;
+
+function inspectCounts(
+  purpose: "baseline" | "cleanup",
+  generation: string,
+  actionSequence: number,
+): ProductionSmokeCanaryAction {
   return {
     kind: "inspect-canary-counts",
+    generation,
+    actionSequence,
     purpose,
     rowId: PRODUCTION_SMOKE_ROW_ID,
     objectPath: PRODUCTION_SMOKE_OBJECT_PATH,
   };
 }
 
-function cleanupAction(identity: string, payloadSha256: string): ProductionSmokeCanaryAction {
+function cleanupAction(
+  identity: string,
+  generation: string,
+  payloadSha256: string,
+  actionSequence: number,
+  expectedPhase: "row_claimed" | "cleanup_pending" = "cleanup_pending",
+): ProductionSmokeCanaryAction {
   return {
     kind: "cleanup-exact-canary",
+    actionSequence,
+    expectedPhase,
+    generation,
     identity,
     rowId: PRODUCTION_SMOKE_ROW_ID,
     objectPath: PRODUCTION_SMOKE_OBJECT_PATH,
@@ -311,20 +378,22 @@ function cleanupAfterMutationFailure(
     phase: "cleaning-canary",
     cleanupPurpose: "failure",
     failure,
-    next: cleanupAction(canary.identity, canary.payloadSha256),
+    next: cleanupAction(canary.identity, canary.generation, canary.payloadSha256, canary.next.actionSequence + 1),
   };
 }
 
 export function isProductionSmokeCanaryEvidence(
   value: unknown,
 ): value is ProductionSmokeCanaryEvidence {
-  if (!isRecord(value) || !hasExactKeys(value, ["namespace", "executionSha", "identity", "payloadSha256", "counts", "checks", "requestIds"])) {
+  if (!isRecord(value) || !hasExactKeys(value, ["namespace", "executionSha", "generation", "identity", "payloadSha256", "counts", "checks", "requestIds"])) {
     return false;
   }
   if (
     value.namespace !== PRODUCTION_SMOKE_NAMESPACE ||
     typeof value.executionSha !== "string" ||
     !FULL_SHA.test(value.executionSha) ||
+    typeof value.generation !== "string" ||
+    !GENERATION.test(value.generation) ||
     value.identity !== `${PRODUCTION_SMOKE_NAMESPACE}:${value.executionSha}` ||
     typeof value.payloadSha256 !== "string" ||
     !SHA256.test(value.payloadSha256) ||
@@ -349,9 +418,15 @@ export function consumeProductionSmokeCanaryTerminal(
   return terminalCanaryCapabilities.get(canary);
 }
 
-export function createProductionSmokeCanary(input: { executionSha: string }): ProductionSmokeCanary {
+export function createProductionSmokeCanary(input: {
+  executionSha: string;
+  generation: string;
+}): ProductionSmokeCanary {
   if (!FULL_SHA.test(input.executionSha)) {
     throw new ProductionCanaryResidueMismatchError("execution SHA is invalid");
+  }
+  if (!GENERATION.test(input.generation)) {
+    throw new ProductionCanaryGenerationMismatchError("generation is not UUIDv4");
   }
   const identity = `${PRODUCTION_SMOKE_NAMESPACE}:${input.executionSha}`;
   const payloadSha256 = calculateProductionSmokePayloadSha256(
@@ -360,12 +435,13 @@ export function createProductionSmokeCanary(input: { executionSha: string }): Pr
   return {
     phase: "inspecting-baseline",
     executionSha: input.executionSha,
+    generation: input.generation,
     namespace: PRODUCTION_SMOKE_NAMESPACE,
     identity,
     payloadSha256,
     rowId: PRODUCTION_SMOKE_ROW_ID,
     objectPath: PRODUCTION_SMOKE_OBJECT_PATH,
-    next: inspectCounts("baseline"),
+    next: inspectCounts("baseline", input.generation, 1),
     checks: {},
     requestIds: [],
   };
@@ -375,6 +451,24 @@ export function transitionProductionSmokeCanary(
   canary: ProductionSmokeCanary,
   event: ProductionSmokeCanaryEvent,
 ): ProductionSmokeCanary {
+  if (event.actionSequence !== canary.next.actionSequence) {
+    throw new ProductionCanaryActionMismatchError(
+      "event action sequence does not match the active action",
+    );
+  }
+  if (event.generation !== canary.generation) {
+    throw new ProductionCanaryGenerationMismatchError(
+      "event generation does not match the active attempt",
+    );
+  }
+  if (event.kind === "operation-uncertain") {
+    return {
+      ...canary,
+      phase: "manual-recovery-required",
+      failure: new ProductionCanaryUncertainStateError(event.safeDetail),
+      next: { kind: "stop", actionSequence: canary.next.actionSequence + 1 },
+    };
+  }
   if (event.kind === "operation-failed") {
     if (canary.phase === "cleaning-canary" || canary.phase === "cleaning-residue" || canary.phase === "verifying-cleanup") {
       throw cleanupFailure(canary, event.safeDetail);
@@ -388,10 +482,13 @@ export function transitionProductionSmokeCanary(
   if (canary.phase === "inspecting-baseline" && event.kind === "counts-observed" && event.purpose === "baseline") {
     validateCounts(event.rowCount, event.objectCount);
     if (event.rowCount === 0 && event.objectCount === 0) {
-      return { ...canary, phase: "running-read-checks", baselineCounts: { row: 0, object: 0 }, next: { kind: "run-fixed-read-checks", checks: FIXED_READ_CHECKS } };
+      return { ...canary, phase: "running-read-checks", baselineCounts: { row: 0, object: 0 }, next: { kind: "run-fixed-read-checks", generation: canary.generation, actionSequence: canary.next.actionSequence + 1, checks: FIXED_READ_CHECKS } };
     }
-    if (event.rowCount === 1 && event.objectCount === 1 && event.rowIdentity === canary.identity && event.objectIdentity === canary.identity && event.rowPayloadSha256 === canary.payloadSha256 && event.objectPayloadSha256 === canary.payloadSha256) {
-      return { ...canary, phase: "cleaning-residue", cleanupPurpose: "residue", next: cleanupAction(canary.identity, canary.payloadSha256) };
+    if (event.rowCount === 1 && event.objectCount === 0 && event.rowIdentity === canary.identity && event.rowGeneration === canary.generation && event.rowPayloadSha256 === canary.payloadSha256 && event.rowPhase === "row_claimed") {
+      return { ...canary, phase: "cleaning-residue", cleanupPurpose: "residue", next: cleanupAction(canary.identity, canary.generation, canary.payloadSha256, canary.next.actionSequence + 1, "row_claimed") };
+    }
+    if (event.rowCount === 1 && event.objectCount === 1 && event.rowIdentity === canary.identity && event.objectIdentity === canary.identity && event.rowGeneration === canary.generation && event.objectGeneration === canary.generation && event.rowPayloadSha256 === canary.payloadSha256 && event.objectPayloadSha256 === canary.payloadSha256 && event.rowPhase === "object_written") {
+      return { ...canary, phase: "cleaning-residue", cleanupPurpose: "residue", next: cleanupAction(canary.identity, canary.generation, canary.payloadSha256, canary.next.actionSequence + 1) };
     }
     throw new ProductionCanaryResidueMismatchError("baseline residue is partial or belongs to another execution");
   }
@@ -400,28 +497,50 @@ export function transitionProductionSmokeCanary(
     if (!hasExactPassedChecks(event.checks, FIXED_READ_CHECKS)) {
       throw new ProductionCanaryResidueMismatchError("fixed read check evidence is incomplete, extra, or failed");
     }
-    return { ...canary, phase: "writing-row", checks: { ...canary.checks, ...(event.checks as Readonly<Record<FixedReadCheck, "passed">>) }, requestIds: appendRequestIds(canary.requestIds, event.requestIds), next: { kind: "write-canary-row", rowId: canary.rowId, identity: canary.identity, payloadSha256: canary.payloadSha256 } };
+    return { ...canary, phase: "writing-row", checks: { ...canary.checks, ...(event.checks as Readonly<Record<FixedReadCheck, "passed">>) }, requestIds: appendRequestIds(canary.requestIds, event.requestIds), next: { kind: "write-canary-row", generation: canary.generation, actionSequence: canary.next.actionSequence + 1, rowId: canary.rowId, identity: canary.identity, payloadSha256: canary.payloadSha256 } };
   }
   if (canary.phase === "writing-row" && event.kind === "row-written") {
-    return { ...canary, phase: "writing-object", next: { kind: "write-canary-object", objectPath: canary.objectPath, identity: canary.identity, payloadSha256: canary.payloadSha256 } };
+    return { ...canary, phase: "writing-object", next: { kind: "write-canary-object", generation: canary.generation, actionSequence: canary.next.actionSequence + 1, objectPath: canary.objectPath, identity: canary.identity, payloadSha256: canary.payloadSha256 } };
   }
   if (canary.phase === "writing-object" && event.kind === "object-written") {
-    return { ...canary, phase: "verifying-round-trip", next: { kind: "verify-round-trip", identity: canary.identity, rowId: canary.rowId, objectPath: canary.objectPath, payloadSha256: canary.payloadSha256, maxRowCount: 1, maxObjectCount: 1 } };
+    return { ...canary, phase: "verifying-round-trip", next: { kind: "verify-round-trip", generation: canary.generation, actionSequence: canary.next.actionSequence + 1, identity: canary.identity, rowId: canary.rowId, objectPath: canary.objectPath, payloadSha256: canary.payloadSha256, maxRowCount: 1, maxObjectCount: 1 } };
   }
   if (canary.phase === "verifying-round-trip" && event.kind === "round-trip-observed") {
     try {
       validateCounts(event.rowCount, event.objectCount);
-      if (event.rowCount !== 1 || event.objectCount !== 1 || event.rowIdentity !== canary.identity || event.objectIdentity !== canary.identity || event.rowPayloadSha256 !== canary.payloadSha256 || event.objectPayloadSha256 !== canary.payloadSha256) {
-        return cleanupAfterMutationFailure(canary, "canary round trip did not return the exact identity");
+      if (
+        event.rowCount !== 1 ||
+        event.objectCount !== 1 ||
+        event.rowIdentity !== canary.identity ||
+        event.objectIdentity !== canary.identity ||
+        event.rowGeneration !== canary.generation ||
+        event.objectGeneration !== canary.generation ||
+        event.rowPhase !== "object_written" ||
+        event.rowPayloadSha256 !== canary.payloadSha256 ||
+        event.objectPayloadSha256 !== canary.payloadSha256
+      ) {
+        return {
+          ...canary,
+          phase: "manual-recovery-required",
+          failure: new ProductionCanaryResidueMismatchError(
+            "canary round trip did not return the exact active generation",
+          ),
+          next: { kind: "stop", actionSequence: canary.next.actionSequence + 1 },
+        };
       }
-      return { ...canary, phase: "cleaning-canary", cleanupPurpose: "final", mutationCounts: { row: 1, object: 1 }, checks: { ...canary.checks, "canary-row-round-trip": "passed", "canary-object-round-trip": "passed" }, requestIds: appendRequestIds(canary.requestIds, event.requestIds), next: cleanupAction(canary.identity, canary.payloadSha256) };
+      return { ...canary, phase: "cleaning-canary", cleanupPurpose: "final", mutationCounts: { row: 1, object: 1 }, checks: { ...canary.checks, "canary-row-round-trip": "passed", "canary-object-round-trip": "passed" }, requestIds: appendRequestIds(canary.requestIds, event.requestIds), next: cleanupAction(canary.identity, canary.generation, canary.payloadSha256, canary.next.actionSequence + 1) };
     } catch (error) {
       const safeDetail = error instanceof ProductionCanaryError ? error.safeDetail : "round trip validation failed";
-      return cleanupAfterMutationFailure(canary, safeDetail);
+      return {
+        ...canary,
+        phase: "manual-recovery-required",
+        failure: new ProductionCanaryResidueMismatchError(safeDetail),
+        next: { kind: "stop", actionSequence: canary.next.actionSequence + 1 },
+      };
     }
   }
   if ((canary.phase === "cleaning-canary" || canary.phase === "cleaning-residue") && event.kind === "cleanup-finished") {
-    return { ...canary, phase: "verifying-cleanup", next: inspectCounts("cleanup") };
+    return { ...canary, phase: "verifying-cleanup", next: inspectCounts("cleanup", canary.generation, canary.next.actionSequence + 1) };
   }
   if (canary.phase === "verifying-cleanup" && event.kind === "counts-observed" && event.purpose === "cleanup") {
     try {
@@ -434,19 +553,20 @@ export function transitionProductionSmokeCanary(
       throw cleanupFailure(canary, safeDetail);
     }
     if (canary.cleanupPurpose === "residue") {
-      return { ...canary, phase: "running-read-checks", baselineCounts: { row: 0, object: 0 }, cleanupPurpose: undefined, next: { kind: "run-fixed-read-checks", checks: FIXED_READ_CHECKS } };
+      return { ...canary, phase: "running-read-checks", baselineCounts: { row: 0, object: 0 }, cleanupPurpose: undefined, next: { kind: "run-fixed-read-checks", generation: canary.generation, actionSequence: canary.next.actionSequence + 1, checks: FIXED_READ_CHECKS } };
     }
     if (canary.cleanupPurpose === "failure") {
       const failedCanary = {
         ...canary,
         phase: "failed" as const,
         cleanupPurpose: undefined,
-        next: { kind: "stop" } as const,
+        next: { kind: "stop", actionSequence: canary.next.actionSequence + 1 } as const,
       };
       terminalCanaryCapabilities.set(failedCanary, {
         outcome: "failed-cleanup-complete",
         evidence: {
           outcome: "failed",
+          generation: canary.generation,
           requestIds: canary.requestIds,
           counts: { cleanup: { row: 0, object: 0 } },
           checks: { "canary-cleanup-counts": "passed" },
@@ -457,6 +577,7 @@ export function transitionProductionSmokeCanary(
     const evidence: ProductionSmokeCanaryEvidence = {
       namespace: canary.namespace,
       executionSha: canary.executionSha,
+      generation: canary.generation,
       identity: canary.identity,
       payloadSha256: canary.payloadSha256,
       counts: { baseline: canary.baselineCounts ?? { row: 0, object: 0 }, mutation: canary.mutationCounts ?? { row: 0, object: 0 }, cleanup: { row: 0, object: 0 } },
@@ -473,7 +594,7 @@ export function transitionProductionSmokeCanary(
       ...canary,
       phase: "succeeded" as const,
       cleanupPurpose: undefined,
-      next: { kind: "stop" } as const,
+      next: { kind: "stop", actionSequence: canary.next.actionSequence + 1 } as const,
       evidence,
     };
     terminalCanaryCapabilities.set(succeededCanary, {

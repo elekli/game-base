@@ -1,11 +1,21 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "contractVersion": 1,
+  "contractVersion": 2,
   "namespace": "release-smoke-v1",
   "rowId": "7355773e-c3b5-4e5d-9f07-55ac0e22f384",
   "objectPath": "release-smoke-v1/canary.json",
   "identityFormat": "release-smoke-v1:<40-char-lowercase-git-sha>",
+  "generationFormat": "uuid-v4-created-once-per-complete-attempt",
+  "actionSequenceFormat": "positive-integer-starting-at-1-incremented-on-every-next-action",
   "payloadHashInput": ["namespace", "identity", "rowId", "objectPath"],
+  "persistedPhases": [
+    "row_claimed",
+    "object_write_pending",
+    "object_written",
+    "object_write_uncertain",
+    "cleanup_pending",
+    "cleanup_uncertain"
+  ],
   "bounds": {
     "baseline": { "row": 0, "object": 0 },
     "mutationMaximum": { "row": 1, "object": 1 },
@@ -21,6 +31,25 @@
     "canary-object-round-trip",
     "canary-cleanup-counts"
   ],
-  "residuePolicy": "Only an exact row/object pair with the current execution identity may be cleaned before retry.",
-  "evidenceAllowlist": ["namespace", "identity", "counts", "checks", "requestIds"]
+  "residuePolicy": {
+    "automaticCleanup": [
+      "same-generation exact 1/0 row_claimed residue",
+      "same-generation exact 1/1 object_written residue"
+    ],
+    "stop": [
+      "0/1 object-only residue",
+      "different generation, identity, or payload hash",
+      "object_write_uncertain or cleanup_uncertain"
+    ]
+  },
+  "stateEvents": [
+    "counts-observed",
+    "fixed-read-checks-observed",
+    "row-written",
+    "object-written",
+    "cleanup-finished",
+    "operation-failed",
+    "operation-uncertain"
+  ],
+  "evidenceAllowlist": ["namespace", "executionSha", "generation", "identity", "payloadSha256", "counts", "checks", "requestIds"]
 }
