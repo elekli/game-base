@@ -1,13 +1,16 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "contractVersion": 3,
+  "contractVersion": 4,
   "namespace": "release-smoke-v1",
   "rowId": "7355773e-c3b5-4e5d-9f07-55ac0e22f384",
-  "objectPath": "release-smoke-v1/canary.json",
+  "objectPaths": [
+    "release-smoke-v1/original.png",
+    "release-smoke-v1/thumbnail.webp"
+  ],
   "identityFormat": "release-smoke-v1:<40-char-lowercase-git-sha>",
   "generationFormat": "uuid-v4-created-once-per-complete-attempt",
   "actionSequenceFormat": "positive-integer-starting-at-1-incremented-on-every-next-action",
-  "payloadHashInput": ["namespace", "identity", "rowId", "objectPath"],
+  "payloadHashInput": ["namespace", "identity", "rowId", "objectPaths"],
   "persistedPhases": [
     "row_claimed",
     "object_write_pending",
@@ -18,7 +21,7 @@
   ],
   "bounds": {
     "baseline": { "row": 0, "object": 0 },
-    "mutationMaximum": { "row": 1, "object": 1 },
+    "mutationMaximum": { "row": 1, "object": 2 },
     "cleanup": { "row": 0, "object": 0 }
   },
   "checks": [
@@ -29,15 +32,20 @@
     "private-storage-direct-denied",
     "canary-row-round-trip",
     "canary-object-round-trip",
+    "private-media-original-read",
+    "media-thumbnail-generated",
+    "private-media-thumbnail-read",
     "canary-cleanup-counts"
   ],
   "residuePolicy": {
     "automaticCleanup": [
       "same-generation exact 1/0 row_claimed residue",
-      "same-generation exact 1/1 object_written residue"
+      "same-generation byte-exact partial 1/1 removed inside definitive write failure handling",
+      "same-generation exact 1/2 object_written residue"
     ],
     "stop": [
-      "0/1 object-only residue",
+      "0/1-2 object-only residue",
+      "any persisted partial 1/1 media residue",
       "different generation, identity, or payload hash",
       "object_write_uncertain or cleanup_uncertain"
     ]

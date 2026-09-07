@@ -161,9 +161,9 @@ describe("production release contract", () => {
       productionSmokeAdapter:
         "src/adapters/production-smoke-canary-adapter.ts",
       productionSmokeAdapterSha256:
-        "d976e4810f341690b3f8a236adb48f5c78a6a11660278e44da7fb316f30a53c6",
+        "8d7ce463b3f7050795926b919b4e09edb8ea80720b6fe1de75324c7aa55351d9",
       productionSmokeRunnerSha256:
-        "284f6531ecea8693f7b1c68ae3d8f5c76b84ecacd4f00a77daa3242d2de5e800",
+        "c7879f56fd6ab185c27e3719edc3bec83ca47b93abc7040f43261fb0d5ccd241",
       productionRestoreModel: "scripts/production-restore-drill.ts",
       productionRestoreExecutor: "scripts/production-restore-executor.ts",
       productionRestoreIntegrityChecker:
@@ -203,9 +203,9 @@ describe("production release contract", () => {
       vercelDeploymentAdapterSha256:
         "fcea0fd520df434b1c549e0d7b848530c60b43b87711814dae6f6ff3ffa464c3",
       productionSmokeContractSha256:
-        "0086cb94455b9b75eb092bb20e7fb2343952b843f6ca9e6b46f29ab0d35d9199",
+        "aab60949aa19dbec335d9012ce10d751a273bc244b35bab9bdc10861892f83ea",
       productionSmokeModelSha256:
-        "18fa525b8fdeac5430e70ca7164d42a55228e1b9b21981f92dffdac052ea4890",
+        "618cf243e1214778e6b0b9b437913f69e56af09bd1d0cd445fa0f2fae33e7ba9",
       productionRestoreModelSha256:
         "96604eb799d32eefff62297efafe8e18cca595cc6d4505083f60ead85402f028",
       productionRestoreExecutorSha256:

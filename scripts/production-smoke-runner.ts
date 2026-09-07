@@ -6,6 +6,8 @@ import {
   type ProductionSmokeCanaryEventPayload,
   type ProductionSmokeCanaryTerminal,
   PRODUCTION_SMOKE_PERSISTED_PHASES,
+  PRODUCTION_SMOKE_OBJECT_PATH,
+  PRODUCTION_SMOKE_THUMBNAIL_OBJECT_PATH,
   type ProductionSmokePersistedPhase,
 } from "./production-smoke-canary";
 
@@ -397,14 +399,19 @@ function createProductionSmokeRunnerDependencies(
       };
     },
     async checkPrivateStorageDenial(signal) {
-      const storage = await boundedFetch(
-        fetchImpl,
-        `${supabaseOrigin}/storage/v1/object/public/game-media/release-smoke-v1/canary.json`,
-        { method: "GET", headers: { apikey: config.publishableKey } },
-        signal,
-      );
-      if (![400, 401, 403].includes(storage.status)) {
-        throw new ProductionSmokeTransportError("private Storage public path was not denied");
+      for (const path of [
+        PRODUCTION_SMOKE_OBJECT_PATH,
+        PRODUCTION_SMOKE_THUMBNAIL_OBJECT_PATH,
+      ]) {
+        const storage = await boundedFetch(
+          fetchImpl,
+          `${supabaseOrigin}/storage/v1/object/public/game-media/${path}`,
+          { method: "GET", headers: { apikey: config.publishableKey } },
+          signal,
+        );
+        if (![400, 401, 403].includes(storage.status)) {
+          throw new ProductionSmokeTransportError("private Storage public path was not denied");
+        }
       }
       return "passed";
     },

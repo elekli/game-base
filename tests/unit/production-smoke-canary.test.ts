@@ -76,7 +76,7 @@ describe("production smoke canary", () => {
     expect(canary.generation).toBe(GENERATION);
     expect(canary.identity).toBe(`release-smoke-v1:${SHA}`);
     expect(canary.rowId).toBe("7355773e-c3b5-4e5d-9f07-55ac0e22f384");
-    expect(canary.objectPath).toBe("release-smoke-v1/canary.json");
+    expect(canary.objectPath).toBe("release-smoke-v1/original.png");
     expect(canary.payloadSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(PRODUCTION_SMOKE_CHECKS).toEqual([
       "custom-domain-owner-access",
@@ -86,6 +86,9 @@ describe("production smoke canary", () => {
       "private-storage-direct-denied",
       "canary-row-round-trip",
       "canary-object-round-trip",
+      "private-media-original-read",
+      "media-thumbnail-generated",
+      "private-media-thumbnail-read",
       "canary-cleanup-counts",
     ]);
   });
@@ -175,16 +178,16 @@ describe("production smoke canary", () => {
       actionSequence: 5,
       identity: `release-smoke-v1:${SHA}`,
       rowId: "7355773e-c3b5-4e5d-9f07-55ac0e22f384",
-      objectPath: "release-smoke-v1/canary.json",
+      objectPath: "release-smoke-v1/original.png",
       payloadSha256: canary.payloadSha256,
       maxRowCount: 1,
-      maxObjectCount: 1,
+      maxObjectCount: 2,
     });
 
     canary = transitionProductionSmokeCanary(canary, {
       kind: "round-trip-observed",
       rowCount: 1,
-      objectCount: 1,
+      objectCount: 2,
       rowIdentity: `release-smoke-v1:${SHA}`,
       objectIdentity: `release-smoke-v1:${SHA}`,
       rowGeneration: GENERATION,
@@ -217,7 +220,7 @@ describe("production smoke canary", () => {
       payloadSha256: canary.payloadSha256,
       counts: {
         baseline: { row: 0, object: 0 },
-        mutation: { row: 1, object: 1 },
+        mutation: { row: 1, object: 2 },
         cleanup: { row: 0, object: 0 },
       },
       checks: Object.fromEntries(PRODUCTION_SMOKE_CHECKS.map((check) => [check, "passed"])),
@@ -239,7 +242,7 @@ describe("production smoke canary", () => {
     canary = transitionProductionSmokeCanary(canary, {
       kind: "round-trip-observed",
       rowCount: 1,
-      objectCount: 1,
+      objectCount: 2,
       rowIdentity: canary.identity,
       objectIdentity: canary.identity,
       rowGeneration: "22222222-2222-4222-8222-222222222222",
@@ -303,7 +306,7 @@ describe("production smoke canary", () => {
     mismatch = transitionProductionSmokeCanary(mismatch, {
       kind: "round-trip-observed",
       rowCount: 1,
-      objectCount: 1,
+      objectCount: 2,
       rowIdentity: `release-smoke-v1:${SHA}`,
       objectIdentity: `release-smoke-v1:${SHA}`,
       rowGeneration: GENERATION,
@@ -362,7 +365,7 @@ describe("production smoke canary", () => {
       kind: "counts-observed",
       purpose: "baseline",
       rowCount: 1,
-      objectCount: 1,
+      objectCount: 2,
       rowIdentity: `release-smoke-v1:${SHA}`,
       objectIdentity: `release-smoke-v1:${SHA}`,
       rowGeneration: GENERATION,
@@ -379,7 +382,7 @@ describe("production smoke canary", () => {
         kind: "counts-observed",
         purpose: "baseline",
         rowCount: 1,
-        objectCount: 1,
+        objectCount: 2,
         rowIdentity: `release-smoke-v1:${"b".repeat(40)}`,
         objectIdentity: `release-smoke-v1:${SHA}`,
         rowGeneration: GENERATION,
@@ -407,7 +410,7 @@ describe("production smoke canary", () => {
         kind: "counts-observed",
         purpose: "baseline",
         rowCount: 1,
-        objectCount: 1,
+        objectCount: 2,
         rowIdentity: `release-smoke-v1:${SHA}`,
         objectIdentity: `release-smoke-v1:${SHA}`,
         rowGeneration: GENERATION,
@@ -434,7 +437,7 @@ describe("production smoke canary", () => {
       kind: "counts-observed",
       purpose: "baseline",
       rowCount: 1,
-      objectCount: 1,
+      objectCount: 2,
       rowIdentity: `release-smoke-v1:${SHA}`,
       objectIdentity: `release-smoke-v1:${SHA}`,
       rowGeneration: GENERATION,

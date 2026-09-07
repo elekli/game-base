@@ -26,7 +26,7 @@ function smokeEvidence(executionSha = SHA) {
     payloadSha256: calculateProductionSmokePayloadSha256(executionSha),
     counts: {
       baseline: { row: 0, object: 0 },
-      mutation: { row: 1, object: 1 },
+      mutation: { row: 1, object: 2 },
       cleanup: { row: 0, object: 0 },
     },
     checks: {
@@ -34,6 +34,9 @@ function smokeEvidence(executionSha = SHA) {
       "direct-origin-denied": "passed" as const,
       "authenticated-library-read": "passed" as const,
       "runtime-database-read": "passed" as const,
+      "private-media-original-read": "passed" as const,
+      "media-thumbnail-generated": "passed" as const,
+      "private-media-thumbnail-read": "passed" as const,
       "private-storage-direct-denied": "passed" as const,
       "canary-row-round-trip": "passed" as const,
       "canary-object-round-trip": "passed" as const,
@@ -173,7 +176,7 @@ function completedSmoke(release: ReturnType<typeof reachSmoke>) {
   next = sendCanaryEvent(next, {
     kind: "round-trip-observed",
     rowCount: 1,
-    objectCount: 1,
+    objectCount: 2,
     rowIdentity: `release-smoke-v1:${SHA}`,
     objectIdentity: `release-smoke-v1:${SHA}`,
     rowGeneration: SMOKE_GENERATION,
@@ -339,7 +342,7 @@ describe("production deployment release model", () => {
         actionSequence: 1,
         purpose: "baseline",
         rowId: "7355773e-c3b5-4e5d-9f07-55ac0e22f384",
-        objectPath: "release-smoke-v1/canary.json",
+        objectPath: "release-smoke-v1/original.png",
       },
       timeoutMs: 180_000,
     });

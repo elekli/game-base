@@ -2,6 +2,7 @@ import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  type CanonicalProductionSmokeMedia,
   createPostgresProductionSmokeDatabase,
   ProductionSmokeCanaryAdapter,
   ProductionSmokeOperationUncertainError,
@@ -31,22 +32,25 @@ function operation(
 
 const control = postgres(requiredDatabaseUrl, { max: 1, prepare: false });
 let database: ReturnType<typeof createPostgresProductionSmokeDatabase>;
-let objectBytes: Uint8Array | undefined;
+let objectMedia: CanonicalProductionSmokeMedia | undefined;
 const objects: ProductionSmokeObjectStore = {
   async inspect(expected) {
-    if (!objectBytes) return { count: 0, canonical: false };
-    const canonical = objectBytes.byteLength === expected.byteLength &&
-      objectBytes.every((byte, index) => byte === expected[index]);
+    if (!objectMedia) return { count: 0, canonical: false };
+    const sameBytes = (actual: Uint8Array, wanted: Uint8Array) =>
+      actual.byteLength === wanted.byteLength &&
+      actual.every((byte, index) => byte === wanted[index]);
+    const canonical = sameBytes(objectMedia.original, expected.original) &&
+      sameBytes(objectMedia.thumbnail, expected.thumbnail);
     return canonical
-      ? { count: 1, canonical: true, identity: `release-smoke-v1:${SHA}`, generation: GENERATION, payloadSha256: PAYLOAD_SHA256 }
-      : { count: 1, canonical: false };
+      ? { count: 2, canonical: true, identity: `release-smoke-v1:${SHA}`, generation: GENERATION, payloadSha256: PAYLOAD_SHA256 }
+      : { count: 2, canonical: false };
   },
-  async upload(bytes) { objectBytes = new Uint8Array(bytes); },
-  async remove() { objectBytes = undefined; },
+  async upload(media) { objectMedia = media; },
+  async remove() { objectMedia = undefined; },
 };
 
 async function clearCanary() {
-  objectBytes = undefined;
+  objectMedia = undefined;
   await control.unsafe(`
     grant app_migrator to postgres;
     set local role app_migrator;
@@ -81,7 +85,7 @@ describe("Production smoke PostgreSQL adapter", () => {
     await expect(adapter.execute(operation("write-object", 4))).resolves.toEqual({ kind: "object-written" });
     await expect(adapter.execute(operation("verify-round-trip", 5))).resolves.toMatchObject({
       rowCount: 1,
-      objectCount: 1,
+      objectCount: 2,
       rowPhase: "object_written",
     });
     await expect(adapter.execute(operation("cleanup-exact", 7))).resolves.toEqual({ kind: "cleanup-finished" });
@@ -110,8 +114,8 @@ describe("Production smoke PostgreSQL adapter", () => {
   it("commits object_write_uncertain before releasing a late Storage write", async () => {
     const uncertainObjects: ProductionSmokeObjectStore = {
       ...objects,
-      async upload(bytes) {
-        objectBytes = new Uint8Array(bytes);
+      async upload(media) {
+        objectMedia = media;
         throw new ProductionSmokeOperationUncertainError("late upload");
       },
     };
@@ -123,7 +127,7 @@ describe("Production smoke PostgreSQL adapter", () => {
     );
     await expect(adapter.execute(operation("inspect-baseline", 5))).resolves.toMatchObject({
       rowCount: 1,
-      objectCount: 1,
+      objectCount: 2,
       rowPhase: "object_write_uncertain",
     });
   });
@@ -135,7 +139,7 @@ describe("Production smoke PostgreSQL adapter", () => {
     const uncertainCleanup = new ProductionSmokeCanaryAdapter(database, {
       ...objects,
       async remove() {
-        objectBytes = undefined;
+        objectMedia = undefined;
         throw new ProductionSmokeOperationUncertainError("late delete");
       },
     });

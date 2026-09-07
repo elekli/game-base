@@ -536,12 +536,12 @@ export async function checkProductionReleaseContract(root: string) {
       "749bcc8f8bc3a494b8b526c005d28ce5169da312b8e9a17e35694ef30f2155f4",
       "fcea0fd520df434b1c549e0d7b848530c60b43b87711814dae6f6ff3ffa464c3",
       "92569dcc9e85de5efe083da1ddf7951326ae3793ccfe535fda7024aedde139d4",
-      "0086cb94455b9b75eb092bb20e7fb2343952b843f6ca9e6b46f29ab0d35d9199",
-      "18fa525b8fdeac5430e70ca7164d42a55228e1b9b21981f92dffdac052ea4890",
+      "aab60949aa19dbec335d9012ce10d751a273bc244b35bab9bdc10861892f83ea",
+      "618cf243e1214778e6b0b9b437913f69e56af09bd1d0cd445fa0f2fae33e7ba9",
       "ecc8b4b53f319f877a3e5dc50d9690e1a36d94d5ee123d81d33a4eb1820687f8",
       "f1cc8366f5dafa9b9aa28fa7334c9a2e4ffa555e6e62b7e0f09d7d31eb8998e3",
-      "284f6531ecea8693f7b1c68ae3d8f5c76b84ecacd4f00a77daa3242d2de5e800",
-      "d976e4810f341690b3f8a236adb48f5c78a6a11660278e44da7fb316f30a53c6",
+      "c7879f56fd6ab185c27e3719edc3bec83ca47b93abc7040f43261fb0d5ccd241",
+      "8d7ce463b3f7050795926b919b4e09edb8ea80720b6fe1de75324c7aa55351d9",
       "b2e22f7ffb8089ae408c201ef9da20ec5249ca4afc7256b74741bd232457486c",
       "bd090591c481088c9202b089ad5af2a4a8ce71b8282104fc4b3dd9329202ed98",
       "185701f85c21333153a6b8655df22dfd10545061ccd27e771033fe1196c8b767",
@@ -569,7 +569,9 @@ export async function checkProductionReleaseContract(root: string) {
     "custom-domain-owner-access", "direct-origin-denied",
     "authenticated-library-read", "runtime-database-read",
     "private-storage-direct-denied", "canary-row-round-trip",
-    "canary-object-round-trip", "canary-cleanup-counts",
+    "canary-object-round-trip", "private-media-original-read",
+    "media-thumbnail-generated", "private-media-thumbnail-read",
+    "canary-cleanup-counts",
   ];
   assertContract(
     sourceManifestSchema.additionalProperties === false &&
@@ -592,8 +594,20 @@ export async function checkProductionReleaseContract(root: string) {
     "Source manifest schema must remain closed and versioned",
   );
   assertContract(
-    smokeContract.contractVersion === 3 &&
+    smokeContract.contractVersion === 4 &&
       smokeContract.namespace === "release-smoke-v1" &&
+      JSON.stringify(smokeContract.objectPaths) === JSON.stringify([
+        "release-smoke-v1/original.png",
+        "release-smoke-v1/thumbnail.webp",
+      ]) &&
+      JSON.stringify(smokeContract.payloadHashInput) === JSON.stringify([
+        "namespace", "identity", "rowId", "objectPaths",
+      ]) &&
+      JSON.stringify(smokeContract.bounds) === JSON.stringify({
+        baseline: { row: 0, object: 0 },
+        mutationMaximum: { row: 1, object: 2 },
+        cleanup: { row: 0, object: 0 },
+      }) &&
       smokeContract.generationFormat === "uuid-v4-created-once-per-complete-attempt" &&
       smokeContract.actionSequenceFormat ===
         "positive-integer-starting-at-1-incremented-on-every-next-action" &&
@@ -604,10 +618,12 @@ export async function checkProductionReleaseContract(root: string) {
       JSON.stringify(smokeContract.residuePolicy) === JSON.stringify({
         automaticCleanup: [
           "same-generation exact 1/0 row_claimed residue",
-          "same-generation exact 1/1 object_written residue",
+          "same-generation byte-exact partial 1/1 removed inside definitive write failure handling",
+          "same-generation exact 1/2 object_written residue",
         ],
         stop: [
-          "0/1 object-only residue",
+          "0/1-2 object-only residue",
+          "any persisted partial 1/1 media residue",
           "different generation, identity, or payload hash",
           "object_write_uncertain or cleanup_uncertain",
         ],
