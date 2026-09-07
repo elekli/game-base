@@ -59,6 +59,34 @@ async function snapshot(): Promise<ProductionDatabaseSnapshot> {
   return rows[0]!.snapshot;
 }
 
+type ComparablePolicy = Readonly<{
+  table: string;
+  name: string;
+  permissiveness: string;
+  command: string;
+  roles: string[];
+  using: string | null;
+  withCheck: string | null;
+}>;
+
+function stablePolicies(policies: ReadonlyArray<ComparablePolicy>) {
+  return policies
+    .map((policy) => ({
+      table: policy.table,
+      name: policy.name,
+      permissiveness: policy.permissiveness,
+      command: policy.command,
+      roles: [...policy.roles].sort(),
+      using: policy.using,
+      withCheck: policy.withCheck,
+    }))
+    .sort(
+      (left, right) =>
+        left.table.localeCompare(right.table) ||
+        left.name.localeCompare(right.name),
+    );
+}
+
 describe("production migration PostgreSQL catalog checks", () => {
   beforeAll(async () => {
     await database.unsafe("select 1");
@@ -77,6 +105,46 @@ describe("production migration PostgreSQL catalog checks", () => {
     expect(healthy.defaultPrivilegeDriftCount).toBe(0);
     expect(healthy.runtimeGrantDriftCount).toBe(0);
     expect(healthy.productionSmokeSecurityDriftCount).toBe(0);
+  });
+
+  it("keeps the repository RLS manifest complete for the replayed catalog", async () => {
+    const healthy = await snapshot();
+    const manifest = JSON.parse(
+      await readFile(".github/production-rls-policy-manifest.json", "utf8"),
+    ) as {
+      policies: Array<ComparablePolicy & {
+        validFrom: string;
+        validUntilExclusive: string | null;
+      }>;
+    };
+    const migrationIndexes = new Map(
+      healthy.migrations.map((migration, index) => [migration.version, index]),
+    );
+    const tailIndex = healthy.migrations.length - 1;
+    const expected = manifest.policies
+      .filter((policy) => {
+        const start = migrationIndexes.get(policy.validFrom);
+        const end =
+          policy.validUntilExclusive === null
+            ? null
+            : migrationIndexes.get(policy.validUntilExclusive);
+        return (
+          start !== undefined &&
+          start <= tailIndex &&
+          (end === null || (end !== undefined && tailIndex < end))
+        );
+      })
+      .map((policy) => ({
+        table: policy.table,
+        name: policy.name,
+        permissiveness: policy.permissiveness,
+        command: policy.command,
+        roles: policy.roles,
+        using: policy.using,
+        withCheck: policy.withCheck,
+      }));
+
+    expect(stablePolicies(healthy.rlsPolicies)).toEqual(stablePolicies(expected));
   });
 
   it.each([

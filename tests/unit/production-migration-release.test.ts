@@ -18,6 +18,7 @@ import {
   runLedgerRecovery,
   runNormalMigrationRelease,
 } from "../../scripts/production-migration-release";
+import { ProductionMigrationError } from "../../scripts/production-migration-preflight";
 
 const migration = {
   version: "0007",
@@ -155,6 +156,24 @@ describe("production migration release records", () => {
       async strictVerify() { events.push("strict"); throw new Error("strict failed"); },
     });
     await expect(runNormalMigrationRelease(ports, normalInput)).rejects.toThrow("strict post-apply verification failed");
+    expect(events).not.toContain("persist-success");
+  });
+
+  it("preserves a controlled strict diagnostic for the protected runner", async () => {
+    const diagnostic = new ProductionMigrationError(
+      "ProductionMigrationPreflightError",
+      "Production database failed checks: rls",
+    );
+    const { ports, events } = normalPorts({
+      async strictVerify() {
+        events.push("strict");
+        throw diagnostic;
+      },
+    });
+
+    await expect(runNormalMigrationRelease(ports, normalInput)).rejects.toBe(
+      diagnostic,
+    );
     expect(events).not.toContain("persist-success");
   });
 
