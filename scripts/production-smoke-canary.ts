@@ -84,7 +84,6 @@ const FIXED_READ_CHECKS = [
   "direct-origin-denied",
   "authenticated-library-read",
   "runtime-database-read",
-  "private-storage-direct-denied",
 ] as const satisfies ReadonlyArray<ProductionSmokeCheck>;
 type FixedReadCheck = (typeof FIXED_READ_CHECKS)[number];
 type PassedCheckMap = Readonly<Record<ProductionSmokeCheck, "passed">>;
@@ -150,6 +149,11 @@ export type ProductionSmokeCanaryAction = (
       maxObjectCount: 1;
     }>
   | Readonly<{
+      kind: "verify-private-storage-denial";
+      generation: string;
+      objectPath: typeof PRODUCTION_SMOKE_OBJECT_PATH;
+    }>
+  | Readonly<{
       kind: "cleanup-exact-canary";
       expectedPhase: "row_claimed" | "cleanup_pending";
       generation: string;
@@ -168,6 +172,7 @@ type CanaryPhase =
   | "writing-row"
   | "writing-object"
   | "verifying-round-trip"
+  | "verifying-private-storage-denial"
   | "cleaning-canary"
   | "verifying-cleanup"
   | "manual-recovery-required"
@@ -218,6 +223,7 @@ export type ProductionSmokeCanaryEventPayload =
       objectIdentity?: string;
       rowGeneration?: string;
       objectGeneration?: string;
+      rowActionSequence?: number;
       rowPhase?: ProductionSmokePersistedPhase;
       rowPayloadSha256?: string;
       objectPayloadSha256?: string;
@@ -237,11 +243,13 @@ export type ProductionSmokeCanaryEventPayload =
       objectIdentity?: string;
       rowGeneration?: string;
       objectGeneration?: string;
+      rowActionSequence?: number;
       rowPhase?: ProductionSmokePersistedPhase;
       rowPayloadSha256?: string;
       objectPayloadSha256?: string;
       requestIds: ReadonlyArray<string>;
     }>
+  | Readonly<{ kind: "private-storage-denial-observed"; status: "passed" }>
   | Readonly<{ kind: "cleanup-finished" }>
   | Readonly<{ kind: "operation-uncertain"; safeDetail: string }>
   | Readonly<{ kind: "operation-failed"; safeDetail: string }>;
@@ -281,6 +289,13 @@ function cleanupAction(
     objectPath: PRODUCTION_SMOKE_OBJECT_PATH,
     payloadSha256,
   };
+}
+
+function residueCleanupActionSequence(canary: ProductionSmokeCanary, observed: number | undefined) {
+  if (!Number.isSafeInteger(observed) || (observed as number) < 1 || (observed as number) >= Number.MAX_SAFE_INTEGER) {
+    throw new ProductionCanaryResidueMismatchError("persisted residue action sequence is invalid");
+  }
+  return Math.max(canary.next.actionSequence + 1, (observed as number) + 1);
 }
 
 function isCountPair(value: unknown, expected: CountPair): boolean {
@@ -473,7 +488,7 @@ export function transitionProductionSmokeCanary(
     if (canary.phase === "cleaning-canary" || canary.phase === "cleaning-residue" || canary.phase === "verifying-cleanup") {
       throw cleanupFailure(canary, event.safeDetail);
     }
-    if (canary.phase === "writing-row" || canary.phase === "writing-object" || canary.phase === "verifying-round-trip") {
+    if (canary.phase === "writing-row" || canary.phase === "writing-object" || canary.phase === "verifying-round-trip" || canary.phase === "verifying-private-storage-denial") {
       return cleanupAfterMutationFailure(canary, event.safeDetail);
     }
     throw new ProductionCanaryResidueMismatchError(event.safeDetail);
@@ -485,10 +500,10 @@ export function transitionProductionSmokeCanary(
       return { ...canary, phase: "running-read-checks", baselineCounts: { row: 0, object: 0 }, next: { kind: "run-fixed-read-checks", generation: canary.generation, actionSequence: canary.next.actionSequence + 1, checks: FIXED_READ_CHECKS } };
     }
     if (event.rowCount === 1 && event.objectCount === 0 && event.rowIdentity === canary.identity && event.rowGeneration === canary.generation && event.rowPayloadSha256 === canary.payloadSha256 && event.rowPhase === "row_claimed") {
-      return { ...canary, phase: "cleaning-residue", cleanupPurpose: "residue", next: cleanupAction(canary.identity, canary.generation, canary.payloadSha256, canary.next.actionSequence + 1, "row_claimed") };
+      return { ...canary, phase: "cleaning-residue", cleanupPurpose: "residue", next: cleanupAction(canary.identity, canary.generation, canary.payloadSha256, residueCleanupActionSequence(canary, event.rowActionSequence), "row_claimed") };
     }
     if (event.rowCount === 1 && event.objectCount === 1 && event.rowIdentity === canary.identity && event.objectIdentity === canary.identity && event.rowGeneration === canary.generation && event.objectGeneration === canary.generation && event.rowPayloadSha256 === canary.payloadSha256 && event.objectPayloadSha256 === canary.payloadSha256 && event.rowPhase === "object_written") {
-      return { ...canary, phase: "cleaning-residue", cleanupPurpose: "residue", next: cleanupAction(canary.identity, canary.generation, canary.payloadSha256, canary.next.actionSequence + 1) };
+      return { ...canary, phase: "cleaning-residue", cleanupPurpose: "residue", next: cleanupAction(canary.identity, canary.generation, canary.payloadSha256, residueCleanupActionSequence(canary, event.rowActionSequence)) };
     }
     throw new ProductionCanaryResidueMismatchError("baseline residue is partial or belongs to another execution");
   }
@@ -528,7 +543,19 @@ export function transitionProductionSmokeCanary(
           next: { kind: "stop", actionSequence: canary.next.actionSequence + 1 },
         };
       }
-      return { ...canary, phase: "cleaning-canary", cleanupPurpose: "final", mutationCounts: { row: 1, object: 1 }, checks: { ...canary.checks, "canary-row-round-trip": "passed", "canary-object-round-trip": "passed" }, requestIds: appendRequestIds(canary.requestIds, event.requestIds), next: cleanupAction(canary.identity, canary.generation, canary.payloadSha256, canary.next.actionSequence + 1) };
+      return {
+        ...canary,
+        phase: "verifying-private-storage-denial",
+        mutationCounts: { row: 1, object: 1 },
+        checks: { ...canary.checks, "canary-row-round-trip": "passed", "canary-object-round-trip": "passed" },
+        requestIds: appendRequestIds(canary.requestIds, event.requestIds),
+        next: {
+          kind: "verify-private-storage-denial",
+          generation: canary.generation,
+          actionSequence: canary.next.actionSequence + 1,
+          objectPath: canary.objectPath,
+        },
+      };
     } catch (error) {
       const safeDetail = error instanceof ProductionCanaryError ? error.safeDetail : "round trip validation failed";
       return {
@@ -538,6 +565,25 @@ export function transitionProductionSmokeCanary(
         next: { kind: "stop", actionSequence: canary.next.actionSequence + 1 },
       };
     }
+  }
+
+  if (
+    canary.phase === "verifying-private-storage-denial" &&
+    event.kind === "private-storage-denial-observed" &&
+    event.status === "passed"
+  ) {
+    return {
+      ...canary,
+      phase: "cleaning-canary",
+      cleanupPurpose: "final",
+      checks: { ...canary.checks, "private-storage-direct-denied": "passed" },
+      next: cleanupAction(
+        canary.identity,
+        canary.generation,
+        canary.payloadSha256,
+        canary.next.actionSequence + 1,
+      ),
+    };
   }
   if ((canary.phase === "cleaning-canary" || canary.phase === "cleaning-residue") && event.kind === "cleanup-finished") {
     return { ...canary, phase: "verifying-cleanup", next: inspectCounts("cleanup", canary.generation, canary.next.actionSequence + 1) };

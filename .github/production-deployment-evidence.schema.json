@@ -20,7 +20,7 @@
     "executionSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
     "releaseIdentity": { "type": "string", "pattern": "^production:[a-f0-9]{40}$" },
     "sourceManifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-    "canaryContractVersion": { "const": 2 },
+    "canaryContractVersion": { "const": 3 },
     "releaseKind": { "enum": ["code-only", "migration-bearing"] },
     "migrationTail": { "type": "string", "pattern": "^[0-9]{4,}$" },
     "baselineDeploymentId": { "type": "string", "pattern": "^dpl_[A-Za-z0-9]+$" },

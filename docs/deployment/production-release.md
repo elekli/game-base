@@ -81,13 +81,14 @@ Promotion 前的任何失敗都讓 D0 繼續接收流量。Promotion 結果不�
 
 `/api/internal/release-smoke` 已建立 production-only 前置閘與獨立 service-principal verifier。它只接受 Cloudflare 注入的 `Cf-Access-Jwt-Assertion`，並核對 RS256、`kid`、issuer、audience、`type: "app"`、空 `sub`、時間界線、repository pin 的最大 lifetime，以及 `common_name` SHA-256 fingerprint。Client ID／Secret headers 與 request body 都不能自報授權。
 
-Production binding 的 fingerprint 與最大 lifetime 目前刻意維持 `null`。因此 route 在讀 body、建立 canary adapter 或呼叫 DB／Storage／library 前固定回具名 503；即使未來先補齊這兩個 pin，合法 assertion 與封閉 request 也仍會回 `release_smoke_canary_not_implemented`，直到 canary persistence 另案完成。回應與 log 只含具名錯誤與 request ID，不含 assertion、service-token headers 或 body。
+Production binding 的 fingerprint 與最大 lifetime 目前刻意維持 `null`。因此 route 在讀 body、建立 canary adapter 或呼叫 DB／Storage／library 前固定回具名 503。DB／private Storage adapter 與封閉 request dispatch 已接線；未具備這兩個 repository pin 時仍無法執行。回應與 log 只含有界 state-machine event、具名錯誤與 request ID，不含 assertion、service-token headers、連線資料或 request body。
 
-`scripts/production-smoke-runner.ts` 仍不會建立或繞過 `requireOwner`。在下列 canary／外部條件完成獨立審查前，它固定拋出 `ProductionSmokePrerequisiteError`，不送任何 HTTP request：
+`scripts/production-smoke-runner.ts` 不會建立或繞過 `requireOwner`。runner transport 已能驅動固定 canary，並從外部核對自訂網域、direct-origin denial 與 public Storage denial；direct-origin 探針固定讀公開的 `/security-error`，只接受導向 Vercel 登入網域的 redirect，不把 application 401／403 當作 Deployment Protection 證據。private Storage denial 則排在 route 已確認固定物件為 exact `1/1` 之後、cleanup 之前，避免不存在物件造成假陽性。設定缺漏、網域重疊或格式錯誤時會在零 HTTP request 前拋出 `ProductionSmokePrerequisiteError`。正式執行仍受以下外部前提阻擋：
 
 1. 專用 `/api/internal/release-smoke` route 的 repository-owned Production fingerprint 與最大 lifetime pin 已核准並從 `null` 換成受審值；一般 owner 與此 service principal 仍維持雙向隔離。
 2. route 的唯一可變資料為固定 UUID 的 `app_private.production_smoke_canaries` row 與固定 private Storage path；row／object 皆必須以 exact execution identity 清除，不能接受任意 table、game、object 或 owner input。
-3. route 可在同一受限 principal 下完成固定 owner-library read、runtime DB read 與 private Storage denial；其餘 app 功能不授權給該 principal。
+3. route 可在同一受限 principal 下完成固定 library read 與 runtime DB read；private Storage 的公開路徑拒絕由外部 runner 核對，其餘 app 功能不授權給該 principal。
+4. `custom-domain-owner-access` 需要當次執行取得的短效 owner `CF_Authorization` session；它不是可長期保存的 GitHub secret。正式 workflow 接線前必須另行裁決安全的取得與交付方式，不能把過期 session 寫死為 repository prerequisite。
 
 此決策完成、migration 與 route 有獨立審查、外部 settings 證據到位前，`productionDeploymentEnabled` 一律保持 `false`。
 
@@ -113,9 +114,9 @@ Vercel REST 的 `POST /v13/deployments` 沒有 CLI `--skip-domain` 的等價參�
 
 Repository 已固定 source manifest schema／builder、REST request contract、八項 canary smoke contract／狀態模型，以及 logical restore drill／證據 schema 的路徑與 SHA-256。它們目前只提供純函式、解析器與 fail-closed 模型；不讀 token、不送網路請求、不建立 workflow 或 package command。Restore drill 只證明 PostgreSQL logical data 可在隔離的本機目標還原，不包含 Supabase Storage binaries。Production migration 連線禁止 port 6543 transaction pooler；port 5432 direct endpoint 或 session pooler 仍待使用者明確選定並完成 `verify-full` 綁定。
 
-Canary contract v2 為每次完整嘗試建立一次 UUIDv4 generation，並要求資料列、Storage 物件與證據都帶同一代別；每個動作另帶單調遞增的 action sequence，回傳事件必須精確匹配目前動作，避免同一 generation 內的晚到事件被重播。只有同 generation 的 `1/0 row_claimed` 或 `1/1 object_written` 殘留可自動清理；`0/1`、不同 generation／identity／payload hash，或 Storage／cleanup 結果不確定時一律停止並要求人工復原。contract 與狀態模型本身仍是純函式，不讀 credentials 或送出網路請求。
+Canary contract v3 為每次完整嘗試建立一次 UUIDv4 generation，並要求資料列、Storage 物件與證據都帶同一代別；每個動作另帶單調遞增的 action sequence，回傳事件必須精確匹配目前動作，避免同一 generation 內的晚到事件被重播。runner 對 transport loss 最多原樣重送一次，identity、generation、action sequence 與 operation 都不得改變；exact cleanup 的 `0/0` 可視為冪等成功。匿名 private Storage denial 檢查失敗時，runner 先透過狀態機完成 exact cleanup 與 `0/0` 驗證，再回報 `failed-cleanup-complete`。只有同 generation 的 `1/0 row_claimed` 或 `1/1 object_written` 殘留可自動清理；`0/1`、不同 generation／identity／payload hash，或 Storage／cleanup 結果不確定時一律停止並要求人工復原。整次 runner、單次 request、response body、route operation、Postgres connection／statement 與 Storage 呼叫都有有界期限。正式 smoke DB 將已驗證的 Supavisor transaction-pooler URL 固定切換到 port `5432` session pooler，拒絕在 port `6543` 持有跨交易 session lock；contract 與狀態模型本身仍是純函式，不讀 credentials 或送出網路請求。
 
-Migration `0015_production_smoke_canary.sql` 已加入固定 UUID 的 DB claim：table 強制 RLS，runtime 與 API roles 沒有直接 CRUD，只能呼叫固定 `search_path` 的 inspect／claim／phase CAS／exact cleanup functions。這只完成 PostgreSQL persistence seam；Production principal、DB／private Storage adapter、route 接線、read probes、組合 runner 與 Production workflow 仍未完成，release contract 繼續 fail closed。
+Migration `0015_production_smoke_canary.sql` 已加入固定 UUID 的 DB claim：table 強制 RLS，runtime 與 API roles 沒有直接 CRUD，只能呼叫固定 `search_path` 的 inspect／claim／phase CAS／exact cleanup functions。DB／private Storage adapter、route 接線、read probes 與組合 runner 已完成程式實作；Production principal、短效 owner session 交付、Cloudflare／網域 live credentials、staged-domain safety evidence 與 Production application workflow 仍未完成，因此 release contract 繼續 fail closed。
 
 Vercel CLI `59.11.7` 的 registry metadata 宣告 Node.js `>= 18`，且已確認具有 `deploy --prod --skip-domain`、`promote` 與 `rollback`；但 2026-09-07 以本 repository 的 `pnpm audit --audit-level high` 檢查其完整 dependency graph 時，新增 1 項 critical 與 18 項 high vulnerabilities。抽查仍可取得的 `55.0.0`、`56.5.0`、`57.0.0`、`58.11.0` 與 `59.11.7` 都未達零 critical／high；其中 `undici` 修補需要跨 major override，不能假設相容。因此 `.github/vercel-deployment-adapter-evaluation.json` 將 `59.11.7` 只記為 deployment candidate，不把它加入 dependency，也不建立 `deploy`／`promote`／`rollback` package script 或 workflow。`release:settings:check` 的 Vercel 唯讀查詢已改由 repository-owned `scripts/vercel-read-only-rest-client.ts` 使用 Node 原生 `fetch` 呼叫官方 REST API，不再從 `PATH` 執行 global Vercel CLI。這只移除 settings inspection 的 CLI 供應鏈風險；deployment REST adapter 目前僅完成 request contract 與 parser，live adapter 固定拋出 disabled error，仍不得建立、promote 或 rollback deployment。
 
