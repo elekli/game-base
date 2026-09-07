@@ -6,12 +6,15 @@ export type ProductionSchemaGate =
 export type ProductionDeploymentFailure =
   | "baseline-deployment-invalid"
   | "baseline-inspection-failed"
+  | "evidence-write-failed"
   | "promotion-attempts-exhausted"
   | "promotion-guard-check-failed"
   | "promotion-guard-rejected"
+  | "promotion-state-inspection-failed"
   | "release-gate-rejected"
   | "release-gate-check-failed"
   | "rollback-attempts-exhausted"
+  | "rollback-state-inspection-failed"
   | "smoke-failed-baseline-restored"
   | "staged-deployment-ensure-failed"
   | "staged-deployment-identity-mismatch"
@@ -19,7 +22,8 @@ export type ProductionDeploymentFailure =
   | "staged-ready-wait-failed"
   | "unexpected-current-deployment-after-promotion"
   | "unexpected-current-deployment-after-rollback"
-  | "unexpected-current-deployment-before-rollback";
+  | "unexpected-current-deployment-before-rollback"
+  | "pre-rollback-inspection-failed";
 
 export class ProductionDeploymentReleaseError extends Error {
   constructor(readonly safeDetail: string) {
@@ -219,6 +223,39 @@ export function transitionProductionDeploymentRelease(
   const namedPrePromotionFailure = prePromotionFailure(release.phase);
   if (event.kind === "operation-failed" && namedPrePromotionFailure) {
     return failed(release, namedPrePromotionFailure);
+  }
+  if (event.kind === "operation-failed") {
+    switch (release.phase) {
+      case "promoting-staged":
+        return {
+          ...release,
+          phase: "verifying-promotion",
+          next: inspectCurrent("verify-promotion"),
+        };
+      case "verifying-promotion":
+        return failed(release, "promotion-state-inspection-failed");
+      case "running-smoke":
+        return {
+          ...release,
+          requestIds: release.requestIds ?? [],
+          phase: "inspecting-before-rollback",
+          next: inspectCurrent("before-rollback"),
+        };
+      case "inspecting-before-rollback":
+        return failed(release, "pre-rollback-inspection-failed");
+      case "rolling-back":
+        return {
+          ...release,
+          phase: "verifying-rollback",
+          next: inspectCurrent("verify-rollback"),
+        };
+      case "verifying-rollback":
+        return failed(release, "rollback-state-inspection-failed");
+      case "recording-evidence":
+        return failed(release, "evidence-write-failed");
+      default:
+        break;
+    }
   }
   switch (release.phase) {
     case "awaiting-release-gate": {

@@ -30,8 +30,8 @@ type ProductionReleaseContract = Readonly<{
   supabaseProjectRef: string;
   supabaseRegion: string;
   vercelGitDeployment: boolean;
-  vercelCliCandidateVersion: string;
-  vercelCliStatus: string;
+  vercelDeploymentCliCandidateVersion: string;
+  vercelDeploymentCliStatus: string;
   vercelDeploymentAdapterEvaluation: string;
   vercelProjectId: string;
   vercelProjectName: string;
@@ -120,26 +120,27 @@ export async function checkProductionReleaseContract(root: string) {
     "Vercel team ID does not match the Production binding",
   );
   assertContract(
-    contract.vercelCliCandidateVersion === "59.11.7" &&
-      contract.vercelCliStatus === "blocked-security-audit" &&
+    contract.vercelDeploymentCliCandidateVersion === "59.11.7" &&
+      contract.vercelDeploymentCliStatus === "blocked-security-audit" &&
       contract.vercelDeploymentAdapterEvaluation ===
         ".github/vercel-deployment-adapter-evaluation.json" &&
       deploymentAdapterEvaluation.candidateVersion ===
-        contract.vercelCliCandidateVersion &&
+        contract.vercelDeploymentCliCandidateVersion &&
       deploymentAdapterEvaluation.candidateNodeEngine === ">= 18" &&
       deploymentAdapterEvaluation.audit?.critical === 1 &&
       deploymentAdapterEvaluation.audit?.high === 18 &&
-      deploymentAdapterEvaluation.decision === "blocked-no-executable-cli" &&
+      deploymentAdapterEvaluation.decision ===
+        "blocked-no-executable-deployment-cli" &&
       deploymentAdapterEvaluation.nextAdapter ===
         "official-rest-api-or-security-cleared-exact-cli",
-    "Vercel CLI candidate must remain security-blocked with its audit evidence",
+    "Vercel deployment CLI candidate must remain security-blocked with its audit evidence",
   );
   assertContract(
     packageJson.devDependencies?.vercel === undefined &&
       !/(?:pnpm\s+(?:dlx|exec)|npx)\s+vercel|\bvercel\s+(?:deploy|promote|rollback)\b/.test(
         Object.values(packageJson.scripts ?? {}).join("\n"),
       ),
-    "security-blocked Vercel CLI must not be executable through package dependencies or scripts",
+    "security-blocked Vercel deployment CLI must not be executable through package dependencies or scripts",
   );
   assertContract(
     contract.productionDeploymentWriter ===

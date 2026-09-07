@@ -7,7 +7,7 @@ import {
 
 const SHA = "a".repeat(40);
 
-function reachPromotionVerification() {
+function reachPromotionAttempt() {
   let release = createProductionDeploymentRelease({
     executionSha: SHA,
     releaseKind: "migration-bearing",
@@ -38,7 +38,11 @@ function reachPromotionVerification() {
     currentDeploymentId: "dpl_D0",
     mainSha: SHA,
   });
-  return transitionProductionDeploymentRelease(release, {
+  return release;
+}
+
+function reachPromotionVerification() {
+  return transitionProductionDeploymentRelease(reachPromotionAttempt(), {
     kind: "promotion-attempt-finished",
     outcome: "ambiguous-failure",
   });
@@ -401,6 +405,87 @@ describe("production deployment release model", () => {
     expect(release.failure).toBe("staged-ready-wait-failed");
     expect(release.baselineDeploymentId).toBe("dpl_D0");
     expect(release.next).toEqual({ kind: "stop" });
+  });
+
+  it("treats command failures after promotion as ambiguous and re-inspects before mutating", () => {
+    const promotionFailure = transitionProductionDeploymentRelease(
+      reachPromotionAttempt(),
+      { kind: "operation-failed" },
+    );
+    expect(promotionFailure.next).toEqual({
+      kind: "inspect-current-deployment",
+      purpose: "verify-promotion",
+      timeoutMs: 30_000,
+    });
+
+    let smokeFailure = transitionProductionDeploymentRelease(reachSmoke(), {
+      kind: "operation-failed",
+    });
+    expect(smokeFailure.next).toEqual({
+      kind: "inspect-current-deployment",
+      purpose: "before-rollback",
+      timeoutMs: 30_000,
+    });
+    smokeFailure = transitionProductionDeploymentRelease(smokeFailure, {
+      kind: "current-deployment-observed",
+      deploymentId: "dpl_D1",
+    });
+    expect(smokeFailure.next.kind).toBe("rollback-baseline");
+
+    const inspectionFailure = transitionProductionDeploymentRelease(
+      reachPromotionVerification(),
+      { kind: "operation-failed" },
+    );
+    expect(inspectionFailure.failure).toBe(
+      "promotion-state-inspection-failed",
+    );
+    expect(inspectionFailure.next).toEqual({ kind: "stop" });
+  });
+
+  it("names evidence persistence failure instead of reporting release success", () => {
+    let release = transitionProductionDeploymentRelease(reachSmoke(), {
+      kind: "smoke-passed",
+      requestIds: [],
+    });
+    release = transitionProductionDeploymentRelease(release, {
+      kind: "operation-failed",
+    });
+
+    expect(release.phase).toBe("failed");
+    expect(release.failure).toBe("evidence-write-failed");
+  });
+
+  it("fails visibly when rollback-state inspection cannot establish an authority", () => {
+    let beforeRollback = transitionProductionDeploymentRelease(reachSmoke(), {
+      kind: "smoke-failed",
+      requestIds: [],
+    });
+    const beforeRollbackInspectionFailure =
+      transitionProductionDeploymentRelease(beforeRollback, {
+        kind: "operation-failed",
+      });
+    expect(beforeRollbackInspectionFailure.failure).toBe(
+      "pre-rollback-inspection-failed",
+    );
+
+    beforeRollback = transitionProductionDeploymentRelease(beforeRollback, {
+      kind: "current-deployment-observed",
+      deploymentId: "dpl_D1",
+    });
+    let rollbackFailure = transitionProductionDeploymentRelease(beforeRollback, {
+      kind: "operation-failed",
+    });
+    expect(rollbackFailure.next).toEqual({
+      kind: "inspect-current-deployment",
+      purpose: "verify-rollback",
+      timeoutMs: 30_000,
+    });
+    rollbackFailure = transitionProductionDeploymentRelease(rollbackFailure, {
+      kind: "operation-failed",
+    });
+    expect(rollbackFailure.failure).toBe(
+      "rollback-state-inspection-failed",
+    );
   });
 
   it("reuses only a staged deployment resolved with the stable release identity", () => {

@@ -25,8 +25,8 @@ describe("production release contract", () => {
 
     expect(contract).toMatchObject({
       vercelTeamId: "team_vpaufHhAabxSup7QLCbCGwlF",
-      vercelCliCandidateVersion: "59.11.7",
-      vercelCliStatus: "blocked-security-audit",
+      vercelDeploymentCliCandidateVersion: "59.11.7",
+      vercelDeploymentCliStatus: "blocked-security-audit",
       vercelDeploymentAdapterEvaluation:
         ".github/vercel-deployment-adapter-evaluation.json",
       productionDeploymentWriter:
