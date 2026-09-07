@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   MEDIA_MAX_BYTES,
   createMediaBatchUpload,
@@ -14,6 +14,7 @@ import {
   type UploadGrant,
 } from "@/modules/media";
 import { createBrowserMediaUpload } from "@/modules/media/browser-upload-client";
+import { createLatestRequestGate } from "@/modules/media/latest-request-gate";
 
 type JsonError = Readonly<{ message?: string }>;
 class MediaClientError extends Error {
@@ -62,7 +63,7 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
   const [busy, setBusy] = useState(false);
   const [undoAssetIds, setUndoAssetIds] = useState<readonly string[]>([]);
   const [preview, setPreview] = useState<Readonly<{ url: string; name: string; download: () => Promise<void> }> | null>(null);
-  const galleryLoad = useRef<Promise<boolean> | null>(null);
+  const galleryRequestGate = useRef(createLatestRequestGate());
   const [batch] = useState(() => createMediaBatchUpload({
     identityStore: createSessionMediaIdentityStore(gameId),
     async upload({ idempotencyKey, file, purpose: filePurpose, onProgress, onProcessing, registerCancel }) {
@@ -85,32 +86,33 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
     },
   }));
 
-  function loadGallery(): Promise<boolean> {
-    if (galleryLoad.current) return galleryLoad.current;
-    const request = (async () => {
+  const loadGallery = useCallback(async (): Promise<boolean> => {
+    const isLatest = galleryRequestGate.current.begin();
+    return (async () => {
       try {
         const response = await fetch(`/api/private/media/games/${gameId}`, { cache: "no-store" });
-        setGallery(await responseJson<MediaGallery>(response));
+        const next = await responseJson<MediaGallery>(response);
+        if (!isLatest()) return false;
+        setGallery(next);
         setGalleryError("");
         return true;
-      } catch (error) { setGalleryError(error instanceof Error ? error.message : "相簿讀取失敗。"); return false; }
+      } catch (error) {
+        if (isLatest()) setGalleryError(error instanceof Error ? error.message : "相簿讀取失敗。");
+        return false;
+      }
     })();
-    galleryLoad.current = request;
-    void request.finally(() => { if (galleryLoad.current === request) galleryLoad.current = null; });
-    return request;
-  }
+  }, [gameId]);
 
   useEffect(() => {
+    const requestGate = galleryRequestGate.current;
     const unsubscribe = batch.subscribe(setFiles);
-    void fetch(`/api/private/media/games/${gameId}`, { cache: "no-store" })
-      .then((response) => responseJson<MediaGallery>(response))
-      .then((next) => { setGallery(next); setGalleryError(""); }, (error) => setGalleryError(error instanceof Error ? error.message : "相簿讀取失敗。"));
+    void loadGallery();
     const warnOnLeave = (event: BeforeUnloadEvent) => {
       if (batch.snapshot().some((item) => ["queued", "uploading", "processing"].includes(item.status))) event.preventDefault();
     };
     window.addEventListener("beforeunload", warnOnLeave);
-    return () => { batch.cancel().catch((error) => console.error("media_upload_cancel_failed", error)); unsubscribe(); window.removeEventListener("beforeunload", warnOnLeave); };
-  }, [batch, gameId]);
+    return () => { requestGate.invalidate(); batch.cancel().catch((error) => console.error("media_upload_cancel_failed", error)); unsubscribe(); window.removeEventListener("beforeunload", warnOnLeave); };
+  }, [batch, loadGallery]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {

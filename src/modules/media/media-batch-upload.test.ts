@@ -143,6 +143,17 @@ describe("media batch upload", () => {
     expect(batch.snapshot()[0]?.status).toBe("failed");
   });
 
+  it("並行加入同一內容時不建立重複工作或重複冪等鍵", async () => {
+    const batch = createMediaBatchUpload({
+      upload: vi.fn(),
+      createId: () => "00000000-0000-4000-8000-000000000001",
+      identityStore: createSessionLikeIdentityStore(),
+    });
+    await Promise.all([batch.add([file("same.png")]), batch.add([file("same.png")])]);
+    expect(batch.snapshot()).toHaveLength(1);
+    expect(new Set(batch.snapshot().map((item) => item.idempotencyKey)).size).toBe(1);
+  });
+
   it("內容驗證的永久失敗不重試，重新選檔時建立新 intent", async () => {
     const identityStore = createSessionLikeIdentityStore();
     const keys = ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"];

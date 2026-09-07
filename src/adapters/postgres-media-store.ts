@@ -111,13 +111,13 @@ export class PostgresMediaStore implements MediaStore {
         insert into app_private.media_ingests (
           id, idempotency_key, reserved_asset_id, channel, purpose, game_id,
           original_object_path, original_file_name, declared_mime_type, declared_byte_size,
-          state, stale_after, source_url, object_key, original_state, thumbnail_state
+          state, stale_after, source_url, object_key, original_state, thumbnail_state, created_at
         ) values (
           ${reserved.ingestId}, ${command.idempotencyKey}, ${reserved.assetId}, 'browser_tus', ${command.purpose}, ${command.gameId},
           ${reserved.objectPath}, ${command.originalFileName}, ${command.declaredMimeType}, ${command.declaredByteSize},
-          'issued', ${reserved.staleAfter}, '', ${reserved.objectPath}, 'pending', 'pending'
+          'issued', ${reserved.staleAfter}, '', ${reserved.objectPath}, 'pending', 'pending', clock_timestamp()
         )
-        returning ${ingestFields}
+        returning ${ingestFields}, created_at
       `) as Row[] : [];
       const rows = inserted[0] ? inserted : await tx.execute(sql`
         select ${ingestFields}
@@ -126,6 +126,13 @@ export class PostgresMediaStore implements MediaStore {
       `) as Row[];
       const ingest = ingestFrom(rows[0]);
       if (!matchesUploadCommand(ingest, command)) throw new MediaUploadIdempotencyConflictError();
+      if (inserted[0] && command.purpose === "custom_cover") {
+        await tx.execute(sql`
+          update app_private.games
+          set manual_cover_selected_at = ${inserted[0].created_at}
+          where id = ${command.gameId}
+        `);
+      }
       if (ingest.state === "finalized") {
         const result = await readResult(tx, ingest.id);
         if (!result) throw new MediaFinalizeUnavailableError();
@@ -225,9 +232,11 @@ export class PostgresMediaStore implements MediaStore {
       if (ingest.purpose === "custom_cover") {
         await tx.execute(sql`
           update app_private.games
-          set manual_cover_asset_id = ${ingest.reservedAssetId}, manual_cover_selected_at = clock_timestamp()
+          set manual_cover_asset_id = ${ingest.reservedAssetId}, manual_cover_selected_at = (
+            select created_at from app_private.media_ingests where id = ${ingest.id}
+          )
           where id = ${ingest.gameId}
-            and coalesce(manual_cover_selected_at, '-infinity'::timestamptz) <= (
+            and manual_cover_selected_at = (
               select created_at from app_private.media_ingests where id = ${ingest.id}
             )
         `);

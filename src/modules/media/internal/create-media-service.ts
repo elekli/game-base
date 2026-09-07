@@ -157,9 +157,11 @@ export function createMediaService(dependencies: Readonly<{ store: MediaStore; o
       } catch { throw new MediaReadUnavailableError(); }
       if (!original) throw new MediaAssetUnavailableError();
       try {
-        const disposition = original.purpose === "attachment" && original.actualMimeType !== "application/pdf"
-          ? "attachment"
-          : query.disposition ?? "attachment";
+        let disposition = query.disposition ?? "attachment";
+        if (original.purpose === "attachment" && disposition === "inline") {
+          const stored = await dependencies.objects.inspect(original.path);
+          if (original.actualMimeType !== "application/pdf" || stored?.mimeType !== "application/pdf") disposition = "attachment";
+        }
         const grant = await dependencies.objects.createOriginalReadGrant(original.path, original.fileName, disposition, 60);
         return { status: "original_read", ...grant, disposition };
       } catch (error) { throw error instanceof MediaOperationError ? error : new MediaStorageUnavailableError(); }

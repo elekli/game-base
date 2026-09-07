@@ -329,7 +329,7 @@ describe("MediaService 與真 PostgreSQL", () => {
 
   it("較早開始但較晚完成的自訂封面，不會覆寫較新的封面 intent", async () => {
     const service = serviceFor();
-    const newerKey = "51000000-0000-4000-8000-000000000099";
+    const newerKey = crypto.randomUUID();
     const older = grantFrom(await service.beginMediaUpload(owner, beginCommand({ idempotencyKey: key, purpose: "custom_cover" })));
     await new Promise((resolve) => setTimeout(resolve, 2));
     const newer = grantFrom(await service.beginMediaUpload(owner, beginCommand({ idempotencyKey: newerKey, purpose: "custom_cover" })));
@@ -340,6 +340,22 @@ describe("MediaService 與真 PostgreSQL", () => {
     const rows = await runtime.unsafe<{ manual_cover_asset_id: string }[]>("select manual_cover_asset_id from app_private.games where id = $1", [gameId]);
     expect(rows[0]?.manual_cover_asset_id).toBe(newer.assetId);
     expect(rows[0]?.manual_cover_asset_id).not.toBe(older.assetId);
+  });
+
+  it("較早 intent 先完成時仍等待較新 intent，較新完成後才套用", async () => {
+    const service = serviceFor();
+    const newerKey = crypto.randomUUID();
+    const older = grantFrom(await service.beginMediaUpload(owner, beginCommand({ idempotencyKey: key, purpose: "custom_cover" })));
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const newer = grantFrom(await service.beginMediaUpload(owner, beginCommand({ idempotencyKey: newerKey, purpose: "custom_cover" })));
+
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    let rows = await runtime.unsafe<{ manual_cover_asset_id: string | null }[]>("select manual_cover_asset_id from app_private.games where id = $1", [gameId]);
+    expect(rows[0]?.manual_cover_asset_id).not.toBe(older.assetId);
+
+    await service.finalizeMediaUpload(owner, { idempotencyKey: newerKey });
+    rows = await runtime.unsafe<{ manual_cover_asset_id: string | null }[]>("select manual_cover_asset_id from app_private.games where id = $1", [gameId]);
+    expect(rows[0]?.manual_cover_asset_id).toBe(newer.assetId);
   });
 
   it("同鍵 finalize 已在驗證物件時，並行呼叫回報 finalizing，完成後重播同一資產", async () => {

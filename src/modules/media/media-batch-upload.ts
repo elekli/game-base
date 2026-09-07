@@ -103,6 +103,7 @@ export function createMediaBatchUpload(input: Readonly<{
   const createId = input.createId ?? (() => crypto.randomUUID());
   let files: MediaBatchFile[] = [];
   let running: Promise<void> | null = null;
+  let pendingAdd: Promise<void> = Promise.resolve();
   let cancelled = false;
   const activeCancels = new Map<string, () => Promise<void>>();
   const cancelSignals = new Map<string, (error: Error) => void>();
@@ -162,22 +163,26 @@ export function createMediaBatchUpload(input: Readonly<{
   };
 
   return {
-    async add(selected: readonly MediaBatchFile["file"][], purpose: MediaBatchFile["purpose"] = "gallery_image") {
-      const activeKeys = new Set(files.map((item) => item.idempotencyKey));
-      const prepared: Array<Readonly<{ file: MediaBatchFile["file"]; identity: string }>> = [];
-      for (const file of selected) prepared.push({ file, identity: await contentIdentity(file, purpose) });
-      const occurrences = new Map<string, number>();
-      files = [...files, ...prepared.flatMap(({ file, identity }) => {
-        const occurrence = occurrences.get(identity) ?? 0;
-        occurrences.set(identity, occurrence + 1);
-        const idempotencyKey = input.identityStore?.find(identity, occurrence) ?? createId(file, purpose);
-        if (activeKeys.has(idempotencyKey)) return [];
-        activeKeys.add(idempotencyKey);
-        input.identityStore?.remember(identity, idempotencyKey);
-        return [{ idempotencyKey, identity, file, purpose, status: "queued" as const, uploadedBytes: 0,
-          error: null, assetId: null, thumbnailState: null, retryable: true }];
-      })];
-      emit();
+    add(selected: readonly MediaBatchFile["file"][], purpose: MediaBatchFile["purpose"] = "gallery_image") {
+      const operation = pendingAdd.then(async () => {
+        const activeKeys = new Set(files.map((item) => item.idempotencyKey));
+        const prepared: Array<Readonly<{ file: MediaBatchFile["file"]; identity: string }>> = [];
+        for (const file of selected) prepared.push({ file, identity: await contentIdentity(file, purpose) });
+        const occurrences = new Map<string, number>();
+        files = [...files, ...prepared.flatMap(({ file, identity }) => {
+          const occurrence = occurrences.get(identity) ?? 0;
+          occurrences.set(identity, occurrence + 1);
+          const idempotencyKey = input.identityStore?.find(identity, occurrence) ?? createId(file, purpose);
+          if (activeKeys.has(idempotencyKey)) return [];
+          activeKeys.add(idempotencyKey);
+          input.identityStore?.remember(identity, idempotencyKey);
+          return [{ idempotencyKey, identity, file, purpose, status: "queued" as const, uploadedBytes: 0,
+            error: null, assetId: null, thumbnailState: null, retryable: true }];
+        })];
+        emit();
+      });
+      pendingAdd = operation.catch(() => undefined);
+      return operation;
     },
     reject(selected: readonly Readonly<{ file: MediaBatchFile["file"]; error: string }>[], purpose: MediaBatchFile["purpose"] = "gallery_image") {
       files = [...files, ...selected.map(({ file, error }) => ({
