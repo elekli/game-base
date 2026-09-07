@@ -77,11 +77,15 @@ Promotion 前的任何失敗都讓 D0 繼續接收流量。Promotion 結果不�
 
 啟用 live deployment 前仍須具備並核對：Production 自訂網域與 Cloudflare Access application；GitHub `Production` Environment secrets `VERCEL_TOKEN`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET`；variables `VERCEL_ORG_ID`、`VERCEL_PROJECT_ID`、`PRODUCTION_CUSTOM_DOMAIN`；以及只服務 release-smoke route 的最小權限身分裁決。還必須由操作者在 Vercel 專案設定中證明「自動指派 Custom Production Domains」已關閉；目前沒有可靠的 repository-owned REST 唯讀檢查可替代這項人工證據。未滿足這些前提時不得把 `productionDeploymentEnabled` 改為 `true`。
 
-### 尚未裁決的最窄 smoke 前提
+### Release-smoke route 的目前邊界
 
-`scripts/production-smoke-runner.ts` 不會建立或繞過 `requireOwner`。在下列三項由安全審查裁決前，它固定拋出 `ProductionSmokePrerequisiteError`，不送任何 HTTP request：
+`/api/internal/release-smoke` 已建立 production-only 前置閘與獨立 service-principal verifier。它只接受 Cloudflare 注入的 `Cf-Access-Jwt-Assertion`，並核對 RS256、`kid`、issuer、audience、`type: "app"`、空 `sub`、時間界線、repository pin 的最大 lifetime，以及 `common_name` SHA-256 fingerprint。Client ID／Secret headers 與 request body 都不能自報授權。
 
-1. 專用 `/api/internal/release-smoke` route 僅驗證 Cloudflare 注入、經既有 issuer／audience／JWKS／簽章／時間檢查的 assertion，並只接受 production allowlist 的 service-token `common_name`；不得信任 client header 自報，且此 principal 不得進一般 private route。
+Production binding 的 fingerprint 與最大 lifetime 目前刻意維持 `null`。因此 route 在讀 body、建立 canary adapter 或呼叫 DB／Storage／library 前固定回具名 503；即使未來先補齊這兩個 pin，合法 assertion 與封閉 request 也仍會回 `release_smoke_canary_not_implemented`，直到 canary persistence 另案完成。回應與 log 只含具名錯誤與 request ID，不含 assertion、service-token headers 或 body。
+
+`scripts/production-smoke-runner.ts` 仍不會建立或繞過 `requireOwner`。在下列 canary／外部條件完成獨立審查前，它固定拋出 `ProductionSmokePrerequisiteError`，不送任何 HTTP request：
+
+1. 專用 `/api/internal/release-smoke` route 的 repository-owned Production fingerprint 與最大 lifetime pin 已核准並從 `null` 換成受審值；一般 owner 與此 service principal 仍維持雙向隔離。
 2. route 的唯一可變資料為固定 UUID 的 `app_private.production_smoke_canaries` row 與固定 private Storage path；row／object 皆必須以 exact execution identity 清除，不能接受任意 table、game、object 或 owner input。
 3. route 可在同一受限 principal 下完成固定 owner-library read、runtime DB read 與 private Storage denial；其餘 app 功能不授權給該 principal。
 

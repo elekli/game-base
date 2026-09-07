@@ -10,6 +10,8 @@ describe("parseRuntimeConfig", () => {
     expect(deploymentBindings.production).toEqual({
       databaseName: "postgres",
       projectRef: "wbtyuvufhrhybquzwfip",
+      releaseSmokeCommonNameSha256: null,
+      releaseSmokeMaxTokenLifetimeSeconds: null,
       publishableKeySha256:
         "4462e410b46df06f21744e9cafcfc75e7eb8975cab8629ce6360be06d08fe557",
       secretKeySha256:
@@ -28,6 +30,11 @@ describe("parseRuntimeConfig", () => {
       environment: "preview",
       supabase: { projectRef: "preview-ref" },
       supavisor: { port: 6543, username: "app_runtime.preview-ref" },
+      releaseSmoke: {
+        commonNameSha256: null,
+        maxTokenLifetimeSeconds: null,
+        ready: false,
+      },
     });
   });
 
