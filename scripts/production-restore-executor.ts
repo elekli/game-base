@@ -479,7 +479,7 @@ export function createProductionRestoreExecutor({
         return { outcome: "passed" };
       }
       if (action.kind === "clear-local-target-data") {
-        const clearSql = "begin; grant app_migrator to postgres; set role app_migrator; do $$ declare tables text; begin select string_agg(format('%I.%I', schemaname, tablename), ', ') into tables from pg_catalog.pg_tables where schemaname = 'app_private'; if tables is not null then execute 'truncate table ' || tables || ' restart identity cascade'; end if; end $$; reset role; commit;";
+        const clearSql = "begin; grant app_migrator to postgres; set role app_migrator; alter table app_private.production_smoke_canaries no force row level security; do $$ declare tables text; begin select string_agg(format('%I.%I', schemaname, tablename), ', ') into tables from pg_catalog.pg_tables where schemaname = 'app_private'; if tables is not null then execute 'truncate table ' || tables || ' restart identity cascade'; end if; end $$; reset role; commit;";
         await runFreshClient(
           RESTORE_CLIENT_CONTAINER,
           invocation(
@@ -554,7 +554,7 @@ export function createProductionRestoreExecutor({
                 "--username", "postgres",
                 "--dbname", "postgres",
                 "--set", "ON_ERROR_STOP=1",
-                "--command", "revoke app_migrator from postgres;",
+                "--command", "begin; set role app_migrator; alter table app_private.production_smoke_canaries force row level security; reset role; revoke app_migrator from postgres; commit;",
               ],
               ["PGPASSWORD"],
               120_000,

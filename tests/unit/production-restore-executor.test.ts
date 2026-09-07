@@ -202,13 +202,18 @@ describe("production restore executor", () => {
     expect(serialized).toContain("begin; grant app_migrator to postgres");
     expect(serialized).toContain("grant app_migrator to postgres");
     expect(serialized).toContain("set role app_migrator");
+    expect(serialized).toContain("alter table app_private.production_smoke_canaries no force row level security");
     expect(serialized).toContain("truncate table");
     const clearInvocation = invocations.find(({ purpose }) => purpose === "clear-local-target-data");
     expect(JSON.stringify(clearInvocation)).not.toContain("revoke app_migrator from postgres");
     const restoreInvocation = invocations.find(({ purpose }) => purpose === "restore-dump");
     expect(restoreInvocation?.argv).toContain("--role=app_migrator");
     expect(serialized).toContain("revoke app_migrator from postgres");
-    expect(serialized).toContain("revoke app_migrator from postgres;");
+    const cleanupInvocation = invocations.find(({ purpose }) => purpose === "revoke-local-restore-role");
+    expect(JSON.stringify(cleanupInvocation)).toContain(
+      "alter table app_private.production_smoke_canaries force row level security",
+    );
+    expect(JSON.stringify(cleanupInvocation)).toContain("revoke app_migrator from postgres;");
   });
 
   it.each([
