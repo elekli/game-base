@@ -5,13 +5,20 @@ export type {
   FinalizeMediaUploadResult,
   MediaAsset,
   MediaDerivative,
+  MediaGallery,
+  MediaGalleryItem,
   MediaPurpose,
+  StoredMediaPurpose,
   MediaService,
   MediaUploadResult,
   OriginalMediaRead,
+  ThumbnailMediaRead,
+  MediaRemovalResult,
   RetryThumbnailCommand,
   UploadGrant,
 } from "./contracts";
+
+export { createMediaBatchUpload, createSessionMediaIdentityStore, type MediaBatchFile, type MediaBatchStatus, type MediaBatchUploader, type MediaBatchIdentityStore } from "./media-batch-upload";
 
 export {
   MediaBeginUnavailableError,

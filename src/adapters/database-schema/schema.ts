@@ -150,6 +150,7 @@ export const gamesInAppPrivate = appPrivate.table("games", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	playerCountNote: text("player_count_note"),
 	manualCoverAssetId: uuid("manual_cover_asset_id"),
+	manualCoverSelectedAt: timestamp("manual_cover_selected_at", { withTimezone: true, mode: 'string' }).default(sql`'-infinity'`),
 }, (table) => [
 	index("games_display_name_idx").using("btree", table.displayName.asc().nullsLast().op("text_ops")).where(sql`(trashed_at IS NULL)`),
 	foreignKey({

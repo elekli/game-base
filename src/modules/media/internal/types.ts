@@ -2,6 +2,9 @@ import type {
   BeginMediaUploadCommand,
   MediaPurpose,
   MediaUploadResult,
+  MediaAsset,
+  MediaDerivative,
+  StoredMediaPurpose,
 } from "../contracts";
 
 export const MEDIA_MAX_PIXELS = 100_000_000;
@@ -11,7 +14,8 @@ export type ImageMediaPurpose = Exclude<MediaPurpose, "attachment">;
 
 export type MediaObjectStore = Readonly<{
   createUploadGrant(path: string): Promise<Readonly<{ uploadUrl: string; token: string; expiresAt: string }>>;
-  createOriginalReadGrant(path: string, fileName: string, expiresInSeconds: 60): Promise<Readonly<{ url: string; expiresAt: string }>>;
+  createOriginalReadGrant(path: string, fileName: string, dispositionOrExpires?: "inline" | "attachment" | 60, expiresInSeconds?: 60): Promise<Readonly<{ url: string; expiresAt: string }>>;
+  createThumbnailReadGrant?(path: string, expiresInSeconds?: 300): Promise<Readonly<{ url: string; expiresAt: string }>>;
   inspect(path: string): Promise<Readonly<{ path: string; byteSize: number; mimeType: string }> | null>;
   read(path: string): AsyncIterable<Uint8Array>;
   uploadDerivative(path: string, bytes: Uint8Array): Promise<void>;
@@ -74,10 +78,27 @@ export type MediaStore = Readonly<{
   releaseIncomplete(idempotencyKey: string, leaseToken: string): Promise<void>;
   rejectInvalid(idempotencyKey: string, leaseToken: string): Promise<void>;
   completeFinalize(idempotencyKey: string, leaseToken: string, object: ValidatedMediaObject): Promise<MediaUploadResult>;
-  findReadableOriginal(assetId: string): Promise<Readonly<{ path: string; fileName: string }> | null>;
+  findReadableOriginal(assetId: string): Promise<Readonly<{ path: string; fileName: string; purpose: StoredMediaPurpose; actualMimeType: string }> | null>;
+  findReadableThumbnail(assetId: string): Promise<Readonly<{ path: string }> | null>;
   claimThumbnail(assetId: string, lease: Readonly<{ token: string; durationMs?: number }>): Promise<ThumbnailClaim>;
   markThumbnailUploaded(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string }>): Promise<void>;
   adoptThumbnail(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string; width: number; height: number; byteSize: number }>): Promise<void>;
   failThumbnail(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string; deterministic: boolean }>): Promise<Readonly<{ retryDelayMs: number | null }>>;
   retryThumbnail(assetId: string): Promise<MediaUploadResult["thumbnail"]>;
+  listGameMedia(gameId: string): Promise<Readonly<{
+    manualCoverAssetId: string | null;
+    sourceCover: MediaStoredGalleryItem | null;
+    items: readonly MediaStoredGalleryItem[];
+  }>>;
+  updateMediaMetadata(command: Readonly<{ assetId: string; caption?: string | null; displayName?: string | null; description?: string | null }>): Promise<MediaAsset | null>;
+  selectManualCover(gameId: string, assetId: string): Promise<boolean>;
+  useSourceCover(gameId: string): Promise<boolean>;
+  removeMedia(assetId: string): Promise<Readonly<{ asset: MediaAsset; manualCoverAssetId: string | null }> | null>;
+  restoreMedia(assetId: string): Promise<MediaAsset | null>;
+}>;
+
+export type MediaStoredGalleryItem = Readonly<{
+  asset: MediaAsset;
+  thumbnail: MediaDerivative | null;
+  thumbnailPath: string | null;
 }>;

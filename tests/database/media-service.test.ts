@@ -3,6 +3,7 @@ import postgres from "postgres";
 import sharp from "sharp";
 import { createDatabase } from "@/adapters/database";
 import { PostgresMediaStore } from "@/adapters/postgres-media-store";
+import { PostgresGameStore } from "@/adapters/database-game-store";
 import {
   MediaAssetUnavailableError,
   MediaStoredObjectInvalidError,
@@ -299,7 +300,7 @@ describe("MediaService 與真 PostgreSQL", () => {
       .rejects.toBeInstanceOf(MediaUploadIdempotencyConflictError);
   });
 
-  it("finalize 建立單一 asset 與 pending derivative，回應遺失後重播同一結果", async () => {
+  it("finalize 建立單一 asset 與 pending derivative，並原子套用自訂封面", async () => {
     const service = serviceFor();
     const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand({ purpose: "custom_cover" })));
 
@@ -310,7 +311,7 @@ describe("MediaService 與真 PostgreSQL", () => {
     expect(replay).toEqual(first);
     expect(beginReplay).toEqual({ status: "already_finalized", result: first });
     expect(first.asset.id).toBe(grant.assetId);
-    const rows = await runtime.unsafe<{ asset_count: number; derivative_count: number; manual_cover_asset_id: string }[]>(`
+    const rows = await runtime.unsafe<{ asset_count: number; derivative_count: number; manual_cover_asset_id: string | null }[]>(`
       select
         (select count(*)::int from app_private.media_assets where ingest_id = $1) as asset_count,
         (select count(*)::int from app_private.media_derivatives where asset_id = $2) as derivative_count,
@@ -324,6 +325,37 @@ describe("MediaService 與真 PostgreSQL", () => {
       .rejects.toThrow("verified media derivative identity fields are immutable");
     await expect(runtime.unsafe("delete from app_private.media_derivatives where asset_id = $1", [grant.assetId]))
       .rejects.toThrow("cannot delete verified image derivative");
+  });
+
+  it("較早開始但較晚完成的自訂封面，不會覆寫較新的封面 intent", async () => {
+    const service = serviceFor();
+    const newerKey = crypto.randomUUID();
+    const older = grantFrom(await service.beginMediaUpload(owner, beginCommand({ idempotencyKey: key, purpose: "custom_cover" })));
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const newer = grantFrom(await service.beginMediaUpload(owner, beginCommand({ idempotencyKey: newerKey, purpose: "custom_cover" })));
+
+    await service.finalizeMediaUpload(owner, { idempotencyKey: newerKey });
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+
+    const rows = await runtime.unsafe<{ manual_cover_asset_id: string }[]>("select manual_cover_asset_id from app_private.games where id = $1", [gameId]);
+    expect(rows[0]?.manual_cover_asset_id).toBe(newer.assetId);
+    expect(rows[0]?.manual_cover_asset_id).not.toBe(older.assetId);
+  });
+
+  it("較早 intent 先完成時仍等待較新 intent，較新完成後才套用", async () => {
+    const service = serviceFor();
+    const newerKey = crypto.randomUUID();
+    const older = grantFrom(await service.beginMediaUpload(owner, beginCommand({ idempotencyKey: key, purpose: "custom_cover" })));
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const newer = grantFrom(await service.beginMediaUpload(owner, beginCommand({ idempotencyKey: newerKey, purpose: "custom_cover" })));
+
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    let rows = await runtime.unsafe<{ manual_cover_asset_id: string | null }[]>("select manual_cover_asset_id from app_private.games where id = $1", [gameId]);
+    expect(rows[0]?.manual_cover_asset_id).not.toBe(older.assetId);
+
+    await service.finalizeMediaUpload(owner, { idempotencyKey: newerKey });
+    rows = await runtime.unsafe<{ manual_cover_asset_id: string | null }[]>("select manual_cover_asset_id from app_private.games where id = $1", [gameId]);
+    expect(rows[0]?.manual_cover_asset_id).toBe(newer.assetId);
   });
 
   it("同鍵 finalize 已在驗證物件時，並行呼叫回報 finalizing，完成後重播同一資產", async () => {
@@ -740,8 +772,11 @@ describe("MediaService 與真 PostgreSQL", () => {
     const failing: MediaStore = {
       begin: actual.begin.bind(actual), renewGrant: actual.renewGrant.bind(actual), claimFinalize: actual.claimFinalize.bind(actual),
       releaseIncomplete: actual.releaseIncomplete.bind(actual), rejectInvalid: actual.rejectInvalid.bind(actual), completeFinalize: actual.completeFinalize.bind(actual),
-      findReadableOriginal: actual.findReadableOriginal.bind(actual), claimThumbnail: actual.claimThumbnail.bind(actual),
+      findReadableOriginal: actual.findReadableOriginal.bind(actual), findReadableThumbnail: actual.findReadableThumbnail.bind(actual), claimThumbnail: actual.claimThumbnail.bind(actual),
       markThumbnailUploaded: actual.markThumbnailUploaded.bind(actual), failThumbnail: actual.failThumbnail.bind(actual), retryThumbnail: actual.retryThumbnail.bind(actual),
+      listGameMedia: actual.listGameMedia.bind(actual), updateMediaMetadata: actual.updateMediaMetadata.bind(actual),
+      selectManualCover: actual.selectManualCover.bind(actual), useSourceCover: actual.useSourceCover.bind(actual),
+      removeMedia: actual.removeMedia.bind(actual), restoreMedia: actual.restoreMedia.bind(actual),
       async adoptThumbnail() { throw new Error("injected pointer transaction failure"); },
     };
     const delays: number[] = [];
@@ -801,5 +836,56 @@ describe("MediaService 與真 PostgreSQL", () => {
       from app_private.media_derivatives derivative where derivative.asset_id = $1
     `, [grant.assetId]);
     expect(rows[0]).toEqual({ state: "ready", attempt_count: 2, cycle_attempt_count: 2, width: 640, height: 160, adopted_attempts: 1 });
+  });
+
+  it("相簿查詢、說明更新與人工／來源封面切換共用同一權威 asset", async () => {
+    const service = serviceFor();
+    const image = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    await expect(service.updateMediaMetadata(owner, { assetId: image.assetId, caption: "  桌遊夜  " }))
+      .resolves.toMatchObject({ caption: "桌遊夜" });
+    await expect(service.selectManualCover(owner, { gameId, assetId: image.assetId }))
+      .resolves.toEqual({ manualCoverAssetId: image.assetId });
+
+    const attachmentKey = crypto.randomUUID();
+    const attachmentBytes = new TextEncoder().encode("rules");
+    const attachmentService = serviceFor(objects(attachmentBytes, "application/pdf"));
+    const attachment = grantFrom(await attachmentService.beginMediaUpload(owner, beginCommand({ idempotencyKey: attachmentKey, purpose: "attachment", originalFileName: "rules.pdf", declaredMimeType: "application/pdf", declaredByteSize: attachmentBytes.byteLength })));
+    await attachmentService.finalizeMediaUpload(owner, { idempotencyKey: attachmentKey });
+    await expect(attachmentService.updateMediaMetadata(owner, { assetId: attachment.assetId, displayName: "規則書", description: "  中文版  " }))
+      .resolves.toMatchObject({ displayName: "規則書", description: "中文版" });
+
+    const gallery = await service.listGameMedia(owner, { gameId });
+    expect(gallery.manualCoverAssetId).toBe(image.assetId);
+    expect(gallery.items.find((item) => item.asset.id === image.assetId)?.asset.caption).toBe("桌遊夜");
+    expect(gallery.items.find((item) => item.asset.id === attachment.assetId)?.asset).toMatchObject({ displayName: "規則書", description: "中文版" });
+    await expect(service.useSourceCover(owner, { gameId })).resolves.toEqual({ manualCoverAssetId: null });
+    await expect(service.listGameMedia(owner, { gameId })).resolves.toMatchObject({ manualCoverAssetId: null });
+  });
+
+  it("移除自訂封面會在同一交易清除指標，還原資產不會偷偷重新指定封面", async () => {
+    const service = serviceFor();
+    const image = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    await service.selectManualCover(owner, { gameId, assetId: image.assetId });
+    await expect(new PostgresGameStore(database.db).get(gameId)).resolves.toMatchObject({ coverAssetId: image.assetId });
+
+    await expect(service.removeMedia(owner, { assetId: image.assetId })).resolves.toMatchObject({
+      asset: { id: image.assetId, removedAt: expect.any(String) },
+      manualCoverAssetId: null,
+    });
+    await expect(service.listGameMedia(owner, { gameId })).resolves.toMatchObject({
+      manualCoverAssetId: null,
+      items: [],
+    });
+
+    await expect(service.restoreMedia(owner, { assetId: image.assetId })).resolves.toMatchObject({
+      id: image.assetId,
+      removedAt: null,
+    });
+    const restored = await service.listGameMedia(owner, { gameId });
+    expect(restored.manualCoverAssetId).toBeNull();
+    expect(restored.items.map((item) => item.asset.id)).toContain(image.assetId);
+    await expect(new PostgresGameStore(database.db).get(gameId)).resolves.toMatchObject({ coverAssetId: null });
   });
 });

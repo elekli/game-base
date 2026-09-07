@@ -69,6 +69,8 @@ function record(row: Row): GameRecord {
     contributors: [...sourceContributions(snapshot, row), ...manualContributions],
     playerCountNote: row.player_count_note ? String(row.player_count_note) : null,
     coverIngestState: row.cover_ingest_state === "pending" || row.cover_ingest_state === "ready" || row.cover_ingest_state === "failed" ? row.cover_ingest_state : null,
+    coverAssetId: row.cover_asset_id ? String(row.cover_asset_id) : null,
+    coverThumbnailState: row.cover_thumbnail_state === "pending" || row.cover_thumbnail_state === "processing" || row.cover_thumbnail_state === "ready" || row.cover_thumbnail_state === "failed" ? row.cover_thumbnail_state : null,
     externalIdentityId: row.external_game_identity_id ? String(row.external_game_identity_id) : null,
     snapshot,
     trashedAt: row.trashed_at ? String(row.trashed_at) : null,
@@ -105,6 +107,11 @@ export class PostgresGameStore implements GameStore {
   constructor(private readonly db: ProductionExecutor) {}
 
   private readonly selectFields = sql`g.id, g.medium, g.display_name, g.player_count_note, g.external_game_identity_id, g.trashed_at, g.created_at, custom_name.name as custom_display_name, i.snapshot,
+    coalesce(g.manual_cover_asset_id, i.source_cover_asset_id) as cover_asset_id,
+    (select derivative.state from app_private.media_derivatives derivative
+      where derivative.asset_id = coalesce(g.manual_cover_asset_id, i.source_cover_asset_id)
+        and derivative.authority_state = 'verified' and derivative.spec = 'thumb_webp_v1'
+      limit 1) as cover_thumbnail_state,
     coalesce((select jsonb_agg(gn.name order by gn.id) from app_private.game_names gn where gn.game_id = g.id and gn.name_kind in ('source', 'alias')), '[]'::jsonb) as source_names,
     coalesce((select jsonb_agg(p.name order by p.name) from app_private.game_platforms gp join app_private.platforms p on p.id = gp.platform_id where gp.game_id = g.id), '[]'::jsonb) as actual_platforms,
     coalesce((select jsonb_agg(t.name order by t.name) from app_private.game_tags gt join app_private.tags t on t.id = gt.tag_id where gt.game_id = g.id), '[]'::jsonb) as tags,

@@ -133,6 +133,7 @@ function objectStore(object: Readonly<{ bytes: Uint8Array; mimeType: string; byt
   return {
     async createUploadGrant(path) { return { uploadUrl: "https://storage.example.test/upload/resumable/sign", token: `grant:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }; },
     async createOriginalReadGrant(path, fileName) { return { url: `https://storage.example.test/signed/${encodeURIComponent(path)}?download=${encodeURIComponent(fileName)}`, expiresAt: "2026-09-06T00:01:00.000Z" }; },
+    async createThumbnailReadGrant(path) { return { url: `https://storage.example.test/signed/${encodeURIComponent(path)}?token=opaque`, expiresAt: "2026-09-06T00:05:00.000Z" }; },
     async inspect(path) { return { path, byteSize: object.byteSize ?? object.bytes.byteLength, mimeType: object.mimeType }; },
     async *read(path) { void path; yield object.bytes; },
     async uploadDerivative() {},
@@ -228,7 +229,57 @@ describe("媒體公開介面", () => {
     });
     expect(second.url).toContain("token=opaque");
     expect(signed).toHaveBeenCalledTimes(2);
-    expect(signed).toHaveBeenCalledWith(expect.stringMatching(/^originals\//), "桌遊照片.png", 60);
+    expect(signed).toHaveBeenCalledWith(expect.stringMatching(/^originals\//), "桌遊照片.png", "attachment", 60);
+  });
+
+  it("非 PDF 附件即使請求 inline 仍強制使用 attachment disposition", async () => {
+    const bytes = new TextEncoder().encode("<html>not trusted</html>");
+    const signed = vi.fn(async () => ({ url: "https://storage.example.test/signed/attachment", expiresAt: "2026-09-06T00:01:00.000Z" }));
+    const service = createMediaService({
+      store: createInMemoryMediaStore({ activeGameIds: [gameId] }),
+      objects: { ...objectStore({ bytes, mimeType: "text/html" }), createOriginalReadGrant: signed },
+    });
+    await service.beginMediaUpload(owner, command({
+      purpose: "attachment", originalFileName: "note.html", declaredMimeType: "text/html", declaredByteSize: bytes.byteLength,
+    }));
+    const finalized = await service.finalizeMediaUpload(owner, { idempotencyKey });
+    if ("status" in finalized) throw new Error("expected finalized upload");
+
+    await expect(service.issueOriginalRead(owner, { assetId: finalized.asset.id, disposition: "inline" }))
+      .resolves.toMatchObject({ disposition: "attachment" });
+    expect(signed).toHaveBeenCalledWith(expect.stringMatching(/^originals\//), "note.html", "attachment", 60);
+  });
+
+  it("內容像 PDF 但 Storage MIME 不可信時仍強制下載", async () => {
+    const bytes = new TextEncoder().encode("%PDF-1.7\n%%EOF");
+    const signed = vi.fn(async () => ({ url: "https://storage.example.test/signed/attachment", expiresAt: "2026-09-06T00:01:00.000Z" }));
+    const service = createMediaService({
+      store: createInMemoryMediaStore({ activeGameIds: [gameId] }),
+      objects: { ...objectStore({ bytes, mimeType: "text/html" }), createOriginalReadGrant: signed },
+    });
+    await service.beginMediaUpload(owner, command({
+      purpose: "attachment", originalFileName: "rules.pdf", declaredMimeType: "text/html", declaredByteSize: bytes.byteLength,
+    }));
+    const finalized = await service.finalizeMediaUpload(owner, { idempotencyKey });
+    if ("status" in finalized) throw new Error("expected finalized upload");
+
+    await expect(service.issueOriginalRead(owner, { assetId: finalized.asset.id, disposition: "inline" }))
+      .resolves.toMatchObject({ disposition: "attachment" });
+    expect(signed).toHaveBeenCalledWith(expect.stringMatching(/^originals\//), "rules.pdf", "attachment", 60);
+  });
+
+  it("ready 封面縮圖經公開介面核發短效讀取，未 ready 時拒絕", async () => {
+    const store = createInMemoryMediaStore({ activeGameIds: [gameId] });
+    const service = createMediaService({ store, objects: objectStore({ bytes: png(), mimeType: "image/png" }) });
+    await service.beginMediaUpload(owner, command());
+    const finalized = await service.finalizeMediaUpload(owner, { idempotencyKey });
+    if ("status" in finalized) throw new Error("expected finalized upload");
+    await expect(service.issueThumbnailRead(owner, { assetId: finalized.asset.id })).rejects.toMatchObject({ code: "media_asset_unavailable" });
+    const claim = await store.claimThumbnail(finalized.asset.id, { token: "33333333-3333-4333-8333-333333333333" });
+    if (claim.status !== "claimed") throw new Error("expected thumbnail claim");
+    await store.markThumbnailUploaded({ derivativeId: claim.derivativeId, attemptId: claim.attempt.id, attemptNumber: claim.attempt.number, leaseToken: "33333333-3333-4333-8333-333333333333" });
+    await store.adoptThumbnail({ derivativeId: claim.derivativeId, attemptId: claim.attempt.id, attemptNumber: claim.attempt.number, leaseToken: "33333333-3333-4333-8333-333333333333", width: 2, height: 3, byteSize: 10 });
+    await expect(service.issueThumbnailRead(owner, { assetId: finalized.asset.id })).resolves.toMatchObject({ status: "thumbnail_read", url: expect.stringContaining("token=opaque") });
   });
   it("begin 對同一原檔冪等，且拒絕相同鍵配上不同不可變參數", async () => {
     const service = createMediaService({
@@ -548,5 +599,24 @@ describe("媒體公開介面", () => {
     if ("status" in result) throw new Error("expected finalized upload");
     expect(result.asset.actualMimeType).toBe("application/octet-stream");
     expect(result.thumbnail).toBeNull();
+  });
+
+  it("相簿公開介面可更新說明、選用人工封面並恢復來源封面", async () => {
+    const store = createInMemoryMediaStore({ activeGameIds: [gameId] });
+    const service = createMediaService({ store, objects: objectStore({ bytes: png(), mimeType: "image/png" }) });
+    await service.beginMediaUpload(owner, command());
+    const finalized = await service.finalizeMediaUpload(owner, { idempotencyKey });
+    if ("status" in finalized) throw new Error("expected finalized upload");
+
+    await expect(service.updateMediaMetadata(owner, { assetId: finalized.asset.id, caption: "  桌遊夜  " }))
+      .resolves.toMatchObject({ caption: "桌遊夜" });
+    await expect(service.selectManualCover(owner, { gameId, assetId: finalized.asset.id }))
+      .resolves.toEqual({ manualCoverAssetId: finalized.asset.id });
+    await expect(service.listGameMedia(owner, { gameId })).resolves.toMatchObject({
+      gameId, manualCoverAssetId: finalized.asset.id,
+      items: [{ asset: { id: finalized.asset.id, caption: "桌遊夜" }, thumbnailUrl: null }],
+    });
+    await expect(service.useSourceCover(owner, { gameId })).resolves.toEqual({ manualCoverAssetId: null });
+    await expect(service.listGameMedia(owner, { gameId })).resolves.toMatchObject({ manualCoverAssetId: null });
   });
 });

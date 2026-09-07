@@ -40,6 +40,31 @@ describe("Supabase media Storage adapter", () => {
     expect(createSignedUrl).toHaveBeenCalledWith(path, 60, { download: "相片.png" });
   });
 
+  it("相簿縮圖只簽發 exact ledger path 的 5 分鐘私有 URL", async () => {
+    const signedUrl = `https://project.supabase.co/storage/v1/object/sign/game-media/${thumbnailPath}?token=opaque`;
+    const createSignedUrl = vi.fn(async () => ({ data: { signedUrl }, error: null }));
+    const adapter = new SupabaseMediaObjectStore({
+      supabaseUrl: "https://project.supabase.co", bucket: "game-media", files: { createSignedUrl } as never,
+      now: () => new Date("2026-09-06T00:00:00.000Z"),
+    });
+    await expect(adapter.createThumbnailReadGrant(thumbnailPath)).resolves.toEqual({
+      url: signedUrl, expiresAt: "2026-09-06T00:05:00.000Z",
+    });
+    expect(createSignedUrl).toHaveBeenCalledWith(thumbnailPath, 300);
+    await expect(adapter.createThumbnailReadGrant("thumbnails/../../secret.webp")).rejects.toBeInstanceOf(MediaStorageUnavailableError);
+  });
+
+  it("縮圖簽署 URL 拒絕外站、額外 query 與錯誤 object path", async () => {
+    for (const signedUrl of [
+      `https://evil.example/storage/v1/object/sign/game-media/${thumbnailPath}?token=x`,
+      `https://project.supabase.co/storage/v1/object/sign/game-media/${thumbnailPath}?token=x&download=secret`,
+      `https://project.supabase.co/storage/v1/object/sign/game-media/${thumbnailPath}-other?token=x`,
+    ]) {
+      const adapter = new SupabaseMediaObjectStore({ supabaseUrl: "https://project.supabase.co", bucket: "game-media", files: { createSignedUrl: vi.fn(async () => ({ data: { signedUrl }, error: null })) } as never });
+      await expect(adapter.createThumbnailReadGrant(thumbnailPath)).rejects.toBeInstanceOf(MediaStorageUnavailableError);
+    }
+  });
+
   it.each([
     ["evil origin", `https://evil.example/storage/v1/object/sign/game-media/${path}?token=x&download=${encodeURIComponent("相片.png")}`],
     ["wrong bucket", `https://project.supabase.co/storage/v1/object/sign/public/${path}?token=x&download=${encodeURIComponent("相片.png")}`],

@@ -6,7 +6,7 @@ import type { MediaObjectStore } from "@/modules/media/internal/types";
 type StorageResult<T> = Promise<Readonly<{ data: T; error: null }> | Readonly<{ data: null; error: unknown }>>;
 type FilesApi = Readonly<{
   createSignedUploadUrl(path: string, options: Readonly<{ upsert: boolean }>): StorageResult<Readonly<{ path: string; token: string; signedUrl: string }>>;
-  createSignedUrl(path: string, expiresIn: number, options: Readonly<{ download: string }>): StorageResult<Readonly<{ signedUrl: string }>>;
+  createSignedUrl(path: string, expiresIn: number, options?: Readonly<{ download: string }>): StorageResult<Readonly<{ signedUrl: string }>>;
   info(path: string): StorageResult<Readonly<{ name: string; size?: number; contentType?: string }>>;
   download(path: string): Readonly<{ asStream(): Promise<Readonly<{ data: ReadableStream<Uint8Array> | null; error: unknown }>> }>;
   upload(path: string, body: Uint8Array, options: Readonly<{ contentType: "image/webp"; upsert: false; cacheControl: "0" }>): StorageResult<Readonly<{ path: string }>>;
@@ -86,10 +86,14 @@ export class SupabaseMediaObjectStore implements MediaObjectStore {
     } catch (error) { throw error instanceof MediaStorageUnavailableError ? error : new MediaStorageUnavailableError(); }
   }
 
-  async createOriginalReadGrant(path: string, fileName: string, expiresInSeconds: 60) {
+  async createOriginalReadGrant(path: string, fileName: string, dispositionOrExpires: "inline" | "attachment" | 60 = "attachment", maybeExpiresInSeconds: 60 = 60) {
     assertOriginalPath(path);
+    const disposition = typeof dispositionOrExpires === "number" ? "attachment" : dispositionOrExpires;
+    const expiresInSeconds = typeof dispositionOrExpires === "number" ? dispositionOrExpires : maybeExpiresInSeconds;
     try {
-      const { data, error } = await this.files.createSignedUrl(path, expiresInSeconds, { download: fileName });
+      const { data, error } = disposition === "attachment"
+        ? await this.files.createSignedUrl(path, expiresInSeconds, { download: fileName })
+        : await this.files.createSignedUrl(path, expiresInSeconds);
       if (error || !data?.signedUrl) throw new MediaStorageUnavailableError();
       const signed = new URL(data.signedUrl);
       const expectedPath = `/storage/v1/object/sign/${encodeURIComponent(this.bucket)}/${path.split("/").map(encodeURIComponent).join("/")}`;
@@ -98,9 +102,25 @@ export class SupabaseMediaObjectStore implements MediaObjectStore {
         signed.origin !== this.storageOrigin || signed.username || signed.password ||
         signed.pathname !== expectedPath ||
         signed.searchParams.getAll("token").length !== 1 || !signed.searchParams.get("token") ||
-        signed.searchParams.getAll("download").length !== 1 || signed.searchParams.get("download") !== fileName ||
-        queryKeys.some((key) => key !== "token" && key !== "download")
+        (disposition === "attachment" && (signed.searchParams.getAll("download").length !== 1 || signed.searchParams.get("download") !== fileName)) ||
+        (disposition === "inline" && signed.searchParams.has("download")) ||
+        queryKeys.some((key) => key !== "token" && (disposition === "attachment" ? key !== "download" : true))
       ) throw new MediaStorageUnavailableError();
+      return { url: data.signedUrl, expiresAt: new Date(this.now().getTime() + expiresInSeconds * 1000).toISOString() };
+    } catch (error) { throw error instanceof MediaStorageUnavailableError ? error : new MediaStorageUnavailableError(); }
+  }
+
+  async createThumbnailReadGrant(path: string, expiresInSeconds = 300) {
+    assertDerivativePath(path);
+    try {
+      const { data, error } = await this.files.createSignedUrl(path, expiresInSeconds);
+      if (error || !data?.signedUrl) throw new MediaStorageUnavailableError();
+      const signed = new URL(data.signedUrl);
+      const expectedPath = `/storage/v1/object/sign/${encodeURIComponent(this.bucket)}/${path.split("/").map(encodeURIComponent).join("/")}`;
+      const queryKeys = [...signed.searchParams.keys()];
+      if (signed.origin !== this.storageOrigin || signed.username || signed.password || signed.pathname !== expectedPath
+        || signed.searchParams.getAll("token").length !== 1 || !signed.searchParams.get("token")
+        || queryKeys.some((key) => key !== "token")) throw new MediaStorageUnavailableError();
       return { url: data.signedUrl, expiresAt: new Date(this.now().getTime() + expiresInSeconds * 1000).toISOString() };
     } catch (error) { throw error instanceof MediaStorageUnavailableError ? error : new MediaStorageUnavailableError(); }
   }

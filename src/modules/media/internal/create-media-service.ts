@@ -6,6 +6,7 @@ import {
   MediaFileTooLargeError,
   MediaBeginUnavailableError,
   MediaFinalizeUnavailableError,
+  MediaGameUnavailableError,
   MediaOperationError,
   MediaStoredObjectInvalidError,
   MediaUploadIncompleteError,
@@ -156,9 +157,96 @@ export function createMediaService(dependencies: Readonly<{ store: MediaStore; o
       } catch { throw new MediaReadUnavailableError(); }
       if (!original) throw new MediaAssetUnavailableError();
       try {
-        const grant = await dependencies.objects.createOriginalReadGrant(original.path, original.fileName, 60);
-        return { status: "original_read", ...grant, disposition: "attachment" };
+        let disposition = query.disposition ?? "attachment";
+        if (original.purpose === "attachment" && disposition === "inline") {
+          const stored = await dependencies.objects.inspect(original.path);
+          if (original.actualMimeType !== "application/pdf" || stored?.mimeType !== "application/pdf") disposition = "attachment";
+        }
+        const grant = await dependencies.objects.createOriginalReadGrant(original.path, original.fileName, disposition, 60);
+        return { status: "original_read", ...grant, disposition };
       } catch (error) { throw error instanceof MediaOperationError ? error : new MediaStorageUnavailableError(); }
+    },
+    async issueThumbnailRead(owner, query) {
+      void owner;
+      let thumbnail: Awaited<ReturnType<MediaStore["findReadableThumbnail"]>>;
+      try { thumbnail = await dependencies.store.findReadableThumbnail(query.assetId); }
+      catch { throw new MediaReadUnavailableError(); }
+      if (!thumbnail || !dependencies.objects.createThumbnailReadGrant) throw new MediaAssetUnavailableError();
+      try {
+        const grant = await dependencies.objects.createThumbnailReadGrant(thumbnail.path, 300);
+        return { status: "thumbnail_read", ...grant };
+      } catch (error) { throw error instanceof MediaOperationError ? error : new MediaStorageUnavailableError(); }
+    },
+    async listGameMedia(owner, query) {
+      void owner;
+      let gallery: Awaited<ReturnType<MediaStore["listGameMedia"]>>;
+      try { gallery = await dependencies.store.listGameMedia(query.gameId); }
+      catch (error) { throw error instanceof MediaOperationError ? error : new MediaReadUnavailableError(); }
+      const expose = async (item: (typeof gallery.items)[number]) => {
+        if (!item.thumbnailPath) {
+          return { ...item, thumbnailUrl: null, thumbnailExpiresAt: null, thumbnailPath: undefined };
+        }
+        if (!dependencies.objects.createThumbnailReadGrant) throw new MediaReadUnavailableError();
+        try {
+          const read = await dependencies.objects.createThumbnailReadGrant(item.thumbnailPath, 300);
+          return { asset: item.asset, thumbnail: item.thumbnail, thumbnailUrl: read.url, thumbnailExpiresAt: read.expiresAt, thumbnailError: null };
+        } catch { return { asset: item.asset, thumbnail: item.thumbnail, thumbnailUrl: null, thumbnailExpiresAt: null, thumbnailError: "media_thumbnail_read_unavailable" as const }; }
+      };
+      const exposeBounded = async (items: readonly (typeof gallery.items)[number][]) => {
+        const output: Awaited<ReturnType<typeof expose>>[] = new Array(items.length);
+        let next = 0;
+        await Promise.all(Array.from({ length: Math.min(4, items.length) }, async () => {
+          while (next < items.length) {
+            const index = next++;
+            output[index] = await expose(items[index]!);
+          }
+        }));
+        return output;
+      };
+      return {
+        gameId: query.gameId,
+        manualCoverAssetId: gallery.manualCoverAssetId,
+        sourceCover: gallery.sourceCover ? await expose(gallery.sourceCover) : null,
+        items: await exposeBounded(gallery.items),
+      };
+    },
+    async updateMediaMetadata(owner, command) {
+      void owner;
+      try {
+        const asset = await dependencies.store.updateMediaMetadata(command);
+        if (!asset) throw new MediaAssetUnavailableError();
+        return asset;
+      } catch (error) { throw error instanceof MediaOperationError ? error : new MediaFinalizeUnavailableError(); }
+    },
+    async selectManualCover(owner, command) {
+      void owner;
+      try {
+        if (!await dependencies.store.selectManualCover(command.gameId, command.assetId)) throw new MediaAssetUnavailableError();
+        return { manualCoverAssetId: command.assetId };
+      } catch (error) { throw error instanceof MediaOperationError ? error : new MediaFinalizeUnavailableError(); }
+    },
+    async useSourceCover(owner, command) {
+      void owner;
+      try {
+        if (!await dependencies.store.useSourceCover(command.gameId)) throw new MediaGameUnavailableError();
+        return { manualCoverAssetId: null };
+      } catch (error) { throw error instanceof MediaOperationError ? error : new MediaFinalizeUnavailableError(); }
+    },
+    async removeMedia(owner, command) {
+      void owner;
+      try {
+        const result = await dependencies.store.removeMedia(command.assetId);
+        if (!result) throw new MediaAssetUnavailableError();
+        return result;
+      } catch (error) { throw error instanceof MediaOperationError ? error : new MediaFinalizeUnavailableError(); }
+    },
+    async restoreMedia(owner, command) {
+      void owner;
+      try {
+        const asset = await dependencies.store.restoreMedia(command.assetId);
+        if (!asset) throw new MediaAssetUnavailableError();
+        return asset;
+      } catch (error) { throw error instanceof MediaOperationError ? error : new MediaFinalizeUnavailableError(); }
     },
   };
 }

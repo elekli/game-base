@@ -10,7 +10,7 @@ const gameId = "11111111-1111-4111-8111-111111111111";
 const assetId = "22222222-2222-4222-8222-222222222222";
 const key = "33333333-3333-4333-8333-333333333333";
 
-function setup() {
+function setup(overrides: Readonly<{ wakeThumbnail?: (assetId: string) => Promise<void>; afterResponse?: (task: () => Promise<void>) => void }> = {}) {
   const service: MediaService = {
     beginMediaUpload: vi.fn<MediaService["beginMediaUpload"]>(async () => ({
       status: "upload_grant", ingestId: key, assetId,
@@ -25,12 +25,19 @@ function setup() {
     finalizeMediaUpload: vi.fn<MediaService["finalizeMediaUpload"]>(async () => ({ status: "finalizing" })),
     retryThumbnail: vi.fn<MediaService["retryThumbnail"]>(async () => ({ assetId, spec: "thumb_webp_v1", state: "pending" })),
     issueOriginalRead: vi.fn<MediaService["issueOriginalRead"]>(async () => ({ status: "original_read", url: "https://storage.example/signed?token=opaque&download=photo.png", expiresAt: "2026-09-06T00:01:00.000Z", disposition: "attachment" })),
+    issueThumbnailRead: vi.fn<MediaService["issueThumbnailRead"]>(async () => ({ status: "thumbnail_read", url: "https://storage.example/signed?token=opaque", expiresAt: "2026-09-06T00:05:00.000Z" })),
+    listGameMedia: vi.fn<MediaService["listGameMedia"]>(async () => ({ gameId, manualCoverAssetId: null, sourceCover: null, items: [] })),
+    updateMediaMetadata: vi.fn<MediaService["updateMediaMetadata"]>(async () => ({ id: assetId, gameId, purpose: "attachment", originalFileName: "rules.pdf", actualMimeType: "application/pdf", byteSize: 123, width: null, height: null, removedAt: null, createdAt: "2026-09-06T00:00:00.000Z", caption: null, displayName: "規則書", description: "遊戲規則" })),
+    selectManualCover: vi.fn<MediaService["selectManualCover"]>(async () => ({ manualCoverAssetId: assetId })),
+    useSourceCover: vi.fn<MediaService["useSourceCover"]>(async () => ({ manualCoverAssetId: null })),
+    removeMedia: vi.fn<MediaService["removeMedia"]>(async () => ({ asset: { id: assetId, gameId, purpose: "gallery_image", originalFileName: "photo.png", actualMimeType: "image/png", byteSize: 123, width: 1, height: 1, removedAt: "2026-09-06T00:00:00.000Z", createdAt: "2026-09-06T00:00:00.000Z" }, manualCoverAssetId: null })),
+    restoreMedia: vi.fn<MediaService["restoreMedia"]>(async () => ({ id: assetId, gameId, purpose: "gallery_image", originalFileName: "photo.png", actualMimeType: "image/png", byteSize: 123, width: 1, height: 1, removedAt: null, createdAt: "2026-09-06T00:00:00.000Z" })),
   };
   const verifyAccessToken = vi.fn(async () => owner);
   const onUnhandledFailure = vi.fn();
   return {
     service,
-    handlers: createPrivateMediaHandlers({ service, verifyAccessToken, onAccessDenied: vi.fn(), onUnhandledFailure }),
+    handlers: createPrivateMediaHandlers({ service, verifyAccessToken, onAccessDenied: vi.fn(), onUnhandledFailure, ...overrides }),
     verifyAccessToken,
     onUnhandledFailure,
   };
@@ -53,6 +60,44 @@ describe("private media routes", () => {
 
     expect(response.status).toBe(401);
     expect(service.beginMediaUpload).not.toHaveBeenCalled();
+  });
+
+  it("原檔讀取先驗證身分，再把明確處置傳到公開服務", async () => {
+    const { handlers, service, verifyAccessToken } = setup();
+    vi.mocked(verifyAccessToken).mockRejectedValueOnce(new AccessDeniedError());
+    expect((await handlers.original(request(`/api/private/media/assets/${assetId}/original?disposition=inline`, { assetId }), assetId)).status).toBe(401);
+    expect(service.issueOriginalRead).not.toHaveBeenCalled();
+    const { handlers: authenticated, service: allowed } = setup();
+    expect((await authenticated.original(request(`/api/private/media/assets/${assetId}/original?disposition=inline`, { assetId }), assetId)).status).toBe(200);
+    expect(allowed.issueOriginalRead).toHaveBeenCalledWith(owner, { assetId, disposition: "inline" });
+    expect((await authenticated.original(request(`/api/private/media/assets/${assetId}/original?disposition=inline&disposition=attachment`, { assetId }), assetId)).status).toBe(400);
+  });
+
+  it("主要封面縮圖先驗證身分，再核發短效讀取", async () => {
+    const { handlers, service, verifyAccessToken } = setup();
+    vi.mocked(verifyAccessToken).mockRejectedValueOnce(new AccessDeniedError());
+    expect((await handlers.thumbnail(request(`/api/private/media/assets/${assetId}/thumbnail`, {}), assetId)).status).toBe(401);
+    expect(service.issueThumbnailRead).not.toHaveBeenCalled();
+    const { handlers: authenticated, service: allowed } = setup();
+    expect((await authenticated.thumbnail(request(`/api/private/media/assets/${assetId}/thumbnail`, {}), assetId)).status).toBe(200);
+    expect(allowed.issueThumbnailRead).toHaveBeenCalledWith(owner, { assetId });
+  });
+
+  it("移除與還原經過認證邊界後才呼叫公開 MediaService", async () => {
+    const { handlers, service } = setup();
+    expect((await handlers.remove(request(`/api/private/media/assets/${assetId}/remove`, {}), assetId)).status).toBe(200);
+    expect((await handlers.restore(request(`/api/private/media/assets/${assetId}/restore`, {}), assetId)).status).toBe(200);
+    expect(service.removeMedia).toHaveBeenCalledWith(owner, { assetId });
+    expect(service.restoreMedia).toHaveBeenCalledWith(owner, { assetId });
+  });
+
+  it("未授權的附件說明與封面變更在 MediaService 前拒絕", async () => {
+    const { handlers, service, verifyAccessToken } = setup();
+    vi.mocked(verifyAccessToken).mockRejectedValue(new AccessDeniedError());
+    expect((await handlers.metadata(request(`/api/private/media/assets/${assetId}/metadata`, { description: "私有內容" }), assetId)).status).toBe(401);
+    expect((await handlers.cover(request(`/api/private/media/games/${gameId}/cover`, { mode: "manual", assetId }), gameId)).status).toBe(401);
+    expect(service.updateMediaMetadata).not.toHaveBeenCalled();
+    expect(service.selectManualCover).not.toHaveBeenCalled();
   });
 
   it("同源 CORS preflight 不驗 owner 且宣告 POST headers", async () => {
@@ -86,9 +131,58 @@ describe("private media routes", () => {
     expect(begin.headers.get("cache-control")).toBe("private, no-store");
     expect(await original.json()).toMatchObject({ disposition: "attachment", url: expect.stringContaining("download=") });
     expect(service.finalizeMediaUpload).toHaveBeenCalledWith(owner, { idempotencyKey: key });
-    expect(service.issueOriginalRead).toHaveBeenCalledWith(owner, { assetId });
+    expect(service.issueOriginalRead).toHaveBeenCalledWith(owner, { assetId, disposition: "attachment" });
     expect([...warn.mock.calls, ...error.mock.calls].flat().join(" ")).not.toContain("opaque");
     warn.mockRestore(); error.mockRestore();
+  });
+
+  it("相簿、附件說明、縮圖重試與封面切換皆由同一私有邊界轉交公開 MediaService", async () => {
+    const { handlers, service } = setup();
+    expect((await handlers.list(request(`/api/private/media/games/${gameId}`, {}), gameId)).status).toBe(200);
+    expect((await handlers.metadata(request(`/api/private/media/assets/${assetId}/metadata`, { displayName: "規則書", description: "中文版" }), assetId)).status).toBe(200);
+    expect((await handlers.cover(request(`/api/private/media/games/${gameId}/cover`, { mode: "manual", assetId }), gameId)).status).toBe(200);
+    expect((await handlers.cover(request(`/api/private/media/games/${gameId}/cover`, { mode: "source" }), gameId)).status).toBe(200);
+    expect((await handlers.retryThumbnail(request(`/api/private/media/assets/${assetId}/retry-thumbnail`, {}), assetId)).status).toBe(200);
+    expect(service.listGameMedia).toHaveBeenCalledWith(owner, { gameId });
+    expect(service.updateMediaMetadata).toHaveBeenCalledWith(owner, { assetId, displayName: "規則書", description: "中文版" });
+    expect(service.selectManualCover).toHaveBeenCalledWith(owner, { gameId, assetId });
+    expect(service.useSourceCover).toHaveBeenCalledWith(owner, { gameId });
+    expect(service.retryThumbnail).toHaveBeenCalledWith(owner, { assetId });
+  });
+
+  it("縮圖背景重試失敗會留下具名安全觀測事件", async () => {
+    const wakeThumbnail = vi.fn(async () => { throw new Error("provider detail must stay private"); });
+    const afterTasks: Promise<void>[] = [];
+    const { handlers, onUnhandledFailure } = setup({ wakeThumbnail, afterResponse: (task) => { afterTasks.push(task()); } });
+
+    expect((await handlers.retryThumbnail(request(`/api/private/media/assets/${assetId}/retry-thumbnail`, {}), assetId)).status).toBe(200);
+    await Promise.all(afterTasks);
+    expect(onUnhandledFailure).toHaveBeenCalledWith({
+      errorCode: "media_thumbnail_retry_wake_failed",
+      requestId,
+    });
+  });
+
+  it("相簿局部縮圖簽署失敗仍回傳可用內容，並留下具名觀測事件", async () => {
+    const tasks: Array<() => Promise<void>> = [];
+    const { handlers, service, onUnhandledFailure } = setup({ afterResponse: (task) => tasks.push(task) });
+    vi.mocked(service.listGameMedia).mockResolvedValueOnce({
+      gameId,
+      manualCoverAssetId: null,
+      sourceCover: null,
+      items: [{
+        asset: { id: assetId, gameId, purpose: "gallery_image", originalFileName: "photo.png", actualMimeType: "image/png", byteSize: 123, width: 1, height: 1, removedAt: null, createdAt: "2026-09-06T00:00:00.000Z" },
+        thumbnail: { assetId, spec: "thumb_webp_v1", state: "ready" },
+        thumbnailUrl: null,
+        thumbnailExpiresAt: null,
+        thumbnailError: "media_thumbnail_read_unavailable",
+      }],
+    });
+
+    expect((await handlers.list(request(`/api/private/media/games/${gameId}`, {}), gameId)).status).toBe(200);
+    expect(tasks).toHaveLength(1);
+    await tasks[0]!();
+    expect(onUnhandledFailure).toHaveBeenCalledWith({ errorCode: "media_thumbnail_read_unavailable", requestId });
   });
 
   it("Storage failure 保留具名觀測碼，但回應與 log 不含 provider 細節", async () => {
