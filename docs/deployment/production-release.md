@@ -24,6 +24,57 @@ feature branch → PR → required CI／verify → main
 - T02A 唯讀 preflight 與 T02B migration apply／strict／ledger gate 已接入受保護的 `Production` Environment；T03 app deployment 尚未完成，因此此 workflow 只管理 migration，不呼叫 Vercel deploy。`PRODUCTION_MIGRATION_DATABASE_URL` 必須使用 `sslmode=verify-full`，並搭配 Supabase Dashboard 下載的 `PRODUCTION_MIGRATION_CA_CERT`；任一缺失都 fail closed。不得以手動 Dashboard deployment 繞過停發狀態。
 - Production credentials 只可存在 GitHub `Production` Environment secrets 或 Vercel Production scope。Vercel Preview／Development、repository variables、workflow log 與 artifact 都不得包含這些值。
 
+## T03 application deployment 模型（尚未接入 live workflow）
+
+`scripts/production-deployment-release.ts` 是 T03 的純狀態轉換模型；它不執行 CLI、不讀取 credentials，也不改動任何外部狀態。`.github/production-release-contract.json` 目前以 `productionDeploymentEnabled: false` 與 `blocked-missing-custom-domain-and-credentials` 停發，且預定的唯一 application deployment writer `.github/workflows/production-application-release.yml` 尚不存在。現有 `.github/workflows/production-release.yml` 仍只管理 migration，禁止加入 Vercel deploy。
+
+```text
+exact main CI
+      │
+      ├─ code-only ─────────────→ strict current schema
+      │
+      └─ migration-bearing ─────→ migration strict＋ledger complete
+                                      │
+                                      ▼
+                           snapshot current deployment D0
+                                      │
+                         deploy D1 with --prod --skip-domain
+                                      │
+                       bounded wait: READY＋exact commit SHA
+                                      │
+                           recheck main SHA＋current = D0
+                                      │
+                                  promote D1
+                                      │
+                          inspect current deployment
+                         ┌────────────┼──────────────┐
+                         │            │              │
+                    current D1   current D0     other current
+                         │       bounded retry       │
+                         ▼            │              ▼
+                   bounded smoke ─────┘        stop／人工診斷
+                    │          │
+                  pass       failure
+                    │          │
+              sanitized    inspect current
+               evidence      │          │
+                         current D1    non-D1
+                              │          │
+                         rollback D0   不 rollback
+                              │
+                      verify current = D0
+                              │
+                       sanitized evidence
+```
+
+Promotion 前的任何失敗都讓 D0 繼續接收流量。Promotion 結果不明時只依重新查得的 current deployment 決策：D1 進 smoke、D0 最多再嘗試一次 promotion、第三個 deployment 立即停止。Smoke 失敗後也只有再次證明 D1 仍是 current 才可 rollback；current 為 D0 或第三個 deployment 時不得送出 rollback。Promotion 與 rollback 各最多 2 次，所有查詢、等待、smoke 與 evidence 寫入都帶固定 timeout。重跑使用 `production:<exact SHA>` 作為穩定 deployment idempotency key。
+
+資料庫 schema 永不隨 application rollback 回滾。Migration-bearing release 必須先完成既有 migration strict verification 與 commit-bound ledger；code-only release 則必須走尚待 PR B 接線的 strict-current-schema 專路。若 additive migration 後的 application smoke 失敗，只回復 D0 程式並保留相容 schema；不相容資料變更仍須預先規劃 expand／migrate／contract 與 forward-fix。
+
+公開 artifact 只能符合 `.github/production-deployment-evidence.schema.json`。該 schema 採欄位 allowlist 與 `additionalProperties: false`，只容許 commit、migration tail、deployment identity、domain、時間、結果、bounded attempt count、具名 smoke check 與 request ID；不得包含 token、authorization header、連線字串、request／response payload 或私有資料。
+
+此切片不完成 #58 acceptance。開始 PR B 前仍須具備並核對：Production 自訂網域與 Cloudflare Access application；GitHub `Production` Environment secrets `VERCEL_TOKEN`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID`、`PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET`；variables `VERCEL_ORG_ID`、`VERCEL_PROJECT_ID`、`PRODUCTION_CUSTOM_DOMAIN`；以及只服務 release-smoke route 的最小權限身分裁決。PR B 才能建立受保護 application workflow、live adapter 與有界 smoke；PR C 再加入只輸出到受保護暫存位置的 logical dump／本機 restore 演練。未滿足這些前提時不得把 `productionDeploymentEnabled` 改為 `true`。
+
 Vercel Hobby project 的 owner 仍可直接從 Dashboard 或本機 CLI 建立 production deployment；repository 無法在 Vercel 帳號層絕對撤銷這項 owner 能力。這是殘餘風險，不是第二條支援路徑：owner 不得手動部署，操作證據以 Vercel activity log 稽核。若未來 Vercel 提供適用方案的細緻 deployment policy，應把這項人工禁令改為平台強制。
 
 Repository 內可公開核對的 binding 是 `.github/production-release-contract.json` 與 `src/shared/config/deployment-bindings.ts`：repository、branch、CI workflow／check、GitHub Environment、Vercel project ID／name、Supabase project ref／region／hostname、Supavisor host／username，以及 Hosted Preview 與 Git deployment 均為停用。publishable／secret key 只保存 SHA-256 fingerprint，不保存原值。

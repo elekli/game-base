@@ -4,6 +4,57 @@ import { readFile } from "node:fs/promises";
 import { checkProductionReleaseContract } from "../../scripts/check-production-release-contract";
 
 describe("production release contract", () => {
+  it("pins the disabled application deployment writer and evidence boundary", async () => {
+    const contract = JSON.parse(
+      await readFile(".github/production-release-contract.json", "utf8"),
+    ) as Record<string, unknown>;
+    const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
+      devDependencies: Record<string, string>;
+    };
+    const evidenceSchema = JSON.parse(
+      await readFile(
+        ".github/production-deployment-evidence.schema.json",
+        "utf8",
+      ),
+    ) as {
+      additionalProperties?: unknown;
+      required?: unknown;
+      properties?: Record<string, unknown>;
+    };
+
+    expect(contract).toMatchObject({
+      vercelTeamId: "team_vpaufHhAabxSup7QLCbCGwlF",
+      vercelCliVersion: "59.11.7",
+      productionDeploymentWriter:
+        ".github/workflows/production-application-release.yml",
+      productionDeploymentModel: "scripts/production-deployment-release.ts",
+      productionDeploymentStatus: "blocked-missing-custom-domain-and-credentials",
+      productionSmokePrincipalStatus: "unresolved",
+      productionCustomDomain: null,
+      productionDeploymentEnabled: false,
+      productionDeploymentRequiredSecrets: [
+        "VERCEL_TOKEN",
+        "PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID",
+        "PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET",
+      ],
+      productionDeploymentRequiredVariables: [
+        "VERCEL_ORG_ID",
+        "VERCEL_PROJECT_ID",
+        "PRODUCTION_CUSTOM_DOMAIN",
+      ],
+      productionDeploymentEvidenceSchema:
+        ".github/production-deployment-evidence.schema.json",
+    });
+    expect(packageJson.devDependencies.vercel).toBe("59.11.7");
+    expect(evidenceSchema.additionalProperties).toBe(false);
+    expect(evidenceSchema.required).toContain("executionSha");
+    expect(evidenceSchema.required).toContain("baselineDeploymentId");
+    expect(evidenceSchema.required).toContain("stagedDeploymentId");
+    expect(evidenceSchema.properties).not.toHaveProperty("token");
+    expect(evidenceSchema.properties).not.toHaveProperty("authorization");
+    expect(evidenceSchema.properties).not.toHaveProperty("payload");
+  });
+
   it("records the disabled Supabase Git production mapping and sole schema writer", async () => {
     const contract = JSON.parse(
       await readFile(".github/production-release-contract.json", "utf8"),

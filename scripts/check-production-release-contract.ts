@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 
@@ -12,6 +12,15 @@ type ProductionReleaseContract = Readonly<{
   ciWorkflow: string;
   hostedPreview: boolean;
   productionBranch: string;
+  productionCustomDomain: string | null;
+  productionDeploymentEnabled: boolean;
+  productionDeploymentEvidenceSchema: string;
+  productionDeploymentModel: string;
+  productionDeploymentRequiredSecrets: ReadonlyArray<string>;
+  productionDeploymentRequiredVariables: ReadonlyArray<string>;
+  productionDeploymentStatus: string;
+  productionDeploymentWriter: string;
+  productionSmokePrincipalStatus: string;
   productionEnvironment: string;
   productionSchemaWriter: string;
   repository: string;
@@ -19,8 +28,10 @@ type ProductionReleaseContract = Readonly<{
   supabaseProjectRef: string;
   supabaseRegion: string;
   vercelGitDeployment: boolean;
+  vercelCliVersion: string;
   vercelProjectId: string;
   vercelProjectName: string;
+  vercelTeamId: string;
 }>;
 
 const CONTRACT_PATH = ".github/production-release-contract.json";
@@ -29,6 +40,12 @@ const RLS_POLICY_MANIFEST_PATH = ".github/production-rls-policy-manifest.json";
 const WORKFLOW_PATH = ".github/workflows/production-release.yml";
 const RUNNER_PATH = "scripts/production-migration-runner.ts";
 const RELEASE_STATE_MACHINE_PATH = "scripts/production-migration-release.ts";
+
+type JsonSchema = Readonly<{
+  additionalProperties?: unknown;
+  required?: unknown;
+  properties?: Record<string, unknown>;
+}>;
 
 function assertContract(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -50,6 +67,16 @@ export async function checkProductionReleaseContract(root: string) {
   );
   const runner = await readFile(path.join(root, RUNNER_PATH), "utf8");
   const releaseStateMachine = await readFile(path.join(root, RELEASE_STATE_MACHINE_PATH), "utf8");
+  const packageJson = JSON.parse(
+    await readFile(path.join(root, "package.json"), "utf8"),
+  ) as { devDependencies?: Record<string, unknown> };
+  const deploymentEvidenceSchema = JSON.parse(
+    await readFile(path.join(root, contract.productionDeploymentEvidenceSchema), "utf8"),
+  ) as JsonSchema;
+  const productionDeploymentModel = await readFile(
+    path.join(root, contract.productionDeploymentModel),
+    "utf8",
+  );
   const rlsPolicyManifest = JSON.parse(
     await readFile(path.join(root, RLS_POLICY_MANIFEST_PATH), "utf8"),
   ) as { schema?: unknown; policies?: unknown };
@@ -65,6 +92,109 @@ export async function checkProductionReleaseContract(root: string) {
   assertContract(contract.productionEnvironment === "Production", "GitHub environment must be Production");
   assertContract(contract.vercelProjectId === "prj_iTlWeDkcKItHTKYIayoNjQQ0vHec", "Vercel project ID does not match the Production binding");
   assertContract(contract.vercelProjectName === "game-base", "Vercel project name does not match the Production binding");
+  assertContract(
+    contract.vercelTeamId === "team_vpaufHhAabxSup7QLCbCGwlF",
+    "Vercel team ID does not match the Production binding",
+  );
+  assertContract(contract.vercelCliVersion === "59.11.7", "Vercel CLI version is not pinned to the verified release");
+  assertContract(
+    packageJson.devDependencies?.vercel === contract.vercelCliVersion,
+    "package.json must pin the contracted Vercel CLI version exactly",
+  );
+  assertContract(
+    contract.productionDeploymentWriter ===
+      ".github/workflows/production-application-release.yml",
+    "Production application deployment writer must use the protected workflow path",
+  );
+  assertContract(
+    contract.productionDeploymentModel ===
+      "scripts/production-deployment-release.ts" &&
+      !/node:child_process|execFile|spawn\(|VERCEL_TOKEN|schema-rollback/.test(
+        productionDeploymentModel,
+      ),
+    "Production deployment model must remain pure and must not expose schema rollback or live credentials",
+  );
+  assertContract(
+    contract.productionDeploymentStatus ===
+      "blocked-missing-custom-domain-and-credentials" &&
+      contract.productionSmokePrincipalStatus === "unresolved" &&
+      contract.productionCustomDomain === null &&
+      contract.productionDeploymentEnabled === false,
+    "Production application deployment must fail closed until its external prerequisites exist",
+  );
+  assertContract(
+    JSON.stringify(contract.productionDeploymentRequiredSecrets) ===
+      JSON.stringify([
+        "VERCEL_TOKEN",
+        "PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID",
+        "PRODUCTION_SMOKE_CF_ACCESS_CLIENT_SECRET",
+      ]) &&
+      JSON.stringify(contract.productionDeploymentRequiredVariables) ===
+        JSON.stringify([
+          "VERCEL_ORG_ID",
+          "VERCEL_PROJECT_ID",
+          "PRODUCTION_CUSTOM_DOMAIN",
+        ]),
+    "Production application deployment prerequisite names must stay fixed and secret-free",
+  );
+  assertContract(
+    contract.productionDeploymentEvidenceSchema ===
+      ".github/production-deployment-evidence.schema.json",
+    "Production deployment evidence schema path is not repository-owned",
+  );
+  let disabledWriterExists = true;
+  try {
+    await access(path.join(root, contract.productionDeploymentWriter));
+  } catch (error) {
+    disabledWriterExists =
+      !(
+        error instanceof Error &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      );
+  }
+  assertContract(
+    !disabledWriterExists,
+    "disabled Production application deployment writer must not be executable",
+  );
+  const evidenceFields = [
+    "schemaVersion",
+    "repository",
+    "workflowRunId",
+    "workflowRunAttempt",
+    "executionSha",
+    "releaseKind",
+    "migrationTail",
+    "baselineDeploymentId",
+    "stagedDeploymentId",
+    "productionDomain",
+    "startedAt",
+    "completedAt",
+    "outcome",
+    "promotionAttempts",
+    "rollbackOutcome",
+    "rollbackAttempts",
+    "smoke",
+  ];
+  const evidenceRequired = deploymentEvidenceSchema.required;
+  const evidenceProperties = deploymentEvidenceSchema.properties;
+  assertContract(
+    deploymentEvidenceSchema.additionalProperties === false &&
+      Array.isArray(evidenceRequired) &&
+      JSON.stringify([...evidenceRequired].sort()) ===
+        JSON.stringify([...evidenceFields].sort()) &&
+      evidenceProperties !== undefined &&
+      JSON.stringify(Object.keys(evidenceProperties).sort()) ===
+        JSON.stringify([...evidenceFields].sort()),
+    "Production deployment evidence must use the exact secret-free field allowlist",
+  );
+  const smokeSchema = evidenceProperties.smoke as JsonSchema | undefined;
+  assertContract(
+    smokeSchema?.additionalProperties === false &&
+      JSON.stringify(Object.keys(smokeSchema.properties ?? {}).sort()) ===
+        JSON.stringify(["checks", "outcome", "requestIds"]),
+    "Production smoke evidence must reject payloads and unknown fields",
+  );
   assertContract(contract.supabaseProjectRef === "wbtyuvufhrhybquzwfip", "Supabase project ref does not match the Production binding");
   assertContract(contract.supabaseRegion === "ap-south-1", "Supabase region does not match the Production binding");
   assertContract(
@@ -85,6 +215,14 @@ export async function checkProductionReleaseContract(root: string) {
         "CI 無法查證 Supabase 外部 integration 的實際 mapping",
       ),
     "Production release documentation must preserve the Supabase Git sentinel and external-state boundary",
+  );
+  assertContract(
+    productionReleaseDoc.includes("productionDeploymentEnabled: false") &&
+      productionReleaseDoc.includes(contract.productionDeploymentWriter) &&
+      productionReleaseDoc.includes(contract.productionDeploymentEvidenceSchema) &&
+      productionReleaseDoc.includes("資料庫 schema 永不隨 application rollback 回滾") &&
+      productionReleaseDoc.includes("Promotion 與 rollback 各最多 2 次"),
+    "Production release documentation must preserve the disabled bounded deployment model",
   );
   assertContract(contract.hostedPreview === false, "Hosted Preview must remain disabled");
   assertContract(contract.vercelGitDeployment === false, "Vercel Git deployment must remain disabled");
