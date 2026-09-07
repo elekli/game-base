@@ -512,7 +512,7 @@ export async function checkProductionReleaseContract(root: string) {
       "589afce50b16f0d4e6896ad091b9621a96065ad6f2a15c7d9c16d7e95ed1405a",
       "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
       "e491156ff423e03872d95175236f86f3cde936b3254fe81d706e53776a96d093",
-      "13e5d3fe4aff5adf809ca1132b7af0434e25ee67d3de837f2e429849342cd0af",
+      "e7524b3fe9c020c2e7970301d90a849a08a6ec0ae81538d3ac2755e5c7d77746",
       "6cbaa7e9bddcf9db00e5fc364c3625a097fa129a58d422081f90f2b87815add3",
       "c329cc1605f0a9eda2d6df16d55a7c2eae6c698ea56373e7044cf88813589b07",
       "749bcc8f8bc3a494b8b526c005d28ce5169da312b8e9a17e35694ef30f2155f4",
@@ -896,9 +896,12 @@ export async function checkProductionReleaseContract(root: string) {
     "migration preflight must receive its CA certificate from the Production Environment secret",
   );
   assertContract(
-    ciWorkflow.includes("pnpm release:migrations:lint --baseline-ref origin/main") &&
+    ciWorkflow.includes(
+      "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -ignore 'SC2129:'",
+    ) &&
+      ciWorkflow.includes("pnpm release:migrations:lint --baseline-ref origin/main") &&
       /fetch-depth:\s*0/.test(ciWorkflow),
-    "CI must compare the destructive-migration baseline with trusted main history",
+    "CI must validate workflows and compare the destructive-migration baseline with trusted main history",
   );
   assertContract(
     workflow.indexOf("environment:\n      name: Production") >

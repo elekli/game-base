@@ -111,7 +111,7 @@ describe("production release contract", () => {
       productionDeploymentEvidenceWriterSha256:
         "749bcc8f8bc3a494b8b526c005d28ce5169da312b8e9a17e35694ef30f2155f4",
       productionDeploymentWriterSha256:
-        "13e5d3fe4aff5adf809ca1132b7af0434e25ee67d3de837f2e429849342cd0af",
+        "e7524b3fe9c020c2e7970301d90a849a08a6ec0ae81538d3ac2755e5c7d77746",
       productionDeploymentModel: "scripts/production-deployment-release.ts",
       productionDeploymentModelSha256:
         "e491156ff423e03872d95175236f86f3cde936b3254fe81d706e53776a96d093",
@@ -532,6 +532,7 @@ describe("production release contract", () => {
   });
 
   it("keeps application mutation behind exact-main, strict-schema, and Production gates", async () => {
+    const ciWorkflow = await readFile(".github/workflows/ci.yml", "utf8");
     const workflow = await readFile(
       ".github/workflows/production-application-release.yml",
       "utf8",
@@ -554,6 +555,9 @@ describe("production release contract", () => {
     expect(workflow).toContain("pnpm release:application:run");
     expect(workflow).toContain("production-application-evidence-");
     expect(workflow).toContain("retention-days: 90");
+    expect(ciWorkflow).toContain(
+      "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -ignore 'SC2129:'",
+    );
     expect(workflow).not.toMatch(
       /vercel\s+(?:deploy|--prod)|supabase\s+(?:db\s+(?:reset|push)|migration\s+repair)/,
     );

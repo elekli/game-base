@@ -102,7 +102,6 @@ jobs:
       EXECUTION_SHA: ${{ needs.verify-release-candidate.outputs.execution_sha }}
       RELEASE_KIND: ${{ inputs.release_kind }}
       MIGRATION_TAIL: ${{ inputs.migration_tail }}
-      RELEASE_EVIDENCE_PATH: ${{ runner.temp }}/evidence/application-release.json
       GITHUB_TOKEN: ${{ github.token }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
@@ -147,11 +146,13 @@ jobs:
           PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
         run: pnpm release:migration:verify
       - name: Deploy, smoke, and recover application
+        env:
+          RELEASE_EVIDENCE_PATH: ${{ runner.temp }}/evidence/application-release.json
         run: pnpm release:application:run
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: production-application-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.RELEASE_EVIDENCE_PATH }}
+          path: ${{ runner.temp }}/evidence/application-release.json
           retention-days: 90
           if-no-files-found: error
