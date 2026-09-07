@@ -64,9 +64,9 @@ type VercelEnvironmentListResponse = Readonly<{
 type VercelEnvironmentValue = Readonly<{ value: string }>;
 
 type VercelProject = Readonly<{
-  gitRepository: object | null;
+  gitRepository?: object | null;
   id: string;
-  link: object | null;
+  link?: object | null;
   name: string;
 }>;
 
@@ -85,34 +85,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseEnvironmentList(value: unknown): VercelEnvironmentListResponse {
+function parseEnvironmentVariable(value: unknown): VercelEnvironmentVariable {
   if (
     !isRecord(value) ||
-    !Array.isArray(value.envs) ||
-    !value.envs.every(
-      (item) =>
-        isRecord(item) &&
-        typeof item.id === "string" &&
-        typeof item.key === "string" &&
-        typeof item.type === "string" &&
-        Array.isArray(item.target) &&
-        item.target.every((target) => typeof target === "string"),
+    typeof value.id !== "string" ||
+    typeof value.key !== "string" ||
+    typeof value.type !== "string" ||
+    !(
+      typeof value.target === "string" ||
+      (Array.isArray(value.target) &&
+        value.target.every((target) => typeof target === "string"))
     )
   ) {
     throw new VercelRestUnexpectedResponseError();
   }
 
   return {
-    envs: value.envs.map((item) => {
-      const environment = item as Record<string, unknown>;
-      return {
-        id: environment.id as string,
-        key: environment.key as string,
-        target: environment.target as string[],
-        type: environment.type as string,
-      };
-    }),
+    id: value.id,
+    key: value.key,
+    target: typeof value.target === "string" ? [value.target] : value.target,
+    type: value.type,
   };
+}
+
+function parseEnvironmentList(value: unknown): VercelEnvironmentListResponse {
+  const environmentValues =
+    isRecord(value) && Array.isArray(value.envs) ? value.envs : [value];
+  return { envs: environmentValues.map(parseEnvironmentVariable) };
 }
 
 function parseEnvironmentValue(value: unknown): VercelEnvironmentValue {
@@ -131,17 +130,15 @@ function parseProject(value: unknown): VercelProject {
     !isRecord(value) ||
     typeof value.id !== "string" ||
     typeof value.name !== "string" ||
-    !("gitRepository" in value) ||
-    !isObjectOrNull(value.gitRepository) ||
-    !("link" in value) ||
-    !isObjectOrNull(value.link)
+    ("gitRepository" in value && !isObjectOrNull(value.gitRepository)) ||
+    ("link" in value && !isObjectOrNull(value.link))
   ) {
     throw new VercelRestUnexpectedResponseError();
   }
   return {
-    gitRepository: value.gitRepository,
+    gitRepository: value.gitRepository as object | null | undefined,
     id: value.id,
-    link: value.link,
+    link: value.link as object | null | undefined,
     name: value.name,
   };
 }
@@ -169,9 +166,11 @@ export function createVercelReadOnlyRestClient({
     const url = new URL(path, VERCEL_API_ORIGIN);
     url.searchParams.set("teamId", teamId);
     const controller = new AbortController();
+    let timedOut = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_resolve, reject) => {
       timeout = setTimeout(() => {
+        timedOut = true;
         controller.abort();
         reject(new VercelRestTimeoutError());
       }, timeoutMs);
@@ -191,20 +190,26 @@ export function createVercelReadOnlyRestClient({
           timeoutPromise,
         ]);
       } catch (error) {
-        if (error instanceof VercelRestTimeoutError) {
-          throw error;
+        if (timedOut || error instanceof VercelRestTimeoutError) {
+          throw new VercelRestTimeoutError();
         }
         throw new VercelRestNetworkError();
       }
       if (!response.ok) {
         throw new VercelRestHttpError(response.status);
       }
+      let responseText: string;
       try {
-        return await Promise.race([response.json(), timeoutPromise]);
+        responseText = await Promise.race([response.text(), timeoutPromise]);
       } catch (error) {
-        if (error instanceof VercelRestTimeoutError) {
-          throw error;
+        if (timedOut || error instanceof VercelRestTimeoutError) {
+          throw new VercelRestTimeoutError();
         }
+        throw new VercelRestNetworkError();
+      }
+      try {
+        return JSON.parse(responseText) as unknown;
+      } catch {
         throw new VercelRestMalformedJsonError();
       }
     } finally {

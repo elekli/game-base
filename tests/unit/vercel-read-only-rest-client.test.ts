@@ -58,6 +58,49 @@ describe("Vercel read-only REST client", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    [
+      "wrapped response with a scalar target",
+      {
+        envs: [
+          {
+            id: "env-id",
+            key: "SUPABASE_URL",
+            target: "production",
+            type: "encrypted",
+          },
+        ],
+      },
+    ],
+    [
+      "single-variable response with an array target",
+      {
+        id: "env-id",
+        key: "SUPABASE_URL",
+        target: ["production"],
+        type: "encrypted",
+      },
+    ],
+  ])("normalizes the official environment union: %s", async (_label, body) => {
+    const client = createVercelReadOnlyRestClient({
+      fetchImpl: async () => Response.json(body),
+      teamId: "team-id",
+      timeoutMs: 100,
+      token: "fixture-token",
+    });
+
+    await expect(
+      client.listProjectEnvironmentVariables("project-id"),
+    ).resolves.toEqual([
+      {
+        id: "env-id",
+        key: "SUPABASE_URL",
+        target: ["production"],
+        type: "encrypted",
+      },
+    ]);
+  });
+
   it("reads one decrypted environment value through its documented endpoint", async () => {
     const fetchImpl = vi.fn(
       async (input: string | URL | Request, init?: RequestInit) => {
@@ -106,6 +149,23 @@ describe("Vercel read-only REST client", () => {
       gitRepository: null,
       id: "project-id",
       link: null,
+      name: "game-base",
+    });
+  });
+
+  it("accepts a disconnected project when optional Git fields are omitted", async () => {
+    const client = createVercelReadOnlyRestClient({
+      fetchImpl: async () =>
+        Response.json({ id: "project-id", name: "game-base" }),
+      teamId: "team-id",
+      timeoutMs: 100,
+      token: "fixture-token",
+    });
+
+    await expect(client.getProject("project-id")).resolves.toEqual({
+      gitRepository: undefined,
+      id: "project-id",
+      link: undefined,
       name: "game-base",
     });
   });
@@ -163,6 +223,29 @@ describe("Vercel read-only REST client", () => {
     expect((error as Error).message).not.toContain(secret);
   });
 
+  it("classifies a response-body transport failure as a network error", async () => {
+    const secret = "body_transport_detail_must_not_escape";
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(new TypeError(secret));
+        },
+      }),
+    );
+    const client = createVercelReadOnlyRestClient({
+      fetchImpl: async () => response,
+      teamId: "team-id",
+      timeoutMs: 100,
+      token: "fixture-token",
+    });
+
+    const error = await client.getProject("project-id").catch((reason) => reason);
+
+    expect(error).toBeInstanceOf(VercelRestNetworkError);
+    expect(JSON.stringify(error)).not.toContain(secret);
+    expect((error as Error).message).not.toContain(secret);
+  });
+
   it("aborts and fails closed when the bounded timeout expires", async () => {
     let requestSignal: AbortSignal | undefined;
     const client = createVercelReadOnlyRestClient({
@@ -184,8 +267,8 @@ describe("Vercel read-only REST client", () => {
 
   it("classifies an abort-aware fetch timeout as a timeout rather than a network error", async () => {
     const client = createVercelReadOnlyRestClient({
-      fetchImpl: async (_input, init) =>
-        await new Promise<Response>((_resolve, reject) => {
+      fetchImpl: (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () =>
             reject(new DOMException("aborted", "AbortError")),
           );
@@ -202,7 +285,7 @@ describe("Vercel read-only REST client", () => {
 
   it("keeps the timeout active while reading the response body", async () => {
     const response = new Response("{}");
-    vi.spyOn(response, "json").mockImplementation(
+    vi.spyOn(response, "text").mockImplementation(
       async () => await new Promise<never>(() => undefined),
     );
     const client = createVercelReadOnlyRestClient({
@@ -220,7 +303,11 @@ describe("Vercel read-only REST client", () => {
   it.each([
     ["environment list", { envs: [{ id: "env-id", key: "KEY" }] }, "list"],
     ["environment value", { value: 42 }, "value"],
-    ["project", { id: "project-id", name: "game-base" }, "project"],
+    [
+      "project",
+      { id: "project-id", link: "github", name: "game-base" },
+      "project",
+    ],
   ])(
     "fails closed on an unexpected %s response shape",
     async (_label, body, operation) => {
