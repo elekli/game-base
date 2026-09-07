@@ -13,7 +13,7 @@
   "vercelSettingsReadAdapter": "scripts/vercel-read-only-rest-client.ts",
   "vercelSettingsReadStatus": "ready-official-rest-read-only",
   "productionDeploymentWriter": ".github/workflows/production-application-release.yml",
-  "productionDeploymentWriterSha256": "13e5d3fe4aff5adf809ca1132b7af0434e25ee67d3de837f2e429849342cd0af",
+  "productionDeploymentWriterSha256": "e7524b3fe9c020c2e7970301d90a849a08a6ec0ae81538d3ac2755e5c7d77746",
   "productionApplicationRunner": "scripts/production-application-release.ts",
   "productionApplicationRunnerSha256": "6cbaa7e9bddcf9db00e5fc364c3625a097fa129a58d422081f90f2b87815add3",
   "productionApplicationStateRunner": "scripts/production-application-release-runner.ts",
