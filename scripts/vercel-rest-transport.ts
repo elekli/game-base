@@ -59,6 +59,7 @@ export type VercelReadOnlyTransport = Readonly<{
   ): Promise<unknown>;
 }>;
 
+
 async function readBoundedBody(
   response: Response,
   limit: number,

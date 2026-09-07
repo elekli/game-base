@@ -153,6 +153,16 @@ export function buildGetVercelDeploymentRequest(idOrUrl: string): GetRequest {
   };
 }
 
+export function buildGetVercelProductionAliasRequest(input: Readonly<{ customDomain: string; projectId: string }>): GetRequest {
+  if (!PROJECT_ID.test(input.projectId) || !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(input.customDomain)) throw new VercelDeploymentRequestContractError();
+  return { method: "GET", path: `/v4/aliases/${encodeURIComponent(input.customDomain)}`, query: { projectId: input.projectId } };
+}
+
+export function parseVercelProductionAlias(value: unknown, input: Readonly<{ customDomain: string; projectId: string }>): string {
+  if (!isRecord(value) || value.alias !== input.customDomain || value.projectId !== input.projectId || typeof value.deploymentId !== "string" || !DEPLOYMENT_ID.test(value.deploymentId)) throw new VercelDeploymentMalformedResponseError();
+  return value.deploymentId;
+}
+
 export function buildUploadVercelFileRequest(
   input: Uint8Array,
   expectedFile: ProductionDeploymentSourceManifestFile,

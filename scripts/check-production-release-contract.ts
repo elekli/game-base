@@ -34,6 +34,9 @@ type ProductionReleaseContract = Readonly<{
   productionSmokeContractSha256: string;
   productionSmokeModel: string;
   productionSmokeModelSha256: string;
+  productionSmokeRunner: string;
+  productionSmokeRunnerSha256: string;
+  productionSmokeRunnerStatus: string;
   productionSmokePrincipalStatus: string;
   productionEnvironment: string;
   productionSchemaWriter: string;
@@ -109,6 +112,7 @@ const SOURCE_SCAN_EXCLUDED_DIRECTORIES = new Set([
 ]);
 const SOURCE_SCAN_AUTHORIZED_CONTRACT_FILES = new Set([
   "scripts/check-production-release-contract.ts",
+  "scripts/production-smoke-runner.ts",
   "scripts/vercel-deployment-rest-adapter.ts",
   "tests/unit/production-release-contract.test.ts",
   "tests/unit/vercel-deployment-rest-adapter.test.ts",
@@ -360,6 +364,8 @@ export async function checkProductionReleaseContract(root: string) {
   await assertPinnedArtifact(root, contract.productionDeploymentSourceManifestSchema, ".github/production-deployment-source-manifest.schema.json", contract.productionDeploymentSourceManifestSchemaSha256, "source manifest schema");
   await assertPinnedArtifact(root, contract.productionSmokeContract, ".github/production-smoke-contract.json", contract.productionSmokeContractSha256, "smoke contract");
   await assertPinnedArtifact(root, contract.productionSmokeModel, "scripts/production-smoke-canary.ts", contract.productionSmokeModelSha256, "smoke model");
+  await assertPinnedArtifact(root, contract.productionSmokeRunner, "scripts/production-smoke-runner.ts", contract.productionSmokeRunnerSha256, "smoke runner");
+  assertContract(contract.productionSmokeRunnerStatus === "fail-closed-pending-principal-route-and-schema", "smoke runner status must remain fail closed");
   await assertPinnedArtifact(root, contract.productionRestoreModel, "scripts/production-restore-drill.ts", contract.productionRestoreModelSha256, "restore model");
   await assertPinnedArtifact(root, contract.productionRestoreEvidenceSchema, ".github/production-restore-drill-evidence.schema.json", contract.productionRestoreEvidenceSchemaSha256, "restore evidence schema");
   await assertPinnedArtifact(root, contract.vercelDeploymentAdapter, "scripts/vercel-deployment-rest-adapter.ts", contract.vercelDeploymentAdapterSha256, "Vercel deployment adapter");
@@ -372,15 +378,17 @@ export async function checkProductionReleaseContract(root: string) {
       contract.vercelRestTransportSha256,
       contract.productionSmokeContractSha256,
       contract.productionSmokeModelSha256,
+      contract.productionSmokeRunnerSha256,
       contract.productionRestoreModelSha256,
       contract.productionRestoreEvidenceSchemaSha256,
     ]) === JSON.stringify([
       "2d6e5c5f805cf8a39ae186bebf63535bf128039d9b1b52ea6f478e879df90a67",
       "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
-      "92f6d87f6c001020ee5a1780a5b3be3a7473b503cb34bd74e82f734ab6d83a51",
-      "7a0c7d4facaf30bdd2b3fd0581465fe036bc10393f360218b9969e61acaa6183",
+      "e95dbbcd680c012ff5c56dc0aa5886a89b0ad9ef368f02a79ee27e31458cd014",
+      "1c10b85c3dd0d8b8712193edc33c3d1812bf8cc5f981e3adcc4f257da0ad3e65",
       "30301fbfa2b15ca5a0e33a65fcb68998ce5bbf112e9499baca21ca1ef9b37166",
       "f2062c6830759da1bcf7799156c2231b348fad20f105f1a72851d01d838f7d84",
+      "1b62169b8e2078522de549691eac8a4dfab5a3dcff6297623bbc6dcc40bde21d",
       "4bedd522a39f3792141ebb79d83a6b3d461c3a53e5ce28f1bbfd4c6de4323ae8",
       "b801b6e3e46f64c3e273c33b5c3c3432ebc152247900e125459f2cecc5613d40",
     ]),
@@ -522,21 +530,13 @@ export async function checkProductionReleaseContract(root: string) {
         contract.productionDeploymentEvidenceSchemaSha256,
     "Production deployment evidence schema fingerprint does not match the approved redaction boundary",
   );
-  let disabledWriterExists = true;
+  let applicationWriterExists = true;
   try {
     await access(path.join(root, contract.productionDeploymentWriter));
-  } catch (error) {
-    disabledWriterExists =
-      !(
-        error instanceof Error &&
-        "code" in error &&
-        (error as NodeJS.ErrnoException).code === "ENOENT"
-      );
+  } catch {
+    applicationWriterExists = false;
   }
-  assertContract(
-    !disabledWriterExists,
-    "disabled Production application deployment writer must not be executable",
-  );
+  assertContract(!applicationWriterExists, "disabled Production application deployment writer must not be executable");
   const evidenceFields = [
     "schemaVersion",
     "repository",
