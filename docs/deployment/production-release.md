@@ -26,6 +26,8 @@ feature branch → PR → required CI／verify → main
 
 ## T03 application deployment 模型
 
+此切片不完成 #58 acceptance：live deployment、production smoke 與 restore drill 仍停在外部前提與隔離 target 的安全裁決前。
+
 `scripts/production-deployment-release.ts` 是 T03 的純狀態轉換模型；`.github/production-release-contract.json` 目前以 `productionDeploymentEnabled: false` 與 `blocked-external-prerequisites-and-staging-safety-verification` 停發，預定的唯一 application deployment writer `.github/workflows/production-application-release.yml` 不存在。現有 `.github/workflows/production-release.yml` 仍只管理 migration，禁止加入 Vercel deploy。
 
 ```text

@@ -34,6 +34,9 @@ type ProductionReleaseContract = Readonly<{
   productionSmokeContractSha256: string;
   productionSmokeModel: string;
   productionSmokeModelSha256: string;
+  productionSmokeRunner: string;
+  productionSmokeRunnerSha256: string;
+  productionSmokeRunnerStatus: string;
   productionSmokePrincipalStatus: string;
   productionEnvironment: string;
   productionSchemaWriter: string;
@@ -361,6 +364,8 @@ export async function checkProductionReleaseContract(root: string) {
   await assertPinnedArtifact(root, contract.productionDeploymentSourceManifestSchema, ".github/production-deployment-source-manifest.schema.json", contract.productionDeploymentSourceManifestSchemaSha256, "source manifest schema");
   await assertPinnedArtifact(root, contract.productionSmokeContract, ".github/production-smoke-contract.json", contract.productionSmokeContractSha256, "smoke contract");
   await assertPinnedArtifact(root, contract.productionSmokeModel, "scripts/production-smoke-canary.ts", contract.productionSmokeModelSha256, "smoke model");
+  await assertPinnedArtifact(root, contract.productionSmokeRunner, "scripts/production-smoke-runner.ts", contract.productionSmokeRunnerSha256, "smoke runner");
+  assertContract(contract.productionSmokeRunnerStatus === "fail-closed-pending-principal-route-and-schema", "smoke runner status must remain fail closed");
   await assertPinnedArtifact(root, contract.productionRestoreModel, "scripts/production-restore-drill.ts", contract.productionRestoreModelSha256, "restore model");
   await assertPinnedArtifact(root, contract.productionRestoreEvidenceSchema, ".github/production-restore-drill-evidence.schema.json", contract.productionRestoreEvidenceSchemaSha256, "restore evidence schema");
   await assertPinnedArtifact(root, contract.vercelDeploymentAdapter, "scripts/vercel-deployment-rest-adapter.ts", contract.vercelDeploymentAdapterSha256, "Vercel deployment adapter");
