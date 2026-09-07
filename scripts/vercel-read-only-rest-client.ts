@@ -1,54 +1,25 @@
-const VERCEL_API_ORIGIN = "https://api.vercel.com";
+import {
+  createVercelReadOnlyTransport,
+  type VercelFetchImplementation,
+  VercelRestMalformedResponseError,
+} from "./vercel-rest-transport";
 
-export class VercelRestConfigurationError extends Error {
+export {
+  VercelRestConfigurationError,
+  VercelRestHttpError,
+  VercelRestMalformedJsonError,
+  VercelRestMalformedResponseError,
+  VercelRestNetworkError,
+  VercelRestTimeoutError,
+} from "./vercel-rest-transport";
+
+export class VercelRestUnexpectedResponseError extends VercelRestMalformedResponseError {
   constructor() {
-    super("Vercel REST client configuration is incomplete or unsafe.");
-    this.name = "VercelRestConfigurationError";
-  }
-}
-
-export class VercelRestHttpError extends Error {
-  readonly status: number;
-
-  constructor(status: number) {
-    super(`Vercel REST request failed with status ${status}.`);
-    this.name = "VercelRestHttpError";
-    this.status = status;
-  }
-}
-
-export class VercelRestTimeoutError extends Error {
-  constructor() {
-    super("Vercel REST request timed out.");
-    this.name = "VercelRestTimeoutError";
-  }
-}
-
-export class VercelRestNetworkError extends Error {
-  constructor() {
-    super("Vercel REST request failed before receiving a response.");
-    this.name = "VercelRestNetworkError";
-  }
-}
-
-export class VercelRestMalformedJsonError extends Error {
-  constructor() {
-    super("Vercel REST response was not valid JSON.");
-    this.name = "VercelRestMalformedJsonError";
-  }
-}
-
-export class VercelRestUnexpectedResponseError extends Error {
-  constructor() {
-    super("Vercel REST response did not match the expected shape.");
+    super();
+    this.message = "Vercel REST response did not match the expected shape.";
     this.name = "VercelRestUnexpectedResponseError";
   }
 }
-
-type FetchImplementation = (
-  input: string | URL | Request,
-  init?: RequestInit,
-) => Promise<Response>;
 
 type VercelEnvironmentVariable = Readonly<{
   id: string;
@@ -145,96 +116,45 @@ function parseProject(value: unknown): VercelProject {
 
 export function createVercelReadOnlyRestClient({
   fetchImpl = globalThis.fetch,
+  maxResponseBytes,
   teamId,
   timeoutMs,
   token,
 }: Readonly<{
-  fetchImpl?: FetchImplementation;
+  fetchImpl?: VercelFetchImplementation;
+  maxResponseBytes?: number;
   teamId: string;
   timeoutMs: number;
   token: string;
 }>): VercelReadOnlyRestClient {
-  if (
-    token.trim().length === 0 ||
-    teamId.trim().length === 0 ||
-    !Number.isFinite(timeoutMs) ||
-    timeoutMs <= 0
-  ) {
-    throw new VercelRestConfigurationError();
-  }
-  const request = async (path: string) => {
-    const url = new URL(path, VERCEL_API_ORIGIN);
-    url.searchParams.set("teamId", teamId);
-    const controller = new AbortController();
-    let timedOut = false;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<never>((_resolve, reject) => {
-      timeout = setTimeout(() => {
-        timedOut = true;
-        controller.abort();
-        reject(new VercelRestTimeoutError());
-      }, timeoutMs);
-    });
-    try {
-      let response: Response;
-      try {
-        response = await Promise.race([
-          fetchImpl(url, {
-            headers: {
-              accept: "application/json",
-              authorization: `Bearer ${token}`,
-            },
-            method: "GET",
-            signal: controller.signal,
-          }),
-          timeoutPromise,
-        ]);
-      } catch (error) {
-        if (timedOut || error instanceof VercelRestTimeoutError) {
-          throw new VercelRestTimeoutError();
-        }
-        throw new VercelRestNetworkError();
-      }
-      if (!response.ok) {
-        throw new VercelRestHttpError(response.status);
-      }
-      let responseText: string;
-      try {
-        responseText = await Promise.race([response.text(), timeoutPromise]);
-      } catch (error) {
-        if (timedOut || error instanceof VercelRestTimeoutError) {
-          throw new VercelRestTimeoutError();
-        }
-        throw new VercelRestNetworkError();
-      }
-      try {
-        return JSON.parse(responseText) as unknown;
-      } catch {
-        throw new VercelRestMalformedJsonError();
-      }
-    } finally {
-      if (timeout !== undefined) {
-        clearTimeout(timeout);
-      }
-    }
-  };
+  const transport = createVercelReadOnlyTransport({
+    fetchImpl,
+    maxResponseBytes,
+    teamId,
+    timeoutMs,
+    token,
+  });
 
   return {
     async getProject(projectId: string) {
       return parseProject(
-        await request(`/v9/projects/${encodeURIComponent(projectId)}`),
+        await transport.getJson(
+          `/v9/projects/${encodeURIComponent(projectId)}`,
+        ),
       );
     },
     async getProjectEnvironmentVariable(projectId: string, variableId: string) {
       return parseEnvironmentValue(
-        await request(
+        await transport.getJson(
           `/v1/projects/${encodeURIComponent(projectId)}/env/${encodeURIComponent(variableId)}`,
         ),
       );
     },
     async listProjectEnvironmentVariables(projectId: string) {
       const response = parseEnvironmentList(
-        await request(`/v10/projects/${encodeURIComponent(projectId)}/env`),
+        await transport.getJson(
+          `/v10/projects/${encodeURIComponent(projectId)}/env`,
+        ),
       );
       return response.envs;
     },

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { checkProductionReleaseContract } from "../../scripts/check-production-release-contract";
+import {
+  assertNoVercelDeploymentMutationEntrypoints,
+  checkProductionReleaseContract,
+  readRepositoryExecutableSources,
+} from "../../scripts/check-production-release-contract";
 
 describe("production release contract", () => {
   it("pins the disabled application deployment writer and evidence boundary", async () => {
@@ -20,7 +26,56 @@ describe("production release contract", () => {
     ) as {
       additionalProperties?: unknown;
       required?: unknown;
-      properties?: Record<string, unknown>;
+      properties: {
+        smoke: {
+          properties: {
+            requestIds: unknown;
+          };
+        };
+        [key: string]: unknown;
+      };
+      allOf: Array<{
+        then?: {
+          properties?: {
+            rollbackAttempts?: { minimum?: number };
+            smoke?: {
+              properties?: {
+                counts?: {
+                  required?: string[];
+                  properties?: { cleanup?: { $ref?: string } };
+                };
+                checks?: {
+                  required?: string[];
+                  properties?: {
+                    "canary-cleanup-counts"?: { const?: string };
+                  };
+                };
+              };
+            };
+          };
+        };
+      }>;
+    };
+    const sourceManifestSchema = JSON.parse(
+      await readFile(
+        ".github/production-deployment-source-manifest.schema.json",
+        "utf8",
+      ),
+    ) as {
+      maxItems?: number;
+      "x-maxCanonicalUtf8Bytes"?: number;
+      properties?: {
+        files?: {
+          maxItems?: number;
+          "x-maxTotalBytes"?: number;
+          items?: {
+            properties?: {
+              path?: { maxLength?: number; "x-maxUtf8Bytes"?: number };
+              size?: { maximum?: number };
+            };
+          };
+        };
+      };
     };
     const vercelSettingsReadAdapter = await readFile(
       "scripts/vercel-read-only-rest-client.ts",
@@ -43,7 +98,23 @@ describe("production release contract", () => {
         ".github/workflows/production-application-release.yml",
       productionDeploymentModel: "scripts/production-deployment-release.ts",
       productionDeploymentStatus:
-        "blocked-external-prerequisites-and-deployment-adapter",
+        "blocked-external-prerequisites-and-staging-safety-verification",
+      vercelDeploymentAdapter: "scripts/vercel-deployment-rest-adapter.ts",
+      vercelDeploymentAdapterStatus:
+        "request-contract-ready-live-mutations-disabled",
+      stagedProductionSafetyStatus: "auto-assign-disablement-unverified",
+      vercelRestTransport: "scripts/vercel-rest-transport.ts",
+      vercelRestTransportSha256:
+        "7a0c7d4facaf30bdd2b3fd0581465fe036bc10393f360218b9969e61acaa6183",
+      productionDeploymentSourceManifestBuilder:
+        "scripts/production-deployment-source-manifest.ts",
+      productionDeploymentSourceManifestSchema:
+        ".github/production-deployment-source-manifest.schema.json",
+      productionSmokeContract: ".github/production-smoke-contract.json",
+      productionSmokeModel: "scripts/production-smoke-canary.ts",
+      productionRestoreModel: "scripts/production-restore-drill.ts",
+      productionRestoreEvidenceSchema:
+        ".github/production-restore-drill-evidence.schema.json",
       productionSmokePrincipalStatus: "unresolved",
       productionCustomDomain: null,
       productionDeploymentEnabled: false,
@@ -60,7 +131,21 @@ describe("production release contract", () => {
       productionDeploymentEvidenceSchema:
         ".github/production-deployment-evidence.schema.json",
       productionDeploymentEvidenceSchemaSha256:
-        "d5438760d86aff69cb7dc46573941e0a4d16302257155b5f9a61c018c6833bdc",
+        "4c0a1f5fa6b1ddd54f090e66b24bf11d90b0a6fe1d87dd587d43c23e99a41f8b",
+      productionDeploymentSourceManifestBuilderSha256:
+        "2d6e5c5f805cf8a39ae186bebf63535bf128039d9b1b52ea6f478e879df90a67",
+      productionDeploymentSourceManifestSchemaSha256:
+        "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
+      vercelDeploymentAdapterSha256:
+        "92f6d87f6c001020ee5a1780a5b3be3a7473b503cb34bd74e82f734ab6d83a51",
+      productionSmokeContractSha256:
+        "30301fbfa2b15ca5a0e33a65fcb68998ce5bbf112e9499baca21ca1ef9b37166",
+      productionSmokeModelSha256:
+        "f2062c6830759da1bcf7799156c2231b348fad20f105f1a72851d01d838f7d84",
+      productionRestoreModelSha256:
+        "4bedd522a39f3792141ebb79d83a6b3d461c3a53e5ce28f1bbfd4c6de4323ae8",
+      productionRestoreEvidenceSchemaSha256:
+        "b801b6e3e46f64c3e273c33b5c3c3432ebc152247900e125459f2cecc5613d40",
     });
     expect(packageJson.devDependencies).not.toHaveProperty("vercel");
     expect(Object.values(packageJson.scripts ?? {}).join("\n")).not.toMatch(
@@ -82,9 +167,160 @@ describe("production release contract", () => {
     expect(evidenceSchema.required).toContain("executionSha");
     expect(evidenceSchema.required).toContain("baselineDeploymentId");
     expect(evidenceSchema.required).toContain("stagedDeploymentId");
+    expect(evidenceSchema.required).toContain("releaseIdentity");
+    expect(evidenceSchema.required).toContain("sourceManifestSha256");
+    expect(evidenceSchema.properties.smoke.properties.requestIds).toEqual({
+      type: "array",
+      maxItems: 16,
+      uniqueItems: true,
+      items: {
+        type: "string",
+        pattern:
+          "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      },
+    });
+    const rolledBackEvidence = evidenceSchema.allOf[1]?.then?.properties;
+    expect(rolledBackEvidence?.rollbackAttempts?.minimum).toBe(0);
+    expect(rolledBackEvidence?.smoke?.properties?.counts?.required).toEqual([
+      "cleanup",
+    ]);
+    expect(
+      rolledBackEvidence?.smoke?.properties?.counts?.properties?.cleanup?.$ref,
+    ).toBe("#/$defs/zeroCounts");
+    expect(rolledBackEvidence?.smoke?.properties?.checks?.required).toEqual([
+      "canary-cleanup-counts",
+    ]);
+    expect(
+      rolledBackEvidence?.smoke?.properties?.checks?.properties?.[
+        "canary-cleanup-counts"
+      ]?.const,
+    ).toBe("passed");
+    expect(evidenceSchema.required).toContain("canaryContractVersion");
     expect(evidenceSchema.properties).not.toHaveProperty("token");
     expect(evidenceSchema.properties).not.toHaveProperty("authorization");
     expect(evidenceSchema.properties).not.toHaveProperty("payload");
+    expect(sourceManifestSchema.properties?.files).toMatchObject({
+      maxItems: 20_000,
+      "x-maxTotalBytes": 1024 * 1024 * 1024,
+      items: {
+        properties: {
+          path: { maxLength: 1024, "x-maxUtf8Bytes": 1024 },
+          size: { maximum: 50 * 1024 * 1024 },
+        },
+      },
+    });
+    expect(sourceManifestSchema["x-maxCanonicalUtf8Bytes"]).toBe(43_200_512);
+    const passedEvidenceRule = (evidenceSchema as {
+      allOf?: Array<{
+        then?: {
+          properties?: {
+            smoke?: {
+              properties?: {
+                counts?: {
+                  properties?: {
+                    mutation?: {
+                      properties?: Record<string, { const?: unknown }>;
+                    };
+                  };
+                };
+                checks?: {
+                  properties?: Record<string, { const?: unknown }>;
+                };
+              };
+            };
+          };
+        };
+      }>;
+    }).allOf?.[0]?.then?.properties?.smoke?.properties;
+    expect(passedEvidenceRule?.counts?.properties?.mutation?.properties).toEqual({
+      row: { const: 1 },
+      object: { const: 1 },
+    });
+    expect(Object.values(passedEvidenceRule?.checks?.properties ?? {})).toHaveLength(8);
+    expect(
+      Object.values(passedEvidenceRule?.checks?.properties ?? {}).every(
+        (check) => check.const === "passed",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects Vercel mutation entrypoints across dependencies, workflows, scripts, and package commands", () => {
+    const clean = {
+      packageJson: { scripts: { check: "tsx scripts/check.ts" } },
+      scriptSources: { "check.ts": "export const readOnly = true;" },
+      workflowSources: { "ci.yml": "run: pnpm test" },
+    };
+    expect(() =>
+      assertNoVercelDeploymentMutationEntrypoints(clean),
+    ).not.toThrow();
+    expect(() =>
+      assertNoVercelDeploymentMutationEntrypoints({
+        ...clean,
+        packageJson: { dependencies: { vercel: "1.0.0" } },
+      }),
+    ).toThrow(/dependency section/);
+    expect(() =>
+      assertNoVercelDeploymentMutationEntrypoints({
+        ...clean,
+        workflowSources: {
+          "release.yml":
+            "run: curl -X POST https://api.vercel.com/v13/deployments",
+        },
+      }),
+    ).toThrow(/workflow release\.yml/);
+    expect(() =>
+      assertNoVercelDeploymentMutationEntrypoints({
+        ...clean,
+        scriptSources: {
+          "deploy.ts":
+            'import { buildCreateVercelDeploymentRequest } from "./vercel-deployment-rest-adapter";',
+        },
+      }),
+    ).toThrow(/script deploy\.ts/);
+    expect(() =>
+      assertNoVercelDeploymentMutationEntrypoints({
+        ...clean,
+        packageJson: {
+          scripts: {
+            deploy: "tsx scripts/vercel-deployment-rest-adapter.ts",
+          },
+        },
+      }),
+    ).toThrow(/package scripts/);
+    for (const [filename, source] of [
+      ["src/deep/quiet.ts", 'const endpoint = "/v13/deployments";'],
+      ["ops/release.sh", "vercel deploy --prod"],
+      [".hidden/writer.py", 'requests.post("https://api.vercel.com/v13/deployments")'],
+    ]) {
+      expect(() =>
+        assertNoVercelDeploymentMutationEntrypoints({
+          ...clean,
+          scriptSources: { [filename]: source },
+        }),
+      ).toThrow(new RegExp(filename.replace(/[.]/g, "\\.")));
+    }
+  });
+
+  it("recursively reads executable sources while excluding generated trees", async () => {
+    const root = await mkdtemp(join(tmpdir(), "release-source-scan-"));
+    try {
+      await mkdir(join(root, "src", "deep"), { recursive: true });
+      await mkdir(join(root, ".hidden"), { recursive: true });
+      await mkdir(join(root, "node_modules", "ignored"), { recursive: true });
+      await writeFile(join(root, "src", "deep", "writer.ts"), "writer");
+      await writeFile(join(root, ".hidden", "writer.py"), "writer");
+      await writeFile(join(root, "run.sh"), "writer");
+      await writeFile(join(root, "node_modules", "ignored", "writer.ts"), "ignored");
+
+      const sources = await readRepositoryExecutableSources(root);
+      expect(Object.keys(sources).sort()).toEqual([
+        ".hidden/writer.py",
+        "run.sh",
+        "src/deep/writer.ts",
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("records the disabled Supabase Git production mapping and sole schema writer", async () => {

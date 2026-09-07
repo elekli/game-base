@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
@@ -18,10 +18,22 @@ type ProductionReleaseContract = Readonly<{
   productionDeploymentEvidenceSchema: string;
   productionDeploymentEvidenceSchemaSha256: string;
   productionDeploymentModel: string;
+  productionDeploymentSourceManifestBuilder: string;
+  productionDeploymentSourceManifestBuilderSha256: string;
+  productionDeploymentSourceManifestSchema: string;
+  productionDeploymentSourceManifestSchemaSha256: string;
   productionDeploymentRequiredSecrets: ReadonlyArray<string>;
   productionDeploymentRequiredVariables: ReadonlyArray<string>;
   productionDeploymentStatus: string;
   productionDeploymentWriter: string;
+  productionRestoreEvidenceSchema: string;
+  productionRestoreEvidenceSchemaSha256: string;
+  productionRestoreModel: string;
+  productionRestoreModelSha256: string;
+  productionSmokeContract: string;
+  productionSmokeContractSha256: string;
+  productionSmokeModel: string;
+  productionSmokeModelSha256: string;
   productionSmokePrincipalStatus: string;
   productionEnvironment: string;
   productionSchemaWriter: string;
@@ -33,8 +45,14 @@ type ProductionReleaseContract = Readonly<{
   vercelDeploymentCliCandidateVersion: string;
   vercelDeploymentCliStatus: string;
   vercelDeploymentAdapterEvaluation: string;
+  vercelDeploymentAdapter: string;
+  vercelDeploymentAdapterSha256: string;
+  vercelDeploymentAdapterStatus: string;
+  stagedProductionSafetyStatus: string;
   vercelProjectId: string;
   vercelProjectName: string;
+  vercelRestTransport: string;
+  vercelRestTransportSha256: string;
   vercelSettingsReadAdapter: string;
   vercelSettingsReadStatus: string;
   vercelTeamId: string;
@@ -49,14 +67,149 @@ const RELEASE_STATE_MACHINE_PATH = "scripts/production-migration-release.ts";
 
 type JsonSchema = Readonly<{
   additionalProperties?: unknown;
+  items?: unknown;
+  maxItems?: unknown;
+  pattern?: unknown;
   required?: unknown;
   properties?: Record<string, unknown>;
+  uniqueItems?: unknown;
 }>;
 
 function assertContract(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(`ProductionReleaseContractError: ${message}`);
   }
+}
+
+type PackageSurface = Readonly<{
+  dependencies?: Readonly<Record<string, unknown>>;
+  devDependencies?: Readonly<Record<string, unknown>>;
+  optionalDependencies?: Readonly<Record<string, unknown>>;
+  peerDependencies?: Readonly<Record<string, unknown>>;
+  scripts?: Readonly<Record<string, unknown>>;
+}>;
+
+const VERCEL_MUTATION_ENDPOINT =
+  /\/v(?:2\/files|13\/deployments|10\/projects\/[^\s"']+\/promote|1\/projects\/[^\s"']+\/rollback)/i;
+const VERCEL_MUTATION_SYMBOL =
+  /\b(?:buildUploadVercelFileRequest|buildCreateVercelDeploymentRequest|buildPromoteVercelDeploymentRequest|buildRollbackVercelDeploymentRequest|createVercelDeploymentRestAdapter)\b/;
+const VERCEL_CLI_MUTATION =
+  /(?:^|[\s"'])(?:vercel\s+(?:deploy|promote|rollback)|(?:pnpm\s+(?:dlx|exec)|npx|npm\s+exec)[^\n]*\bvercel\b)/im;
+const VERCEL_HTTP_MUTATION =
+  /(?:\b(?:POST|PUT|PATCH|DELETE)\b[\s\S]{0,240}api\.vercel\.com|api\.vercel\.com[\s\S]{0,240}\b(?:POST|PUT|PATCH|DELETE)\b)/i;
+const EXECUTABLE_SOURCE_EXTENSION = /\.(?:[cm]?[jt]sx?|sh|py)$/i;
+const SOURCE_SCAN_EXCLUDED_DIRECTORIES = new Set([
+  ".git",
+  ".next",
+  ".turbo",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+]);
+const SOURCE_SCAN_AUTHORIZED_CONTRACT_FILES = new Set([
+  "scripts/check-production-release-contract.ts",
+  "scripts/vercel-deployment-rest-adapter.ts",
+  "tests/unit/production-release-contract.test.ts",
+  "tests/unit/vercel-deployment-rest-adapter.test.ts",
+]);
+
+export async function readRepositoryExecutableSources(
+  root: string,
+): Promise<Readonly<Record<string, string>>> {
+  const sources: Record<string, string> = {};
+  async function visit(relativeDirectory: string): Promise<void> {
+    const directory = path.join(root, relativeDirectory);
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const relativePath = path.posix.join(relativeDirectory, entry.name);
+      if (entry.isDirectory()) {
+        if (!SOURCE_SCAN_EXCLUDED_DIRECTORIES.has(entry.name)) {
+          await visit(relativePath);
+        }
+        continue;
+      }
+      if (
+        entry.isFile() &&
+        EXECUTABLE_SOURCE_EXTENSION.test(entry.name) &&
+        !SOURCE_SCAN_AUTHORIZED_CONTRACT_FILES.has(relativePath)
+      ) {
+        sources[relativePath] = await readFile(
+          path.join(root, relativePath),
+          "utf8",
+        );
+      }
+    }
+  }
+  await visit("");
+  return sources;
+}
+
+export function assertNoVercelDeploymentMutationEntrypoints({
+  packageJson,
+  scriptSources,
+  workflowSources,
+}: Readonly<{
+  packageJson: PackageSurface;
+  scriptSources: Readonly<Record<string, string>>;
+  workflowSources: Readonly<Record<string, string>>;
+}>): void {
+  for (const dependencies of [
+    packageJson.dependencies,
+    packageJson.devDependencies,
+    packageJson.optionalDependencies,
+    packageJson.peerDependencies,
+  ]) {
+    assertContract(
+      dependencies?.vercel === undefined,
+      "security-blocked Vercel CLI must not appear in any package dependency section",
+    );
+  }
+
+  const packageCommands = Object.values(packageJson.scripts ?? {}).join("\n");
+  assertContract(
+    !VERCEL_CLI_MUTATION.test(packageCommands) &&
+      !VERCEL_MUTATION_ENDPOINT.test(packageCommands) &&
+      !VERCEL_MUTATION_SYMBOL.test(packageCommands) &&
+      !packageCommands.includes("scripts/vercel-deployment-rest-adapter"),
+    "package scripts must not expose a Vercel deployment mutation entrypoint",
+  );
+
+  for (const [filename, source] of Object.entries(workflowSources)) {
+    assertContract(
+      !VERCEL_CLI_MUTATION.test(source) &&
+        !VERCEL_MUTATION_ENDPOINT.test(source) &&
+        !VERCEL_MUTATION_SYMBOL.test(source) &&
+        !VERCEL_HTTP_MUTATION.test(source),
+      `workflow ${filename} must not expose a Vercel deployment mutation entrypoint`,
+    );
+  }
+
+  for (const [filename, source] of Object.entries(scriptSources)) {
+    assertContract(
+      !VERCEL_MUTATION_ENDPOINT.test(source) &&
+        !VERCEL_MUTATION_SYMBOL.test(source) &&
+        !VERCEL_CLI_MUTATION.test(source) &&
+        !VERCEL_HTTP_MUTATION.test(source),
+      `script ${filename} must not expose a Vercel deployment mutation entrypoint`,
+    );
+  }
+}
+
+async function assertPinnedArtifact(
+  root: string,
+  artifactPath: string,
+  expectedPath: string,
+  expectedSha256: string,
+  label: string,
+): Promise<string> {
+  assertContract(artifactPath === expectedPath, `${label} path is not repository-owned`);
+  const text = await readFile(path.join(root, artifactPath), "utf8");
+  assertContract(
+    createHash("sha256").update(text).digest("hex") === expectedSha256,
+    `${label} fingerprint does not match`,
+  );
+  return text;
 }
 
 export async function checkProductionReleaseContract(root: string) {
@@ -75,10 +228,22 @@ export async function checkProductionReleaseContract(root: string) {
   const releaseStateMachine = await readFile(path.join(root, RELEASE_STATE_MACHINE_PATH), "utf8");
   const packageJson = JSON.parse(
     await readFile(path.join(root, "package.json"), "utf8"),
-  ) as {
-    devDependencies?: Record<string, unknown>;
-    scripts?: Record<string, unknown>;
-  };
+  ) as PackageSurface;
+  const workflowDirectory = path.join(root, ".github/workflows");
+  const workflowSources = Object.fromEntries(
+    await Promise.all(
+      (await readdir(workflowDirectory, { withFileTypes: true }))
+        .filter(
+          (entry) =>
+            entry.isFile() && /\.ya?ml$/i.test(entry.name),
+        )
+        .map(async (entry) => [
+          entry.name,
+          await readFile(path.join(workflowDirectory, entry.name), "utf8"),
+        ] as const),
+    ),
+  );
+  const scriptSources = await readRepositoryExecutableSources(root);
   const deploymentAdapterEvaluation = JSON.parse(
     await readFile(
       path.join(root, contract.vercelDeploymentAdapterEvaluation),
@@ -106,6 +271,15 @@ export async function checkProductionReleaseContract(root: string) {
     path.join(root, contract.vercelSettingsReadAdapter),
     "utf8",
   );
+  const vercelRestTransport = await readFile(
+    path.join(root, "scripts/vercel-rest-transport.ts"),
+    "utf8",
+  );
+  assertNoVercelDeploymentMutationEntrypoints({
+    packageJson,
+    scriptSources,
+    workflowSources,
+  });
   const liveProductionSettingsChecker = await readFile(
     path.join(root, "scripts/check-live-production-settings.ts"),
     "utf8",
@@ -157,7 +331,7 @@ export async function checkProductionReleaseContract(root: string) {
       "scripts/vercel-read-only-rest-client.ts" &&
       contract.vercelSettingsReadStatus ===
         "ready-official-rest-read-only" &&
-      vercelSettingsReadAdapter.includes(
+      vercelRestTransport.includes(
         'const VERCEL_API_ORIGIN = "https://api.vercel.com"',
       ) &&
       vercelSettingsReadAdapter.includes(
@@ -182,6 +356,129 @@ export async function checkProductionReleaseContract(root: string) {
       ".github/workflows/production-application-release.yml",
     "Production application deployment writer must use the protected workflow path",
   );
+  await assertPinnedArtifact(root, contract.productionDeploymentSourceManifestBuilder, "scripts/production-deployment-source-manifest.ts", contract.productionDeploymentSourceManifestBuilderSha256, "source manifest builder");
+  await assertPinnedArtifact(root, contract.productionDeploymentSourceManifestSchema, ".github/production-deployment-source-manifest.schema.json", contract.productionDeploymentSourceManifestSchemaSha256, "source manifest schema");
+  await assertPinnedArtifact(root, contract.productionSmokeContract, ".github/production-smoke-contract.json", contract.productionSmokeContractSha256, "smoke contract");
+  await assertPinnedArtifact(root, contract.productionSmokeModel, "scripts/production-smoke-canary.ts", contract.productionSmokeModelSha256, "smoke model");
+  await assertPinnedArtifact(root, contract.productionRestoreModel, "scripts/production-restore-drill.ts", contract.productionRestoreModelSha256, "restore model");
+  await assertPinnedArtifact(root, contract.productionRestoreEvidenceSchema, ".github/production-restore-drill-evidence.schema.json", contract.productionRestoreEvidenceSchemaSha256, "restore evidence schema");
+  await assertPinnedArtifact(root, contract.vercelDeploymentAdapter, "scripts/vercel-deployment-rest-adapter.ts", contract.vercelDeploymentAdapterSha256, "Vercel deployment adapter");
+  await assertPinnedArtifact(root, contract.vercelRestTransport, "scripts/vercel-rest-transport.ts", contract.vercelRestTransportSha256, "Vercel REST transport");
+  assertContract(
+    JSON.stringify([
+      contract.productionDeploymentSourceManifestBuilderSha256,
+      contract.productionDeploymentSourceManifestSchemaSha256,
+      contract.vercelDeploymentAdapterSha256,
+      contract.vercelRestTransportSha256,
+      contract.productionSmokeContractSha256,
+      contract.productionSmokeModelSha256,
+      contract.productionRestoreModelSha256,
+      contract.productionRestoreEvidenceSchemaSha256,
+    ]) === JSON.stringify([
+      "2d6e5c5f805cf8a39ae186bebf63535bf128039d9b1b52ea6f478e879df90a67",
+      "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
+      "92f6d87f6c001020ee5a1780a5b3be3a7473b503cb34bd74e82f734ab6d83a51",
+      "7a0c7d4facaf30bdd2b3fd0581465fe036bc10393f360218b9969e61acaa6183",
+      "30301fbfa2b15ca5a0e33a65fcb68998ce5bbf112e9499baca21ca1ef9b37166",
+      "f2062c6830759da1bcf7799156c2231b348fad20f105f1a72851d01d838f7d84",
+      "4bedd522a39f3792141ebb79d83a6b3d461c3a53e5ce28f1bbfd4c6de4323ae8",
+      "b801b6e3e46f64c3e273c33b5c3c3432ebc152247900e125459f2cecc5613d40",
+    ]),
+    "Production deployment artifact fingerprints must remain fixed",
+  );
+  const sourceManifestSchema = JSON.parse(
+    await readFile(path.join(root, contract.productionDeploymentSourceManifestSchema), "utf8"),
+  ) as JsonSchema;
+  const smokeContract = JSON.parse(
+    await readFile(path.join(root, contract.productionSmokeContract), "utf8"),
+  ) as Record<string, unknown>;
+  const restoreEvidenceSchema = JSON.parse(
+    await readFile(path.join(root, contract.productionRestoreEvidenceSchema), "utf8"),
+  ) as JsonSchema;
+  const exactSmokeChecks = [
+    "custom-domain-owner-access", "direct-origin-denied",
+    "authenticated-library-read", "runtime-database-read",
+    "private-storage-direct-denied", "canary-row-round-trip",
+    "canary-object-round-trip", "canary-cleanup-counts",
+  ];
+  assertContract(
+    sourceManifestSchema.additionalProperties === false &&
+      (sourceManifestSchema.properties?.schemaVersion as { const?: unknown } | undefined)?.const === 1 &&
+      JSON.stringify(sourceManifestSchema.required) === JSON.stringify(["schemaVersion", "commitSha", "files"]) &&
+      (sourceManifestSchema.properties?.files as {
+        maxItems?: unknown;
+        "x-maxTotalBytes"?: unknown;
+        items?: {
+          properties?: {
+            path?: { maxLength?: unknown; "x-maxUtf8Bytes"?: unknown };
+            size?: { maximum?: unknown };
+          };
+        };
+      } | undefined)?.maxItems === 20_000 &&
+      (sourceManifestSchema.properties?.files as { "x-maxTotalBytes"?: unknown } | undefined)?.["x-maxTotalBytes"] === 1024 * 1024 * 1024 &&
+      (sourceManifestSchema.properties?.files as { items?: { properties?: { path?: { maxLength?: unknown; "x-maxUtf8Bytes"?: unknown } } } } | undefined)?.items?.properties?.path?.maxLength === 1024 &&
+      (sourceManifestSchema.properties?.files as { items?: { properties?: { path?: { "x-maxUtf8Bytes"?: unknown } } } } | undefined)?.items?.properties?.path?.["x-maxUtf8Bytes"] === 1024 &&
+      (sourceManifestSchema.properties?.files as { items?: { properties?: { size?: { maximum?: unknown } } } } | undefined)?.items?.properties?.size?.maximum === 50 * 1024 * 1024,
+    "Source manifest schema must remain closed and versioned",
+  );
+  assertContract(
+    smokeContract.contractVersion === 1 &&
+      smokeContract.namespace === "release-smoke-v1" &&
+      JSON.stringify(smokeContract.checks) === JSON.stringify(exactSmokeChecks),
+    "Production smoke contract constants must remain fixed",
+  );
+  assertContract(
+    restoreEvidenceSchema.additionalProperties === false &&
+      (restoreEvidenceSchema.properties?.outcome as { const?: unknown } | undefined)?.const === "passed" &&
+      (restoreEvidenceSchema.properties?.storageBinariesIncluded as { const?: unknown } | undefined)?.const === false,
+    "Restore evidence must remain closed and exclude Storage binaries",
+  );
+  const adapterModule = await import(
+    pathToFileURL(path.join(root, contract.vercelDeploymentAdapter)).href
+  );
+  const sourceManifestModule = await import(
+    pathToFileURL(
+      path.join(root, contract.productionDeploymentSourceManifestBuilder),
+    ).href
+  );
+  assertContract(
+    contract.vercelDeploymentAdapterStatus === "request-contract-ready-live-mutations-disabled" &&
+      contract.stagedProductionSafetyStatus === "auto-assign-disablement-unverified" &&
+      typeof adapterModule.buildCreateVercelDeploymentRequest === "function" &&
+      typeof adapterModule.buildPromoteVercelDeploymentRequest === "function" &&
+      typeof adapterModule.buildRollbackVercelDeploymentRequest === "function" &&
+      typeof adapterModule.parseReadyVercelProductionDeployment === "function",
+    "Vercel REST request contract must remain explicit and closed",
+  );
+  let mutationDisabled = false;
+  try {
+    adapterModule.createVercelDeploymentRestAdapter();
+  } catch (error) {
+    mutationDisabled = error?.constructor?.name === "VercelDeploymentMutationDisabledError";
+  }
+  assertContract(mutationDisabled, "Vercel REST adapter must fail closed before live mutation");
+  const disabledCreateArtifact =
+    sourceManifestModule.canonicalizeProductionDeploymentSourceManifest({
+      schemaVersion: 1,
+      commitSha: "a".repeat(40),
+      files: [],
+    });
+  let createDisabled = false;
+  try {
+    adapterModule.buildCreateVercelDeploymentRequest({
+      projectName: contract.vercelProjectName,
+      releaseIdentity: `production:${"a".repeat(40)}`,
+      sourceManifestArtifact: disabledCreateArtifact,
+    });
+  } catch (error) {
+    createDisabled =
+      error?.constructor?.name ===
+      "VercelStagedProductionSafetyUnverifiedError";
+  }
+  assertContract(
+    createDisabled,
+    "Vercel create request must remain disabled while staged safety is unverified",
+  );
   assertContract(
     contract.productionDeploymentModel ===
       "scripts/production-deployment-release.ts" &&
@@ -192,7 +489,7 @@ export async function checkProductionReleaseContract(root: string) {
   );
   assertContract(
     contract.productionDeploymentStatus ===
-      "blocked-external-prerequisites-and-deployment-adapter" &&
+      "blocked-external-prerequisites-and-staging-safety-verification" &&
       contract.productionSmokePrincipalStatus === "unresolved" &&
       contract.productionCustomDomain === null &&
       contract.productionDeploymentEnabled === false,
@@ -220,7 +517,7 @@ export async function checkProductionReleaseContract(root: string) {
   );
   assertContract(
     contract.productionDeploymentEvidenceSchemaSha256 ===
-      "d5438760d86aff69cb7dc46573941e0a4d16302257155b5f9a61c018c6833bdc" &&
+      "4c0a1f5fa6b1ddd54f090e66b24bf11d90b0a6fe1d87dd587d43c23e99a41f8b" &&
       createHash("sha256").update(deploymentEvidenceSchemaText).digest("hex") ===
         contract.productionDeploymentEvidenceSchemaSha256,
     "Production deployment evidence schema fingerprint does not match the approved redaction boundary",
@@ -246,6 +543,9 @@ export async function checkProductionReleaseContract(root: string) {
     "workflowRunId",
     "workflowRunAttempt",
     "executionSha",
+    "releaseIdentity",
+    "sourceManifestSha256",
+    "canaryContractVersion",
     "releaseKind",
     "migrationTail",
     "baselineDeploymentId",
@@ -275,8 +575,28 @@ export async function checkProductionReleaseContract(root: string) {
   assertContract(
     smokeSchema?.additionalProperties === false &&
       JSON.stringify(Object.keys(smokeSchema.properties ?? {}).sort()) ===
-        JSON.stringify(["checks", "outcome", "requestIds"]),
+        JSON.stringify(["checks", "counts", "outcome", "requestIds"]),
     "Production smoke evidence must reject payloads and unknown fields",
+  );
+  const smokeRequestIds = smokeSchema?.properties?.requestIds as JsonSchema | undefined;
+  const smokeRequestIdItems = smokeRequestIds?.items as JsonSchema | undefined;
+  assertContract(
+    smokeRequestIds?.maxItems === 16 &&
+      smokeRequestIds?.uniqueItems === true &&
+      smokeRequestIdItems?.pattern ===
+        "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    "Production smoke evidence must accept at most 16 unique UUIDv4 request IDs",
+  );
+  const smokeChecks = (smokeSchema?.properties?.checks as JsonSchema | undefined);
+  assertContract(
+    smokeChecks?.additionalProperties === false &&
+      JSON.stringify(Object.keys(smokeChecks.properties ?? {})) === JSON.stringify([
+        "custom-domain-owner-access", "direct-origin-denied",
+        "authenticated-library-read", "runtime-database-read",
+        "private-storage-direct-denied", "canary-row-round-trip",
+        "canary-object-round-trip", "canary-cleanup-counts",
+      ]),
+    "Production smoke evidence must pin the complete eight-check canary contract",
   );
   assertContract(contract.supabaseProjectRef === "wbtyuvufhrhybquzwfip", "Supabase project ref does not match the Production binding");
   assertContract(contract.supabaseRegion === "ap-south-1", "Supabase region does not match the Production binding");

@@ -12,5 +12,10 @@
     "sampledVersionsWithCriticalOrHigh": ["55.0.0", "56.5.0", "57.0.0", "58.11.0", "59.11.7"]
   },
   "decision": "blocked-no-executable-deployment-cli",
-  "nextAdapter": "official-rest-api-or-security-cleared-exact-cli"
+  "nextAdapter": "official-rest-api-or-security-cleared-exact-cli",
+  "restRequestContract": "scripts/vercel-deployment-rest-adapter.ts",
+  "restRequestContractStatus": "request-contract-ready-live-mutations-disabled",
+  "stagedProductionSafetyStatus": "auto-assign-disablement-unverified",
+  "restCreateSkipDomainEquivalent": false,
+  "liveMutationEnabled": false
 }
