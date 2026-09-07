@@ -3,8 +3,12 @@ import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 import { deploymentBindings } from "../src/shared/config/deployment-bindings";
+import {
+  createVercelReadOnlyRestClient,
+  type VercelReadOnlyRestClient,
+} from "./vercel-read-only-rest-client";
 
-type LiveProductionSettings = Readonly<{
+export type LiveProductionSettings = Readonly<{
   githubDeploymentBranchPolicies: Array<{ name?: string }>;
   githubEnvironmentSecretNames: string[];
   supabaseApiKeyFingerprints: {
@@ -210,21 +214,31 @@ export function readJsonSafely(
   }
 }
 
-function readLiveSettings(): LiveProductionSettings {
-  const vercelEnvironment = readJsonSafely("vercel", [
-    "api",
-    "/v10/projects/prj_iTlWeDkcKItHTKYIayoNjQQ0vHec/env",
-    "--raw",
-  ]) as { envs: LiveProductionSettings["vercelEnvironmentVariables"] };
-  const readVariableValue = (key: string) => {
-    const variable = vercelEnvironment.envs.find((candidate) => candidate.key === key);
+const VERCEL_PROJECT_ID = "prj_iTlWeDkcKItHTKYIayoNjQQ0vHec";
+const VERCEL_TEAM_ID = "team_vpaufHhAabxSup7QLCbCGwlF";
+
+export async function readLiveSettings({
+  commandRunner = execFileSync,
+  vercelClient,
+}: Readonly<{
+  commandRunner?: CommandRunner;
+  vercelClient: VercelReadOnlyRestClient;
+}>): Promise<LiveProductionSettings> {
+  const vercelEnvironmentVariables =
+    await vercelClient.listProjectEnvironmentVariables(VERCEL_PROJECT_ID);
+  const readVariableValue = async (key: string) => {
+    const variable = vercelEnvironmentVariables.find(
+      (candidate) => candidate.key === key,
+    );
     assertSetting(variable?.id != null, `${key} is missing from Vercel Production`);
-    const detail = readJsonSafely("vercel", [
-      "api",
-      `/v1/projects/prj_iTlWeDkcKItHTKYIayoNjQQ0vHec/env/${variable.id}`,
-      "--raw",
-    ]) as { value?: string };
-    assertSetting(typeof detail.value === "string", `${key} cannot be read safely from Vercel`);
+    const detail = await vercelClient.getProjectEnvironmentVariable(
+      VERCEL_PROJECT_ID,
+      variable.id,
+    );
+    assertSetting(
+      typeof detail.value === "string",
+      `${key} cannot be read safely from Vercel`,
+    );
     return detail.value;
   };
   const readableVariableKeys = [
@@ -241,19 +255,27 @@ function readLiveSettings(): LiveProductionSettings {
     "SUPAVISOR_USERNAME",
   ] as const;
   const readableValues = new Map(
-    readableVariableKeys.map((key) => [key, readVariableValue(key)]),
+    await Promise.all(
+      readableVariableKeys.map(
+        async (key) => [key, await readVariableValue(key)] as const,
+      ),
+    ),
   );
   const publishableKey = readableValues.get("SUPABASE_PUBLISHABLE_KEY")!;
-  const supabaseApiKeys = readJsonSafely("pnpm", [
-    "exec",
-    "supabase",
-    "projects",
-    "api-keys",
-    "--project-ref",
-    deploymentBindings.production.projectRef,
-    "--output",
-    "json",
-  ]) as Array<{ api_key?: string; type?: string }>;
+  const supabaseApiKeys = readJsonSafely(
+    "pnpm",
+    [
+      "exec",
+      "supabase",
+      "projects",
+      "api-keys",
+      "--project-ref",
+      deploymentBindings.production.projectRef,
+      "--output",
+      "json",
+    ],
+    commandRunner,
+  ) as Array<{ api_key?: string; type?: string }>;
   const fingerprintSupabaseKey = (prefix: "sb_publishable_" | "sb_secret_") => {
     const value = supabaseApiKeys.find((key) => key.api_key?.startsWith(prefix))?.api_key;
     assertSetting(typeof value === "string", `current ${prefix} key is unavailable`);
@@ -261,35 +283,38 @@ function readLiveSettings(): LiveProductionSettings {
   };
   return {
     githubDeploymentBranchPolicies: (
-      readJsonSafely("gh", [
-        "api",
-        "repos/elekli/game-base/environments/Production/deployment-branch-policies",
-      ]) as { branch_policies?: Array<{ name?: string }> }
+      readJsonSafely(
+        "gh",
+        [
+          "api",
+          "repos/elekli/game-base/environments/Production/deployment-branch-policies",
+        ],
+        commandRunner,
+      ) as { branch_policies?: Array<{ name?: string }> }
     ).branch_policies ?? [],
     githubEnvironmentSecretNames: (
-      readJsonSafely("gh", [
-        "api",
-        "repos/elekli/game-base/environments/Production/secrets",
-      ]) as { secrets?: Array<{ name?: string }> }
+      readJsonSafely(
+        "gh",
+        ["api", "repos/elekli/game-base/environments/Production/secrets"],
+        commandRunner,
+      ) as { secrets?: Array<{ name?: string }> }
     ).secrets?.flatMap((secret) => (secret.name ? [secret.name] : [])) ?? [],
     supabaseApiKeyFingerprints: {
       publishable: fingerprintSupabaseKey("sb_publishable_"),
       secret: fingerprintSupabaseKey("sb_secret_"),
     },
-    githubProtection: readJsonSafely("gh", [
-      "api",
-      "repos/elekli/game-base/branches/main/protection",
-    ]),
-    githubEnvironment: readJsonSafely("gh", [
-      "api",
-      "repos/elekli/game-base/environments/Production",
-    ]),
-    vercelProject: readJsonSafely("vercel", [
-      "api",
-      "/v9/projects/prj_iTlWeDkcKItHTKYIayoNjQQ0vHec",
-      "--raw",
-    ]),
-    vercelEnvironmentVariables: vercelEnvironment.envs.map(({ key, target, type }) => ({
+    githubProtection: readJsonSafely(
+      "gh",
+      ["api", "repos/elekli/game-base/branches/main/protection"],
+      commandRunner,
+    ),
+    githubEnvironment: readJsonSafely(
+      "gh",
+      ["api", "repos/elekli/game-base/environments/Production"],
+      commandRunner,
+    ),
+    vercelProject: await vercelClient.getProject(VERCEL_PROJECT_ID),
+    vercelEnvironmentVariables: vercelEnvironmentVariables.map(({ key, target, type }) => ({
       key,
       target,
       type,
@@ -304,6 +329,14 @@ function readLiveSettings(): LiveProductionSettings {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   assertSetting(process.argv.includes("--live"), "pass --live to query GitHub and Vercel");
-  const result = checkLiveProductionSettings(readLiveSettings());
+  const result = checkLiveProductionSettings(
+    await readLiveSettings({
+      vercelClient: createVercelReadOnlyRestClient({
+        teamId: VERCEL_TEAM_ID,
+        timeoutMs: 10_000,
+        token: process.env.VERCEL_TOKEN ?? "",
+      }),
+    }),
+  );
   console.log(JSON.stringify({ event: "live_production_settings_validated", ...result }));
 }

@@ -35,6 +35,8 @@ type ProductionReleaseContract = Readonly<{
   vercelDeploymentAdapterEvaluation: string;
   vercelProjectId: string;
   vercelProjectName: string;
+  vercelSettingsReadAdapter: string;
+  vercelSettingsReadStatus: string;
   vercelTeamId: string;
 }>;
 
@@ -100,6 +102,14 @@ export async function checkProductionReleaseContract(root: string) {
     path.join(root, contract.productionDeploymentModel),
     "utf8",
   );
+  const vercelSettingsReadAdapter = await readFile(
+    path.join(root, contract.vercelSettingsReadAdapter),
+    "utf8",
+  );
+  const liveProductionSettingsChecker = await readFile(
+    path.join(root, "scripts/check-live-production-settings.ts"),
+    "utf8",
+  );
   const rlsPolicyManifest = JSON.parse(
     await readFile(path.join(root, RLS_POLICY_MANIFEST_PATH), "utf8"),
   ) as { schema?: unknown; policies?: unknown };
@@ -141,6 +151,31 @@ export async function checkProductionReleaseContract(root: string) {
         Object.values(packageJson.scripts ?? {}).join("\n"),
       ),
     "security-blocked Vercel deployment CLI must not be executable through package dependencies or scripts",
+  );
+  assertContract(
+    contract.vercelSettingsReadAdapter ===
+      "scripts/vercel-read-only-rest-client.ts" &&
+      contract.vercelSettingsReadStatus ===
+        "ready-official-rest-read-only" &&
+      vercelSettingsReadAdapter.includes(
+        'const VERCEL_API_ORIGIN = "https://api.vercel.com"',
+      ) &&
+      vercelSettingsReadAdapter.includes(
+        '`/v10/projects/${encodeURIComponent(projectId)}/env`',
+      ) &&
+      vercelSettingsReadAdapter.includes(
+        '`/v1/projects/${encodeURIComponent(projectId)}/env/${encodeURIComponent(variableId)}`',
+      ) &&
+      vercelSettingsReadAdapter.includes(
+        '`/v9/projects/${encodeURIComponent(projectId)}`',
+      ) &&
+      !/method:\s*"(?:POST|PUT|PATCH|DELETE)"|\/deployments|\/promote|\/rollback/.test(
+        vercelSettingsReadAdapter,
+      ) &&
+      !/readJsonSafely\("vercel"|execFile(?:Sync)?\("vercel"/.test(
+        liveProductionSettingsChecker,
+      ),
+    "Vercel settings inspection must use the repository-owned official REST read adapter",
   );
   assertContract(
     contract.productionDeploymentWriter ===
