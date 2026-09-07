@@ -3,6 +3,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 
+import { ProductionMigrationError } from "./production-migration-preflight";
+
 type PendingMigration = Readonly<{
   version: string;
   name: string;
@@ -171,6 +173,9 @@ export async function completePreparedNormalMigrationRelease(
   }
   if (strictFailure) {
     if (applyFailure) throw new ProductionMigrationReleaseError("migration apply failed and strict diagnostic failed");
+    if (strictFailure instanceof ProductionMigrationError) {
+      throw strictFailure;
+    }
     throw new ProductionMigrationReleaseError("strict post-apply verification failed");
   }
   return {
