@@ -134,6 +134,39 @@
       "withCheck": "true"
     },
     {
+      "table": "media_cleanup_jobs",
+      "name": "runtime_media_cleanup_jobs_insert",
+      "validFrom": "0014",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "INSERT",
+      "roles": ["app_runtime"],
+      "using": null,
+      "withCheck": "true"
+    },
+    {
+      "table": "media_cleanup_jobs",
+      "name": "runtime_media_cleanup_jobs_select",
+      "validFrom": "0014",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "SELECT",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "media_cleanup_jobs",
+      "name": "runtime_media_cleanup_jobs_update",
+      "validFrom": "0014",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "UPDATE",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
       "table": "media_derivative_attempts",
       "name": "runtime_media_derivative_attempts",
       "validFrom": "0011",
@@ -187,6 +220,39 @@
       "roles": ["app_runtime"],
       "using": "true",
       "withCheck": null
+    },
+    {
+      "table": "media_reconciliation_runs",
+      "name": "runtime_media_reconciliation_runs_insert",
+      "validFrom": "0014",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "INSERT",
+      "roles": ["app_runtime"],
+      "using": null,
+      "withCheck": "true"
+    },
+    {
+      "table": "media_reconciliation_runs",
+      "name": "runtime_media_reconciliation_runs_select",
+      "validFrom": "0014",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "SELECT",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "media_reconciliation_runs",
+      "name": "runtime_media_reconciliation_runs_update",
+      "validFrom": "0014",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "UPDATE",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
     },
     {
       "table": "platforms",
