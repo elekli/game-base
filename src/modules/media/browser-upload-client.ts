@@ -5,10 +5,10 @@ import type { UploadGrant } from "./contracts";
 
 const TUS_CHUNK_SIZE = 6 * 1024 * 1024;
 const TUS_RETRY_DELAYS = [0, 3_000, 5_000, 10_000, 20_000] as const;
-const TUS_ENDPOINT_PATH = "/storage/v1/upload/resumable";
+const TUS_ENDPOINT_PATH = "/storage/v1/upload/resumable/sign";
 const MEDIA_MAX_BYTES = 52_428_800;
 const UUID_V4 = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
-const LOCAL_TUS_ENDPOINT = /^http:\/\/(?:127\.0\.0\.1|localhost):([1-9][0-9]{0,4})\/storage\/v1\/upload\/resumable$/;
+const LOCAL_TUS_ENDPOINT = /^http:\/\/(?:127\.0\.0\.1|localhost):([1-9][0-9]{0,4})\/storage\/v1\/upload\/resumable\/sign$/;
 
 export type BrowserPreviousUpload = Readonly<{
   size: number | null;

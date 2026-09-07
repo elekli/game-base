@@ -16,7 +16,7 @@ function directTusEndpoint(supabaseUrl: string): string {
   if (url.protocol === "https:" && url.hostname.endsWith(".supabase.co") && !url.hostname.endsWith(".storage.supabase.co")) {
     url.hostname = url.hostname.replace(/\.supabase\.co$/, ".storage.supabase.co");
   }
-  url.pathname = "/storage/v1/upload/resumable";
+  url.pathname = "/storage/v1/upload/resumable/sign";
   url.search = "";
   url.hash = "";
   return url.toString().replace(/\/$/, "");

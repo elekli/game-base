@@ -16,7 +16,7 @@ describe("Supabase media Storage adapter", () => {
 
     expect(createSignedUploadUrl).toHaveBeenCalledWith(path, { upsert: false });
     expect(result).toEqual({
-      uploadUrl: "https://project.storage.supabase.co/storage/v1/upload/resumable",
+      uploadUrl: "https://project.storage.supabase.co/storage/v1/upload/resumable/sign",
       token: "signed-path-token",
       expiresAt: expect.any(String),
     });
