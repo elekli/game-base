@@ -821,6 +821,43 @@ function isExactWordStatement(
   );
 }
 
+const MEDIA_DERIVATIVE_STATE_EXPANSION: readonly SqlToken[] = [
+  { kind: "word", value: "alter" },
+  { kind: "word", value: "table" },
+  { kind: "word", value: "app_private" },
+  { kind: "symbol", value: "." },
+  { kind: "word", value: "media_derivatives" },
+  { kind: "word", value: "drop" },
+  { kind: "word", value: "constraint" },
+  { kind: "word", value: "media_derivatives_state_check" },
+  { kind: "symbol", value: "," },
+  { kind: "word", value: "add" },
+  { kind: "word", value: "constraint" },
+  { kind: "word", value: "media_derivatives_state_check" },
+  { kind: "word", value: "check" },
+  { kind: "symbol", value: "(" },
+  { kind: "word", value: "state" },
+  { kind: "word", value: "in" },
+  { kind: "symbol", value: "(" },
+  { kind: "string", value: "'pending'" },
+  { kind: "symbol", value: "," },
+  { kind: "string", value: "'processing'" },
+  { kind: "symbol", value: "," },
+  { kind: "string", value: "'ready'" },
+  { kind: "symbol", value: "," },
+  { kind: "string", value: "'failed'" },
+  { kind: "symbol", value: ")" },
+  { kind: "symbol", value: ")" },
+];
+
+function isExactMediaDerivativeStateExpansion(statement: readonly SqlToken[]) {
+  return statement.length === MEDIA_DERIVATIVE_STATE_EXPANSION.length
+    && statement.every((token, index) => {
+      const expected = MEDIA_DERIVATIVE_STATE_EXPANSION[index];
+      return token.kind === expected?.kind && token.value === expected.value;
+    });
+}
+
 function matchingParenIndex(tokens: readonly SqlToken[], openIndex: number) {
   let depth = 0;
   for (let index = openIndex; index < tokens.length; index += 1) {
@@ -901,7 +938,10 @@ function isSetConfigCall(statement: readonly SqlToken[]) {
   });
 }
 
-function containsForbiddenMigrationSql(sql: string) {
+function containsForbiddenMigrationSql(
+  sql: string,
+  options: Readonly<{ allowMediaDerivativeStateExpansion?: boolean }> = {},
+) {
   const tokens = lexSql(sql);
   for (const token of tokens) {
     if (token.kind === "unicode-identifier") return true;
@@ -909,6 +949,11 @@ function containsForbiddenMigrationSql(sql: string) {
   }
   const statements = splitSqlStatements(tokens);
   const allowedStatements = new Set<number>();
+  if (options.allowMediaDerivativeStateExpansion) {
+    for (const [statementIndex, statement] of statements.entries()) {
+      if (isExactMediaDerivativeStateExpansion(statement)) allowedStatements.add(statementIndex);
+    }
+  }
   const hasExactMigratorEnvelope =
     statements.length >= 5 &&
     isExactWordStatement(statements[0]!, ["grant", "app_migrator", "to", "postgres"]) &&
@@ -1001,16 +1046,19 @@ function containsForbiddenMigrationSql(sql: string) {
       return true;
     }
   }
-  const executableSql = tokens
-    .filter(
-      (token) =>
-        token.kind === "word" ||
-        token.kind === "identifier" ||
-        token.kind === "symbol",
-    )
-    .map((token) => (token.kind === "identifier" ? "identifier" : token.value))
-    .join(" ");
-  return FORBIDDEN_DDL.some((pattern) => pattern.test(executableSql));
+  const executableStatements = statements
+    .filter((_statement, statementIndex) => !allowedStatements.has(statementIndex))
+    .map((statement) => statement
+      .filter(
+        (token) =>
+          token.kind === "word" ||
+          token.kind === "identifier" ||
+          token.kind === "symbol",
+      )
+      .map((token) => (token.kind === "identifier" ? "identifier" : token.value))
+      .join(" "));
+  return executableStatements.some((statement) =>
+    FORBIDDEN_DDL.some((pattern) => pattern.test(statement)));
 }
 
 async function repositoryMigrations(root: string) {
@@ -1255,7 +1303,9 @@ export async function lintProductionMigrations(
     const isExactKnownRemediation = isExactKnownDriftRemediation(migration);
     if (
       !isExactKnownRemediation &&
-      containsForbiddenMigrationSql(migration.sql) &&
+      containsForbiddenMigrationSql(migration.sql, {
+        allowMediaDerivativeStateExpansion: migration.filename === "0011_media_ledger.sql",
+      }) &&
       baseline[migration.filename] !== digest
     ) {
       throw new ProductionMigrationError(

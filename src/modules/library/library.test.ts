@@ -168,7 +168,7 @@ describe("library service", () => {
     });
     const first = await store.createFromSource(snapshot("canonical-first", "舊名稱").ref, snapshot("canonical-first", "舊名稱"));
     await store.createFromSource(snapshot("canonical-second", "舊名稱").ref, snapshot("canonical-second", "舊名稱"));
-    await store.refreshSource(first.game.id, snapshot("canonical-first", "新名稱"));
+    await store.refreshSource(first.game.id, snapshot("canonical-first", "新名稱"), "77777777-7777-4777-8777-777777777778");
 
     await expect(service.listContributorFacets()).resolves.toEqual([{
       contributorId: first.game.contributors[0].contributorId,
@@ -325,7 +325,7 @@ describe("library service", () => {
 
     const reused = await service.addManualContribution({ kind: "existing", gameId: created.game.id, contributorId: sourceContributor.contributorId, role: "art" });
     if (reused.status !== "created") throw new Error("expected source contributor reuse");
-    const refreshed = await store.refreshSource(created.game.id, { ...snapshot, title: "來源遊戲更新" });
+    const refreshed = await store.refreshSource(created.game.id, { ...snapshot, title: "來源遊戲更新" }, "77777777-7777-4777-8777-777777777777");
 
     expect(reused.game.contributors.find((item) => item.origin === "manual")?.contributorId).toBe(sourceContributor.contributorId);
     expect(refreshed.contributors.filter((item) => item.origin === "manual").map((item) => item.contributorId)).toEqual([sourceContributor.contributorId]);

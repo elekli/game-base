@@ -377,6 +377,42 @@ describe("production migration safety lint", () => {
     );
   });
 
+  it("只接受媒體 derivative 狀態約束的具名、同表、同名擴充", async () => {
+    const root = await migrationFixture({
+      "0011_media_ledger.sql": `
+        alter table app_private.media_derivatives
+          drop constraint media_derivatives_state_check,
+          add constraint media_derivatives_state_check
+            check (state in ('pending', 'processing', 'ready', 'failed'));
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).resolves.toEqual({ migrationCount: 1 });
+  });
+
+  it("相同 CHECK replacement 出現在非 0011 migration 時仍拒絕", async () => {
+    const root = await migrationFixture({
+      "0012_repeat_media_state_expansion.sql": `
+        alter table app_private.media_derivatives
+          drop constraint media_derivatives_state_check,
+          add constraint media_derivatives_state_check
+            check (state in ('pending', 'processing', 'ready', 'failed'));
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).rejects.toThrow("ProductionMigrationSafetyError");
+  });
+
+  it.each([
+    "alter table app_private.media_derivatives drop constraint other_check, add constraint other_check check (state in ('pending', 'processing', 'ready', 'failed'))",
+    "alter table app_private.other_derivatives drop constraint media_derivatives_state_check, add constraint media_derivatives_state_check check (state in ('pending', 'processing', 'ready', 'failed'))",
+    "alter table app_private.media_derivatives drop constraint media_derivatives_state_check, add constraint media_derivatives_state_check check (true)",
+  ])("拒絕偽裝成媒體狀態擴充的 destructive DDL: %s", async (ddl) => {
+    const root = await migrationFixture({ "0001_not_the_approved_expansion.sql": `${ddl};` });
+
+    await expect(lintProductionMigrations(root)).rejects.toThrow("ProductionMigrationSafetyError");
+  });
+
   it("ignores SQL-looking text inside comments and strings", async () => {
     const root = await migrationFixture({
       "0001_safe_strings.sql": `
@@ -808,6 +844,89 @@ describe("production migration preflight", () => {
         "0c6f10ee229a0951382f378fc903c80ffa834a05ae5f4e7cfcae96618273be48",
     });
     expect(statements.at(-1)).toBe("rollback");
+  });
+
+  it("treats Production 0001 through 0010 as the applied prefix and media 0011 as pending", async () => {
+    const repositoryRoot = process.cwd();
+    const migrationFilenames = [
+      "0001_runtime_security.sql",
+      "0002_games_and_source_identity.sql",
+      "0003_source_snapshot_and_source_cover.sql",
+      "0004_library_curation.sql",
+      "0005_source_refresh.sql",
+      "0006_library_invariants.sql",
+      "0007_revoke_public_platform_trigger_execute.sql",
+      "0008_revoke_public_platform_trigger_execute.sql",
+      "0009_revoke_public_platform_trigger_execute.sql",
+      "0010_revoke_public_platform_trigger_execute_as_owner.sql",
+      "0011_media_ledger.sql",
+    ] as const;
+    const root = await migrationFixture(
+      Object.fromEntries(
+        await Promise.all(
+          migrationFilenames.map(async (filename) => [
+            filename,
+            await readFile(
+              path.join(repositoryRoot, "supabase", "migrations", filename),
+              "utf8",
+            ),
+          ]),
+        ),
+      ),
+    );
+    await writeFile(
+      path.join(root, ".github", "production-migration-lint-baseline.json"),
+      await readFile(
+        path.join(
+          repositoryRoot,
+          ".github",
+          "production-migration-lint-baseline.json",
+        ),
+        "utf8",
+      ),
+    );
+    const snapshot = healthySnapshot();
+    snapshot.migrations = [
+      { version: "0001", name: "runtime_security" },
+      { version: "0002", name: "games_and_source_identity" },
+      { version: "0003", name: "source_snapshot_and_source_cover" },
+      { version: "0004", name: "library_curation" },
+      { version: "0005", name: "source_refresh" },
+      { version: "0006", name: "library_invariants" },
+      { version: "0007", name: "revoke_public_platform_trigger_execute" },
+      { version: "0008", name: "revoke_public_platform_trigger_execute" },
+      { version: "0009", name: "revoke_public_platform_trigger_execute" },
+      {
+        version: "0010",
+        name: "revoke_public_platform_trigger_execute_as_owner",
+      },
+    ];
+    const session: ReadOnlyDatabaseSession = {
+      async unsafe<T>(sql: string) {
+        return sql.includes("json_build_object") ? ([{ snapshot }] as T[]) : [];
+      },
+      async release() {},
+    };
+
+    await expect(
+      runProductionMigrationPreflight({
+        root,
+        databaseUrl:
+          "postgres://postgres.wbtyuvufhrhybquzwfip:secret@aws-0-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=verify-full",
+        connect: async () => session,
+      }),
+    ).resolves.toMatchObject({
+      preflightState: "strict",
+      appliedMigrationCount: 10,
+      pendingMigrationCount: 1,
+      pendingMigrations: [
+        {
+          version: "0011",
+          name: "media_ledger",
+          filename: "0011_media_ledger.sql",
+        },
+      ],
+    });
   });
 
   it("selects the RLS policy revision active at the applied or strict tail", async () => {

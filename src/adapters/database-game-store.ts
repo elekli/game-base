@@ -1,8 +1,9 @@
 import "server-only";
+import { createHash, randomUUID } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
 import type { ContributorFacet, ContributorMatch, GameStore, GameEditInput, LegacyManualContributionInput, LibraryGameQuery, ManualContributionInput, ManualContributionResult, SharedLibraryItem } from "@/modules/games";
 import type { ExternalGameRef, GameContribution, GameRecord, Medium, SourceCategory, SourceSnapshot } from "@/modules/games";
-import { SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError } from "@/modules/games";
+import { SourceGameUnavailableError, SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError, SourceRefreshIdempotencyConflictError } from "@/modules/games";
 import { beginSourceCoverIngest, isAllowedSourceCoverUrl } from "@/modules/media/internal/source-cover-ingest";
 import { LibraryConflictError } from "@/modules/library/internal/errors";
 
@@ -111,7 +112,13 @@ export class PostgresGameStore implements GameStore {
     coalesce((select jsonb_agg(jsonb_build_object('id', sc.id, 'contributorId', c.id, 'name', c.name, 'entityKind', c.entity_kind, 'role', sc.role, 'provider', c.source_provider, 'sourceContributorId', c.source_contributor_id)) from app_private.source_contributions sc join app_private.contributors c on c.id = sc.contributor_id where sc.identity_id = i.id), '[]'::jsonb) as source_contributions,
     coalesce((select jsonb_agg(jsonb_build_object('contributorId', c.id, 'sourceContributorId', c.source_contributor_id)) from app_private.contributors c where not exists (select 1 from app_private.source_contributions linked where linked.identity_id = i.id) and c.source_provider = i.provider and exists (select 1 from jsonb_array_elements(coalesce(i.snapshot -> 'contributors', '[]'::jsonb)) contributor where contributor ->> 'sourceContributorId' = c.source_contributor_id)), '[]'::jsonb) as source_contributor_entities,
     coalesce((select jsonb_agg(jsonb_build_object('id', mc.id, 'contributorId', c.id, 'name', c.name, 'entityKind', c.entity_kind, 'role', mc.role)) from app_private.manual_contributions mc join app_private.contributors c on c.id = mc.contributor_id where mc.game_id = g.id), '[]'::jsonb) as manual_contributions,
-    (select case when mi.original_state = 'failed' or mi.thumbnail_state = 'failed' then 'failed' when mi.original_state = 'ready' and mi.thumbnail_state = 'ready' then 'ready' else 'pending' end from app_private.media_ingests mi where mi.game_id = g.id and mi.source_url = i.snapshot ->> 'coverUrl' limit 1) as cover_ingest_state`;
+    (select case
+      when mi.original_state = 'failed' or mi.thumbnail_state = 'failed' then 'failed'
+      when mi.original_state = 'ready' and mi.thumbnail_state = 'ready' and exists (
+        select 1 from app_private.media_assets asset where asset.ingest_id = mi.id and asset.authority_state = 'verified'
+      ) then 'ready'
+      else 'pending'
+    end from app_private.media_ingests mi where mi.game_id = g.id and mi.source_url = i.snapshot ->> 'coverUrl' order by mi.created_at desc, mi.id desc limit 1) as cover_ingest_state`;
 
   private selectFrom(where: SQL) {
     return sql`select ${this.selectFields} from app_private.games g left join app_private.external_game_identities i on i.id = g.external_game_identity_id left join app_private.bgg_current_metrics bcm on bcm.identity_id = i.id and i.provider = 'bgg' left join app_private.game_names custom_name on custom_name.game_id = g.id and custom_name.name_kind = 'custom' ${where}`;
@@ -268,13 +275,22 @@ export class PostgresGameStore implements GameStore {
     for (const alias of uniqueNames(snapshot.aliases)) await tx.execute(sql`insert into app_private.game_names (game_id, name, name_kind) values (${gameId}, ${alias}, 'alias') on conflict do nothing`);
   }
 
-  private async writeSourceCoverIngest(tx: QueryExecutor, gameId: string, snapshot: SourceSnapshot) {
+  private async writeSourceCoverIngest(tx: QueryExecutor, operationId: string, gameId: string, identityId: string, snapshot: SourceSnapshot) {
     if (!snapshot.coverUrl || !isAllowedSourceCoverUrl(snapshot.coverUrl)) return;
-    const ingest = beginSourceCoverIngest(gameId, snapshot.coverUrl);
-    await tx.execute(sql`insert into app_private.media_ingests (id, game_id, source_url, object_key, original_state, thumbnail_state) values (${ingest.id}, ${gameId}, ${ingest.sourceUrl}, ${ingest.objectKey}, ${ingest.originalState}, ${ingest.thumbnailState}) on conflict (object_key) do update set original_state = case when media_ingests.original_state = 'failed' then 'pending' else media_ingests.original_state end, thumbnail_state = case when media_ingests.thumbnail_state = 'failed' then 'pending' else media_ingests.thumbnail_state end`);
+    const ingest = beginSourceCoverIngest(operationId, gameId, identityId, snapshot.coverUrl);
+    await tx.execute(sql`insert into app_private.media_ingests (
+      id, idempotency_key, reserved_asset_id, channel, purpose, game_id, external_game_identity_id, original_object_path,
+      original_file_name, declared_mime_type, state, stale_after,
+      source_url, object_key, original_state, thumbnail_state
+    ) values (
+      ${ingest.id}, ${ingest.idempotencyKey}, ${ingest.reservedAssetId}, 'source_fetch', 'source_cover', ${gameId}, ${ingest.externalGameIdentityId}, ${ingest.objectKey},
+      'source-cover', 'application/octet-stream', 'issued', now() + interval '26 hours',
+      ${ingest.sourceUrl}, ${ingest.objectKey}, ${ingest.originalState}, ${ingest.thumbnailState}
+    )`);
   }
 
   async createFromSource(ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<{ game: GameRecord; created: boolean }> {
+    const sourceCoverOperationId = randomUUID();
     const run = async (tx: QueryExecutor) => {
       const identityRows = await tx.execute(sql`insert into app_private.external_game_identities (provider, source_id, medium, snapshot) values (${ref.provider}, ${ref.sourceId}, ${ref.medium}, ${JSON.stringify(snapshot)}::jsonb) returning id`) as Row[];
       const identityId = String(identityRows[0].id);
@@ -282,7 +298,7 @@ export class PostgresGameStore implements GameStore {
       const gameId = String(gameRows[0].id);
       await this.writeSourceNames(tx, gameId, snapshot);
       await this.writeSourceRows(tx, identityId, snapshot);
-      await this.writeSourceCoverIngest(tx, gameId, snapshot);
+      await this.writeSourceCoverIngest(tx, sourceCoverOperationId, gameId, identityId, snapshot);
       return { gameId, created: true };
     };
     try {
@@ -301,9 +317,11 @@ export class PostgresGameStore implements GameStore {
   }
 
   async linkFromSource(gameId: string, ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<GameRecord> {
+    const sourceCoverOperationId = randomUUID();
     const run = async (tx: QueryExecutor) => {
       const gameRows = await tx.execute(sql`select id, medium, external_game_identity_id, trashed_at from app_private.games where id = ${gameId} for update`) as Row[];
       if (!gameRows[0]) throw new SourcePersistenceFailedError();
+      if (gameRows[0].trashed_at) throw new SourceGameUnavailableError();
       if (gameRows[0].external_game_identity_id) throw new SourcePersistenceFailedError();
       if (gameRows[0].medium !== ref.medium) throw new SourceMediumMismatchError();
       const existing = await tx.execute(sql`select g.id, g.trashed_at from app_private.external_game_identities i join app_private.games g on g.external_game_identity_id = i.id where i.provider = ${ref.provider} and i.source_id = ${ref.sourceId} for update`) as Row[];
@@ -313,11 +331,11 @@ export class PostgresGameStore implements GameStore {
       await tx.execute(sql`update app_private.games set external_game_identity_id = ${identityId}, display_name = coalesce((select name from app_private.game_names where game_id = ${gameId} and name_kind = 'custom'), ${snapshot.title}) where id = ${gameId}`);
       await this.writeSourceNames(tx, gameId, snapshot);
       await this.writeSourceRows(tx, identityId, snapshot);
-      await this.writeSourceCoverIngest(tx, gameId, snapshot);
+      await this.writeSourceCoverIngest(tx, sourceCoverOperationId, gameId, identityId, snapshot);
     };
     try { await this.db.transaction(run); }
     catch (error) {
-      if (error instanceof SourceIdentityConflictError || error instanceof SourceMediumMismatchError) throw error;
+      if (error instanceof SourceGameUnavailableError || error instanceof SourceIdentityConflictError || error instanceof SourceMediumMismatchError) throw error;
       if (sqlState(error) === "23505") {
         const conflict = await this.db.execute(sql`select g.id, g.trashed_at from app_private.external_game_identities i join app_private.games g on g.external_game_identity_id = i.id where i.provider = ${ref.provider} and i.source_id = ${ref.sourceId} limit 1`) as Row[];
         if (conflict[0]) throw new SourceIdentityConflictError(String(conflict[0].id), Boolean(conflict[0].trashed_at));
@@ -329,11 +347,24 @@ export class PostgresGameStore implements GameStore {
     return game;
   }
 
-  async refreshSource(gameId: string, snapshot: SourceSnapshot): Promise<GameRecord> {
+  async refreshSource(gameId: string, snapshot: SourceSnapshot, sourceCoverOperationId: string): Promise<GameRecord> {
+    const payloadFingerprint = createHash("sha256").update(JSON.stringify({ gameId, snapshot, coverUrl: snapshot.coverUrl })).digest("hex");
     const run = async (tx: QueryExecutor) => {
-      const rows = await tx.execute(sql`select g.external_game_identity_id from app_private.games g where g.id = ${gameId} and g.external_game_identity_id is not null for update`) as Row[];
+      const rows = await tx.execute(sql`select g.external_game_identity_id, g.trashed_at from app_private.games g where g.id = ${gameId} and g.external_game_identity_id is not null for update`) as Row[];
       if (!rows[0]) throw new SourcePersistenceFailedError();
+      if (rows[0].trashed_at) throw new SourceGameUnavailableError();
       const identityId = String(rows[0].external_game_identity_id);
+      const receipt = await tx.execute(sql`
+        insert into app_private.source_refresh_operations (operation_id, game_id, external_game_identity_id, payload_fingerprint)
+        values (${sourceCoverOperationId}, ${gameId}, ${identityId}, ${payloadFingerprint})
+        on conflict (operation_id) do nothing
+        returning payload_fingerprint
+      `) as Row[];
+      if (!receipt[0]) {
+        const existing = await tx.execute(sql`select game_id, external_game_identity_id, payload_fingerprint from app_private.source_refresh_operations where operation_id = ${sourceCoverOperationId}`) as Row[];
+        if (existing[0]?.payload_fingerprint !== payloadFingerprint || String(existing[0]?.game_id) !== gameId || String(existing[0]?.external_game_identity_id) !== identityId) throw new SourceRefreshIdempotencyConflictError();
+        return;
+      }
       await tx.execute(sql`update app_private.external_game_identities set snapshot = ${JSON.stringify(snapshot)}::jsonb, updated_at = now() where id = ${identityId}`);
       await tx.execute(sql`delete from app_private.external_game_categories where identity_id = ${identityId}`);
       await tx.execute(sql`delete from app_private.source_contributions where identity_id = ${identityId}`);
@@ -341,7 +372,7 @@ export class PostgresGameStore implements GameStore {
       await this.writeSourceRows(tx, identityId, snapshot);
       await this.writeSourceNames(tx, gameId, snapshot);
       await tx.execute(sql`update app_private.games set display_name = coalesce((select name from app_private.game_names where game_id = ${gameId} and name_kind = 'custom'), ${snapshot.title}) where id = ${gameId}`);
-      await this.writeSourceCoverIngest(tx, gameId, snapshot);
+      await this.writeSourceCoverIngest(tx, sourceCoverOperationId, gameId, identityId, snapshot);
     };
     await this.db.transaction(run);
     const game = await this.get(gameId);

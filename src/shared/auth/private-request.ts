@@ -73,7 +73,7 @@ export async function handlePrivateRequest<Result extends object>(
     if (error instanceof SourceOperationError) {
       const status = error.sourceCode === "source_query_invalid" || error.sourceCode === "source_response_invalid" ? 400
         : error.sourceCode === "source_not_found" ? 404
-          : error.sourceCode === "source_content_changed" || error.sourceCode === "source_identity_conflict" || error.sourceCode === "source_medium_mismatch" || error.sourceCode === "source_not_linked" ? 409
+          : error.sourceCode === "source_content_changed" || error.sourceCode === "source_identity_conflict" || error.sourceCode === "source_medium_mismatch" || error.sourceCode === "source_not_linked" || error.sourceCode === "source_game_unavailable" ? 409
             : error.sourceCode === "source_rate_limited" ? 429 : 502;
       const conflictBody = error instanceof SourceIdentityConflictError
         ? { existingGameId: error.gameId, existingIsTrashed: error.trashed }
