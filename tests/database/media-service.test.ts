@@ -870,6 +870,74 @@ describe("MediaService 與真 PostgreSQL", () => {
     await expect(service.listGameMedia(owner, { gameId })).resolves.toMatchObject({ manualCoverAssetId: null });
   });
 
+  it("遊戲移入與移出資源回收區不改寫媒體帳、封面指標或 object path", async () => {
+    const source = new Uint8Array(await sharp({
+      create: {
+        width: 40,
+        height: 60,
+        channels: 4,
+        background: { r: 1, g: 2, b: 3, alpha: 1 },
+      },
+    }).png().toBuffer());
+    const storage: MediaObjectStore = {
+      ...objects(source),
+      async createThumbnailReadGrant(path) {
+        return {
+          url: `https://storage.example.test/${encodeURIComponent(path)}?thumbnail=1`,
+          expiresAt: "2026-09-06T00:05:00.000Z",
+        };
+      },
+    };
+    const service = serviceFor(storage);
+    const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand({
+      purpose: "custom_cover",
+      declaredByteSize: source.byteLength,
+    })));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    await service.processThumbnail(grant.assetId);
+
+    const snapshot = async () => {
+      const rows = await runtime.unsafe<{ snapshot: Record<string, unknown> }[]>(`
+        select jsonb_build_object(
+          'manualCoverAssetId', game.manual_cover_asset_id,
+          'sourceCoverAssetId', identity.source_cover_asset_id,
+          'operations', (select jsonb_agg(to_jsonb(operation) order by operation.idempotency_key) from app_private.media_ingest_operations operation where operation.game_id = game.id),
+          'ingests', (select jsonb_agg(to_jsonb(ingest) order by ingest.id) from app_private.media_ingests ingest where ingest.game_id = game.id),
+          'assets', (select jsonb_agg(to_jsonb(asset) order by asset.id) from app_private.media_assets asset where asset.game_id = game.id),
+          'derivatives', (select jsonb_agg(to_jsonb(derivative) order by derivative.id) from app_private.media_derivatives derivative join app_private.media_assets asset on asset.id = derivative.asset_id where asset.game_id = game.id),
+          'attempts', (select jsonb_agg(to_jsonb(attempt) order by attempt.id) from app_private.media_derivative_attempts attempt join app_private.media_derivatives derivative on derivative.id = attempt.derivative_id join app_private.media_assets asset on asset.id = derivative.asset_id where asset.game_id = game.id)
+        ) as snapshot
+        from app_private.games game
+        left join app_private.external_game_identities identity on identity.id = game.external_game_identity_id
+        where game.id = $1
+      `, [gameId]);
+      return rows[0]?.snapshot;
+    };
+
+    const beforeTrash = await snapshot();
+    expect(beforeTrash).toMatchObject({
+      manualCoverAssetId: grant.assetId,
+      sourceCoverAssetId: null,
+    });
+    await expect(service.issueOriginalRead(owner, { assetId: grant.assetId })).resolves.toMatchObject({ status: "original_read" });
+    await expect(service.issueThumbnailRead(owner, { assetId: grant.assetId })).resolves.toMatchObject({ status: "thumbnail_read" });
+
+    await runtime.unsafe("update app_private.games set trashed_at = now() where id = $1", [gameId]);
+    await expect(service.listGameMedia(owner, { gameId })).rejects.toBeInstanceOf(MediaGameUnavailableError);
+    await expect(service.issueOriginalRead(owner, { assetId: grant.assetId })).rejects.toBeInstanceOf(MediaAssetUnavailableError);
+    await expect(service.issueThumbnailRead(owner, { assetId: grant.assetId })).rejects.toBeInstanceOf(MediaAssetUnavailableError);
+    expect(await snapshot()).toEqual(beforeTrash);
+
+    await runtime.unsafe("update app_private.games set trashed_at = null where id = $1", [gameId]);
+    expect(await snapshot()).toEqual(beforeTrash);
+    await expect(service.listGameMedia(owner, { gameId })).resolves.toMatchObject({
+      manualCoverAssetId: grant.assetId,
+      items: [expect.objectContaining({ asset: expect.objectContaining({ id: grant.assetId }) })],
+    });
+    await expect(service.issueOriginalRead(owner, { assetId: grant.assetId })).resolves.toMatchObject({ status: "original_read" });
+    await expect(service.issueThumbnailRead(owner, { assetId: grant.assetId })).resolves.toMatchObject({ status: "thumbnail_read" });
+  });
+
   it("移除自訂封面會在同一交易清除指標，還原資產不會偷偷重新指定封面", async () => {
     const service = serviceFor();
     const image = grantFrom(await service.beginMediaUpload(owner, beginCommand()));

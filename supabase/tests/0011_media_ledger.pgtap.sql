@@ -1,5 +1,5 @@
 begin;
-select plan(74);
+select plan(76);
 
 select has_column('app_private', 'media_ingests', 'idempotency_key', 'ingest 保存全域冪等鍵');
 select has_column('app_private', 'media_ingests', 'reserved_asset_id', 'ingest 預留固定 asset id');
@@ -502,6 +502,44 @@ select ok(
   (select source_cover_asset_id = '41000000-0000-4000-8000-000000000002' from app_private.external_game_identities where id = '11000000-0000-4000-8000-000000000001') and
   (select superseded_at is not null from app_private.media_assets where id = '41000000-0000-4000-8000-000000000001'),
   '切換後新來源封面是 current，舊來源封面保留為 superseded'
+);
+
+update app_private.media_assets
+set removed_at = null, removed_reason = null
+where id = '40000000-0000-4000-8000-000000000001';
+update app_private.games
+set manual_cover_asset_id = '40000000-0000-4000-8000-000000000001'
+where id = '10000000-0000-4000-8000-000000000001';
+create temporary view media_game_lifecycle_current as
+select jsonb_build_object(
+  'manual_cover_asset_id', game.manual_cover_asset_id,
+  'source_cover_asset_id', identity.source_cover_asset_id,
+  'operations', (select coalesce(jsonb_agg(to_jsonb(operation) order by operation.idempotency_key), '[]'::jsonb) from app_private.media_ingest_operations operation where operation.game_id = game.id),
+  'ingests', (select coalesce(jsonb_agg(to_jsonb(ingest) order by ingest.id), '[]'::jsonb) from app_private.media_ingests ingest where ingest.game_id = game.id),
+  'assets', (select coalesce(jsonb_agg(to_jsonb(asset) order by asset.id), '[]'::jsonb) from app_private.media_assets asset where asset.game_id = game.id),
+  'derivatives', (select coalesce(jsonb_agg(to_jsonb(derivative) order by derivative.id), '[]'::jsonb) from app_private.media_derivatives derivative join app_private.media_assets asset on asset.id = derivative.asset_id where asset.game_id = game.id),
+  'attempts', (select coalesce(jsonb_agg(to_jsonb(attempt) order by attempt.id), '[]'::jsonb) from app_private.media_derivative_attempts attempt join app_private.media_derivatives derivative on derivative.id = attempt.derivative_id join app_private.media_assets asset on asset.id = derivative.asset_id where asset.game_id = game.id)
+) as snapshot
+from app_private.games game
+left join app_private.external_game_identities identity on identity.id = game.external_game_identity_id
+where game.id = '10000000-0000-4000-8000-000000000001';
+create temporary table media_game_lifecycle_snapshot as
+select snapshot from media_game_lifecycle_current;
+
+update app_private.games set trashed_at = now()
+where id = '10000000-0000-4000-8000-000000000001';
+select is(
+  (select snapshot from media_game_lifecycle_current),
+  (select snapshot from media_game_lifecycle_snapshot),
+  '遊戲移入資源回收區保留所有媒體列、封面指標與 object path'
+);
+
+update app_private.games set trashed_at = null
+where id = '10000000-0000-4000-8000-000000000001';
+select is(
+  (select snapshot from media_game_lifecycle_current),
+  (select snapshot from media_game_lifecycle_snapshot),
+  '遊戲移出資源回收區恢復同一組媒體列、封面指標與 object path'
 );
 
 select extensions.throws_like(
