@@ -1,4 +1,4 @@
-import { pgTable, type AnyPgColumn, pgSchema, index, foreignKey, pgPolicy, uuid, numeric, integer, timestamp, uniqueIndex, text, jsonb, bigint, boolean } from "drizzle-orm/pg-core"
+import { pgTable, type AnyPgColumn, pgSchema, index, foreignKey, pgPolicy, uuid, numeric, integer, timestamp, uniqueIndex, text, jsonb, bigint, date, boolean } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 export const appPrivate = pgSchema("app_private");
@@ -214,6 +214,28 @@ export const mediaAssetsInAppPrivate = appPrivate.table("media_assets", {
 	pgPolicy("runtime_media_assets", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
+export const mediaCleanupJobsInAppPrivate = appPrivate.table("media_cleanup_jobs", {
+	id: uuid().defaultRandom().notNull(),
+	attemptId: uuid("attempt_id").notNull(),
+	state: text().default('pending').notNull(),
+	leaseToken: uuid("lease_token"),
+	leaseUntil: timestamp("lease_until", { withTimezone: true, mode: 'string' }),
+	attemptCount: integer("attempt_count").default(0).notNull(),
+	lastErrorCode: text("last_error_code"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+	completedAt: timestamp("completed_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("media_cleanup_jobs_claim_candidates_idx").using("btree", table.state.asc().nullsLast().op("text_ops"), table.leaseUntil.asc().nullsLast().op("timestamptz_ops"), table.createdAt.asc().nullsLast().op("timestamptz_ops")).where(sql`(state = ANY (ARRAY['pending'::text, 'failed'::text, 'processing'::text]))`),
+	foreignKey({
+			columns: [table.attemptId],
+			foreignColumns: [mediaDerivativeAttemptsInAppPrivate.id],
+			name: "media_cleanup_jobs_attempt_id_fkey"
+		}).onDelete("restrict"),
+	pgPolicy("runtime_media_cleanup_jobs_insert", { as: "permissive", for: "insert", to: ["app_runtime"], withCheck: sql`true`  }),
+	pgPolicy("runtime_media_cleanup_jobs_select", { as: "permissive", for: "select", to: ["app_runtime"] }),
+	pgPolicy("runtime_media_cleanup_jobs_update", { as: "permissive", for: "update", to: ["app_runtime"] }),
+]);
+
 export const mediaDerivativeAttemptsInAppPrivate = appPrivate.table("media_derivative_attempts", {
 	id: uuid().defaultRandom().notNull(),
 	derivativeId: uuid("derivative_id").notNull().references((): AnyPgColumn => mediaDerivativesInAppPrivate.id, { onDelete: "restrict" }),
@@ -326,6 +348,19 @@ export const mediaIngestsInAppPrivate = appPrivate.table("media_ingests", {
 	index("media_ingests_finalize_candidates_idx").using("btree", table.state.asc().nullsLast().op("text_ops"), table.leaseUntil.asc().nullsLast().op("timestamptz_ops")),
 	index("media_ingests_game_id_idx").using("btree", table.gameId.asc().nullsLast().op("uuid_ops")),
 	pgPolicy("runtime_media_ingests", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
+export const mediaReconciliationRunsInAppPrivate = appPrivate.table("media_reconciliation_runs", {
+	localDate: date("local_date").notNull(),
+	state: text().notNull(),
+	leaseToken: uuid("lease_token"),
+	leaseUntil: timestamp("lease_until", { withTimezone: true, mode: 'string' }),
+	startedAt: timestamp("started_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+	completedAt: timestamp("completed_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	pgPolicy("runtime_media_reconciliation_runs_insert", { as: "permissive", for: "insert", to: ["app_runtime"], withCheck: sql`true`  }),
+	pgPolicy("runtime_media_reconciliation_runs_select", { as: "permissive", for: "select", to: ["app_runtime"] }),
+	pgPolicy("runtime_media_reconciliation_runs_update", { as: "permissive", for: "update", to: ["app_runtime"] }),
 ]);
 
 export const platformsInAppPrivate = appPrivate.table("platforms", {

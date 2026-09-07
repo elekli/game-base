@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm/relations";
-import { externalGameIdentitiesInAppPrivate, bggCurrentMetricsInAppPrivate, externalGameCategoriesInAppPrivate, sourceCategoriesInAppPrivate, externalPlayerProfilesInAppPrivate, externalSupportedPlatformsInAppPrivate, gamesInAppPrivate, gameNamesInAppPrivate, gamePlatformsInAppPrivate, platformsInAppPrivate, gameTagsInAppPrivate, tagsInAppPrivate, manualContributionsInAppPrivate, contributorsInAppPrivate, mediaIngestsInAppPrivate, mediaAssetsInAppPrivate, mediaDerivativesInAppPrivate, mediaDerivativeAttemptsInAppPrivate, mediaIngestOperationsInAppPrivate, sourceContributionsInAppPrivate, sourceRefreshOperationsInAppPrivate } from "./schema";
+import { externalGameIdentitiesInAppPrivate, bggCurrentMetricsInAppPrivate, externalGameCategoriesInAppPrivate, sourceCategoriesInAppPrivate, externalPlayerProfilesInAppPrivate, externalSupportedPlatformsInAppPrivate, gamesInAppPrivate, gameNamesInAppPrivate, gamePlatformsInAppPrivate, platformsInAppPrivate, gameTagsInAppPrivate, tagsInAppPrivate, manualContributionsInAppPrivate, contributorsInAppPrivate, mediaIngestsInAppPrivate, mediaAssetsInAppPrivate, mediaDerivativeAttemptsInAppPrivate, mediaCleanupJobsInAppPrivate, mediaDerivativesInAppPrivate, mediaIngestOperationsInAppPrivate, sourceContributionsInAppPrivate, sourceRefreshOperationsInAppPrivate } from "./schema";
 
 export const bggCurrentMetricsInAppPrivateRelations = relations(bggCurrentMetricsInAppPrivate, ({one}) => ({
 	externalGameIdentitiesInAppPrivate: one(externalGameIdentitiesInAppPrivate, {
@@ -142,7 +142,15 @@ export const mediaIngestsInAppPrivateRelations = relations(mediaIngestsInAppPriv
 	}),
 }));
 
-export const mediaDerivativeAttemptsInAppPrivateRelations = relations(mediaDerivativeAttemptsInAppPrivate, ({one}) => ({
+export const mediaCleanupJobsInAppPrivateRelations = relations(mediaCleanupJobsInAppPrivate, ({one}) => ({
+	mediaDerivativeAttemptsInAppPrivate: one(mediaDerivativeAttemptsInAppPrivate, {
+		fields: [mediaCleanupJobsInAppPrivate.attemptId],
+		references: [mediaDerivativeAttemptsInAppPrivate.id]
+	}),
+}));
+
+export const mediaDerivativeAttemptsInAppPrivateRelations = relations(mediaDerivativeAttemptsInAppPrivate, ({one, many}) => ({
+	mediaCleanupJobsInAppPrivates: many(mediaCleanupJobsInAppPrivate),
 	mediaDerivativesInAppPrivate: one(mediaDerivativesInAppPrivate, {
 		fields: [mediaDerivativeAttemptsInAppPrivate.derivativeId],
 		references: [mediaDerivativesInAppPrivate.id]

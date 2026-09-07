@@ -924,6 +924,11 @@ function revokedRoutineIdentity(statement: readonly SqlToken[]) {
     : null;
 }
 
+function isExactMediaReconciliationDeleteRevoke(statement: readonly SqlToken[]) {
+  return statement.map((token) => token.value).join(" ") ===
+    "revoke delete on app_private . media_reconciliation_runs , app_private . media_cleanup_jobs from app_runtime , anon , authenticated , service_role";
+}
+
 function isSetConfigCall(statement: readonly SqlToken[]) {
   return statement.some((token, index) => {
     const identifier =
@@ -949,6 +954,9 @@ function containsForbiddenMigrationSql(
   }
   const statements = splitSqlStatements(tokens);
   const allowedStatements = new Set<number>();
+  for (const [statementIndex, statement] of statements.entries()) {
+    if (isExactMediaReconciliationDeleteRevoke(statement)) allowedStatements.add(statementIndex);
+  }
   if (options.allowMediaDerivativeStateExpansion) {
     for (const [statementIndex, statement] of statements.entries()) {
       if (isExactMediaDerivativeStateExpansion(statement)) allowedStatements.add(statementIndex);

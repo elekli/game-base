@@ -390,6 +390,18 @@ describe("production migration safety lint", () => {
     await expect(lintProductionMigrations(root)).resolves.toEqual({ migrationCount: 1 });
   });
 
+  it("只允許精確收緊兩張 reconcile 帳表的 DELETE 權限", async () => {
+    const exact = await migrationFixture({
+      "0001_revoke_media_delete.sql": "revoke delete on app_private.media_reconciliation_runs, app_private.media_cleanup_jobs from app_runtime, anon, authenticated, service_role;",
+    });
+    const broader = await migrationFixture({
+      "0001_revoke_media_delete.sql": "revoke all on app_private.media_reconciliation_runs, app_private.media_cleanup_jobs from app_runtime, anon, authenticated, service_role;",
+    });
+
+    await expect(lintProductionMigrations(exact)).resolves.toEqual({ migrationCount: 1 });
+    await expect(lintProductionMigrations(broader)).rejects.toThrow("ProductionMigrationSafetyError");
+  });
+
   it("相同 CHECK replacement 出現在非 0011 migration 時仍拒絕", async () => {
     const root = await migrationFixture({
       "0012_repeat_media_state_expansion.sql": `

@@ -4,6 +4,7 @@ import { handlePrivateRequest, PrivateRequestInputError } from "@/shared/auth/pr
 import type { AccessTokenVerifier } from "@/shared/auth/verify-access-token";
 import { getRequestId } from "@/shared/observability/request-id";
 import { MEDIA_MAX_BYTES, type MediaService } from "@/modules/media";
+import type { MediaReconcileResult } from "@/modules/media/internal/types";
 
 type Dependencies = Readonly<{
   service: MediaService;
@@ -12,6 +13,8 @@ type Dependencies = Readonly<{
   onUnhandledFailure: (context: Readonly<{ errorCode: string; requestId: string }>) => void | Promise<void>;
   wakeThumbnail?: (assetId: string) => Promise<void>;
   afterResponse?: (task: () => Promise<void>) => void;
+  reconcileMedia?: () => Promise<MediaReconcileResult>;
+  onReconcile?: (input: Readonly<{ requestId: string; result: MediaReconcileResult }>) => void | Promise<void>;
 }>;
 
 const beginSchema = z.object({
@@ -67,6 +70,24 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
   };
   const boundary = <Result extends object>(request: Request, operation: Parameters<typeof handlePrivateRequest<Result>>[1]["operation"]) =>
     handlePrivateRequest(request, { ...dependencies, operation });
+  const scheduleReconcile = (request: Request) => {
+    if (!dependencies.reconcileMedia) return;
+    const requestId = getRequestId(request.headers);
+    afterResponse(async () => {
+      try {
+        const result = await dependencies.reconcileMedia!();
+        await dependencies.onReconcile?.({ requestId, result });
+      } catch {
+        try { await dependencies.onUnhandledFailure({ errorCode: "media_reconcile_after_failed", requestId }); }
+        catch { console.error("media_reconcile_observer_failed"); }
+      }
+    });
+  };
+  const authorizedBoundary = <Result extends object>(request: Request, operation: Parameters<typeof handlePrivateRequest<Result>>[1]["operation"]) =>
+    boundary(request, async (owner) => {
+      try { return await operation(owner); }
+      finally { scheduleReconcile(request); }
+    });
   return {
     options(request: Request) {
       const origin = corsOrigin(request);
@@ -82,7 +103,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async begin(request: Request) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = beginSchema.safeParse(await json(request));
         if (!parsed.success) throw new PrivateRequestInputError("媒體上傳參數無效。");
         return dependencies.service.beginMediaUpload(owner, parsed.data);
@@ -90,7 +111,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async finalize(request: Request) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = finalizeSchema.safeParse(await json(request));
         if (!parsed.success) throw new PrivateRequestInputError("媒體完成確認參數無效。");
         const result = await dependencies.service.finalizeMediaUpload(owner, parsed.data);
@@ -105,7 +126,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async original(request: Request, assetId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(assetId);
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
         const parameters = new URL(request.url).searchParams;
@@ -116,7 +137,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async thumbnail(request: Request, assetId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(assetId);
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
         return dependencies.service.issueThumbnailRead(owner, { assetId: parsed.data });
@@ -124,7 +145,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async list(request: Request, gameId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(gameId);
         if (!parsed.success) throw new PrivateRequestInputError("遊戲參數無效。");
         const result = await dependencies.service.listGameMedia(owner, { gameId: parsed.data });
@@ -136,7 +157,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async metadata(request: Request, assetId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsedId = assetIdSchema.safeParse(assetId);
         const parsed = metadataSchema.safeParse(await json(request));
         if (!parsedId.success || !parsed.success) throw new PrivateRequestInputError("媒體說明參數無效。");
@@ -145,7 +166,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async cover(request: Request, gameId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsedGame = assetIdSchema.safeParse(gameId);
         const parsed = coverSchema.safeParse(await json(request));
         if (!parsedGame.success || !parsed.success) throw new PrivateRequestInputError("封面選擇參數無效。");
@@ -156,7 +177,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async retryThumbnail(request: Request, assetId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(assetId);
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
         const result = await dependencies.service.retryThumbnail(owner, { assetId: parsed.data });
@@ -169,7 +190,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async remove(request: Request, assetId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(assetId);
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
         return dependencies.service.removeMedia(owner, { assetId: parsed.data });
@@ -177,7 +198,7 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
     },
     async restore(request: Request, assetId: string) {
       const rejected = crossOriginResponse(request); if (rejected) return rejected;
-      return withCors(request, await boundary(request, async (owner) => {
+      return withCors(request, await authorizedBoundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(assetId);
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
         return dependencies.service.restoreMedia(owner, { assetId: parsed.data });

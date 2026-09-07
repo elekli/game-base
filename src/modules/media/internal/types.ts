@@ -19,6 +19,7 @@ export type MediaObjectStore = Readonly<{
   inspect(path: string): Promise<Readonly<{ path: string; byteSize: number; mimeType: string }> | null>;
   read(path: string): AsyncIterable<Uint8Array>;
   uploadDerivative(path: string, bytes: Uint8Array): Promise<void>;
+  deleteDerivative(path: string): Promise<void>;
 }>;
 
 export type MediaIngest = Readonly<{
@@ -71,6 +72,26 @@ export type ThumbnailClaim =
     attempt: ThumbnailAttempt;
   }>;
 
+export type MediaCleanupClaim = Readonly<{
+  jobId: string;
+  attemptId: string;
+  objectPath: string;
+  attemptCount: number;
+}>;
+
+export type MediaReconcileResult = Readonly<{
+  status: "completed" | "skipped" | "failed";
+  thumbnailsWoken: number;
+  cleanupCleaned: number;
+  cleanupFailed: number;
+  quotaState: "ok" | "warning" | "stop_writes";
+}>;
+
+export type MediaCapacitySnapshot = Readonly<{
+  usedBytes: number;
+  capacityBytes: number;
+}>;
+
 export type MediaStore = Readonly<{
   begin(command: BeginMediaUploadCommand, reserved: Readonly<{ ingestId: string; assetId: string; objectPath: string; staleAfter: string }>): Promise<BeginMediaRecord>;
   renewGrant(idempotencyKey: string, objectPath: string, staleAfter: string): Promise<void>;
@@ -95,6 +116,12 @@ export type MediaStore = Readonly<{
   useSourceCover(gameId: string): Promise<boolean>;
   removeMedia(assetId: string): Promise<Readonly<{ asset: MediaAsset; manualCoverAssetId: string | null }> | null>;
   restoreMedia(assetId: string): Promise<MediaAsset | null>;
+  claimReconciliationRun(leaseToken: string): Promise<boolean>;
+  completeReconciliationRun(leaseToken: string): Promise<void>;
+  findReconcileThumbnails(limit: number): Promise<readonly string[]>;
+  claimCleanupJobs(limit: number, leaseToken: string): Promise<readonly MediaCleanupClaim[]>;
+  completeCleanup(jobId: string, leaseToken: string): Promise<void>;
+  failCleanup(jobId: string, leaseToken: string): Promise<void>;
 }>;
 
 export type MediaStoredGalleryItem = Readonly<{

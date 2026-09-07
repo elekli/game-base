@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPrivateMediaHandlers } from "@/app/api/private/media/_handlers";
 import type { MediaService } from "@/modules/media";
-import { MediaAssetUnavailableError, MediaStoredObjectInvalidError, MediaStorageUnavailableError, MediaUploadIdempotencyConflictError } from "@/modules/media";
+import { MediaAssetUnavailableError, MediaStoredObjectInvalidError, MediaStorageQuotaExceededError, MediaStorageUnavailableError, MediaUploadIdempotencyConflictError } from "@/modules/media";
 import { AccessDeniedError } from "@/shared/auth/access-denied-error";
+
+vi.mock("next/server", () => ({ after: (callback: () => void | Promise<void>) => void callback() }));
 
 const owner = { sub: "owner-subject" };
 const requestId = "44444444-4444-4444-8444-444444444444";
@@ -10,7 +12,12 @@ const gameId = "11111111-1111-4111-8111-111111111111";
 const assetId = "22222222-2222-4222-8222-222222222222";
 const key = "33333333-3333-4333-8333-333333333333";
 
-function setup(overrides: Readonly<{ wakeThumbnail?: (assetId: string) => Promise<void>; afterResponse?: (task: () => Promise<void>) => void }> = {}) {
+function setup(overrides: Readonly<{
+  wakeThumbnail?: (assetId: string) => Promise<void>;
+  afterResponse?: (task: () => Promise<void>) => void;
+  reconcileMedia?: () => Promise<{ status: "completed" | "skipped" | "failed"; thumbnailsWoken: number; cleanupCleaned: number; cleanupFailed: number; quotaState: "ok" | "warning" | "stop_writes" }>;
+  onReconcile?: (input: { requestId: string; result: { status: "completed" | "skipped" | "failed"; thumbnailsWoken: number; cleanupCleaned: number; cleanupFailed: number; quotaState: "ok" | "warning" | "stop_writes" } }) => void | Promise<void>;
+}> = {}) {
   const service: MediaService = {
     beginMediaUpload: vi.fn<MediaService["beginMediaUpload"]>(async () => ({
       status: "upload_grant", ingestId: key, assetId,
@@ -98,6 +105,62 @@ describe("private media routes", () => {
     expect((await handlers.cover(request(`/api/private/media/games/${gameId}/cover`, { mode: "manual", assetId }), gameId)).status).toBe(401);
     expect(service.updateMediaMetadata).not.toHaveBeenCalled();
     expect(service.selectManualCover).not.toHaveBeenCalled();
+  });
+
+  it("未授權 original 不排程 reconcile；授權 read 才在回應後排程", async () => {
+    const { service, verifyAccessToken } = setup();
+    const reconcileMedia = vi.fn(async () => ({ status: "completed" as const, thumbnailsWoken: 0, cleanupCleaned: 0, cleanupFailed: 0, quotaState: "ok" as const }));
+    const onReconcile = vi.fn();
+    const handlers = createPrivateMediaHandlers({ service, verifyAccessToken, onAccessDenied: vi.fn(), onUnhandledFailure: vi.fn(), reconcileMedia, onReconcile });
+    vi.mocked(verifyAccessToken).mockRejectedValueOnce(new AccessDeniedError());
+    expect((await handlers.original(request(`/api/private/media/assets/${assetId}/original`, { assetId }), assetId)).status).toBe(401);
+    expect(reconcileMedia).not.toHaveBeenCalled();
+    expect((await handlers.original(request(`/api/private/media/assets/${assetId}/original`, { assetId }), assetId)).status).toBe(200);
+    await Promise.resolve();
+    expect(reconcileMedia).toHaveBeenCalledOnce();
+    expect(onReconcile).toHaveBeenCalledOnce();
+  });
+
+  it("相簿讀取與 thumbnail retry 成功後都透過共用邊界有界排程 reconcile", async () => {
+    const tasks: Array<() => Promise<void>> = [];
+    const reconcileMedia = vi.fn(async () => ({ status: "completed" as const, thumbnailsWoken: 0, cleanupCleaned: 0, cleanupFailed: 0, quotaState: "warning" as const }));
+    const onReconcile = vi.fn();
+    const { handlers } = setup({ reconcileMedia, onReconcile, afterResponse: (task) => tasks.push(task) });
+
+    expect((await handlers.list(request(`/api/private/media/games/${gameId}`, {}), gameId)).status).toBe(200);
+    expect((await handlers.retryThumbnail(request(`/api/private/media/assets/${assetId}/retry-thumbnail`, {}), assetId)).status).toBe(200);
+    expect(tasks).toHaveLength(2);
+    await Promise.all(tasks.map((task) => task()));
+    expect(reconcileMedia).toHaveBeenCalledTimes(2);
+    expect(onReconcile).toHaveBeenCalledTimes(2);
+  });
+
+  it("owner 驗證成功後即使媒體操作失敗，仍排程持久工作的 reconcile", async () => {
+    const tasks: Array<() => Promise<void>> = [];
+    const reconcileMedia = vi.fn(async () => ({ status: "skipped" as const, thumbnailsWoken: 0, cleanupCleaned: 0, cleanupFailed: 0, quotaState: "ok" as const }));
+    const { handlers, service } = setup({ reconcileMedia, afterResponse: (task) => tasks.push(task) });
+    vi.mocked(service.listGameMedia).mockRejectedValueOnce(new MediaAssetUnavailableError());
+
+    expect((await handlers.list(request(`/api/private/media/games/${gameId}`, {}), gameId)).status).toBe(404);
+    expect(tasks).toHaveLength(1);
+    await tasks[0]!();
+    expect(reconcileMedia).toHaveBeenCalledOnce();
+  });
+
+  it("reconcile after callback 失敗會通過具名失敗邊界", async () => {
+    const { service, verifyAccessToken, onUnhandledFailure } = setup();
+    const handlers = createPrivateMediaHandlers({ service, verifyAccessToken, onAccessDenied: vi.fn(), onUnhandledFailure, reconcileMedia: async () => { throw new Error("storage capability"); } });
+    await handlers.original(request(`/api/private/media/assets/${assetId}/original`, { assetId }), assetId);
+    await Promise.resolve();
+    expect(onUnhandledFailure).toHaveBeenCalledWith({ errorCode: "media_reconcile_after_failed", requestId });
+  });
+
+  it("reconcile observer 失敗同樣通過具名失敗邊界", async () => {
+    const { service, verifyAccessToken, onUnhandledFailure } = setup();
+    const handlers = createPrivateMediaHandlers({ service, verifyAccessToken, onAccessDenied: vi.fn(), onUnhandledFailure, reconcileMedia: async () => ({ status: "completed", thumbnailsWoken: 0, cleanupCleaned: 0, cleanupFailed: 0, quotaState: "ok" }), onReconcile: async () => { throw new Error("observer failed"); } });
+    await handlers.original(request(`/api/private/media/assets/${assetId}/original`, { assetId }), assetId);
+    await Promise.resolve();
+    expect(onUnhandledFailure).toHaveBeenCalledWith({ errorCode: "media_reconcile_after_failed", requestId });
   });
 
   it("同源 CORS preflight 不驗 owner 且宣告 POST headers", async () => {
@@ -192,6 +255,15 @@ describe("private media routes", () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ message: "媒體儲存服務暫時無法使用，請重試。", requestId });
     expect(onUnhandledFailure).toHaveBeenCalledWith({ errorCode: "media_storage_unavailable", requestId });
+  });
+
+  it("容量 stop-writes 在 begin 回 507 與具名事件，且不外洩容量快照", async () => {
+    const { handlers, service, onUnhandledFailure } = setup();
+    vi.mocked(service.beginMediaUpload).mockRejectedValueOnce(new MediaStorageQuotaExceededError());
+    const response = await handlers.begin(request("/api/private/media/uploads/begin", { idempotencyKey: key, gameId, purpose: "gallery_image", originalFileName: "photo.png", declaredMimeType: "image/png", declaredByteSize: 123 }));
+    expect(response.status).toBe(507);
+    expect(await response.json()).toEqual({ message: "媒體儲存空間已達安全上限，暫停新增檔案。", requestId });
+    expect(onUnhandledFailure).toHaveBeenCalledWith({ errorCode: "media_storage_quota_exceeded", requestId });
   });
 
   it("預期的 400／404／409 media domain errors 不回報為 server failure", async () => {
