@@ -38,6 +38,15 @@ type ProductionReleaseContract = Readonly<{
   productionRestoreEvidenceSchemaSha256: string;
   productionRestoreModel: string;
   productionRestoreModelSha256: string;
+  productionRestoreExecutor: string;
+  productionRestoreExecutorSha256: string;
+  productionRestoreIntegrityChecker: string;
+  productionRestoreIntegrityCheckerSha256: string;
+  productionRestoreRunner: string;
+  productionRestoreRunnerSha256: string;
+  productionRestoreWorkflow: string;
+  productionRestoreWorkflowSha256: string;
+  productionRestoreStatus: string;
   productionSmokeContract: string;
   productionSmokeContractSha256: string;
   productionSmokeModel: string;
@@ -481,7 +490,12 @@ export async function checkProductionReleaseContract(root: string) {
   assertContract(contract.productionSmokeRunnerStatus === "ready-fail-closed-pending-production-principal-and-live-credentials", "smoke runner status must enumerate every unresolved live dependency");
   await assertReleaseSmokeAuthArtifactsPinned(root, contract);
   await assertPinnedArtifact(root, contract.productionRestoreModel, "scripts/production-restore-drill.ts", contract.productionRestoreModelSha256, "restore model");
+  await assertPinnedArtifact(root, contract.productionRestoreExecutor, "scripts/production-restore-executor.ts", contract.productionRestoreExecutorSha256, "restore executor");
+  await assertPinnedArtifact(root, contract.productionRestoreIntegrityChecker, "scripts/check-production-restore-integrity.ts", contract.productionRestoreIntegrityCheckerSha256, "restore integrity checker");
+  await assertPinnedArtifact(root, contract.productionRestoreRunner, "scripts/production-restore.ts", contract.productionRestoreRunnerSha256, "restore runner");
+  await assertPinnedArtifact(root, contract.productionRestoreWorkflow, ".github/workflows/production-restore-drill.yml", contract.productionRestoreWorkflowSha256, "restore workflow");
   await assertPinnedArtifact(root, contract.productionRestoreEvidenceSchema, ".github/production-restore-drill-evidence.schema.json", contract.productionRestoreEvidenceSchemaSha256, "restore evidence schema");
+  assertContract(contract.productionRestoreStatus === "ready-protected-manual", "restore runner must be ready behind the protected manual workflow");
   await assertPinnedArtifact(root, contract.vercelDeploymentAdapter, "scripts/vercel-deployment-rest-adapter.ts", contract.vercelDeploymentAdapterSha256, "Vercel deployment adapter");
   await assertPinnedArtifact(root, contract.vercelRestTransport, "scripts/vercel-rest-transport.ts", contract.vercelRestTransportSha256, "Vercel REST transport");
   assertContract(
@@ -507,6 +521,10 @@ export async function checkProductionReleaseContract(root: string) {
       contract.releaseSmokeProductionAccessTokenVerifierSha256,
       contract.releaseSmokeDeploymentBindingsSha256,
       contract.productionRestoreModelSha256,
+      contract.productionRestoreExecutorSha256,
+      contract.productionRestoreIntegrityCheckerSha256,
+      contract.productionRestoreRunnerSha256,
+      contract.productionRestoreWorkflowSha256,
       contract.productionRestoreEvidenceSchemaSha256,
     ]) === JSON.stringify([
       "589afce50b16f0d4e6896ad091b9621a96065ad6f2a15c7d9c16d7e95ed1405a",
@@ -529,7 +547,11 @@ export async function checkProductionReleaseContract(root: string) {
       "185701f85c21333153a6b8655df22dfd10545061ccd27e771033fe1196c8b767",
       "2a1463331e350d5284f75ae7eb51ebbf7da74e0951b826a4e21130f2b4648b76",
       "dd9041ce7ef885a4aab4cd555c418b84f9c1867dfc5849fd2510ae2398891948",
-      "4bedd522a39f3792141ebb79d83a6b3d461c3a53e5ce28f1bbfd4c6de4323ae8",
+      "96604eb799d32eefff62297efafe8e18cca595cc6d4505083f60ead85402f028",
+      "cbecf90d4aa66f85cb766cb4fdd8062077925e3a0c556162a91c60d38e52cbd3",
+      "60a12f3fa541ff0dbbc14ee0c954893648d4a6b01d1a3a67bd23faafa9b6ee28",
+      "2ae2be12554e82d36220558a17ade62600c823a38efd72bbda8148d6ecbb7558",
+      "28cf4c2e32761df2692ef234c103944beb4b267512f577b1a5d3ccbb7c826974",
       "b801b6e3e46f64c3e273c33b5c3c3432ebc152247900e125459f2cecc5613d40",
     ]),
     "Production deployment artifact fingerprints must remain fixed",

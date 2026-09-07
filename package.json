@@ -28,6 +28,8 @@
     "release:migration:plan": "tsx scripts/production-migration-release.ts",
     "release:migration:run": "tsx scripts/production-migration-runner.ts",
     "release:application:run": "tsx scripts/production-application-release.ts",
+    "release:restore:integrity": "tsx scripts/check-production-restore-integrity.ts",
+    "release:restore:run": "tsx scripts/production-restore.ts",
     "db:schema:pull": "drizzle-kit pull && tsx scripts/normalize-drizzle-schema.ts",
     "db:schema:check": "tsx scripts/check-drizzle-schema-drift.ts",
     "supabase:start": "supabase start",
