@@ -12,7 +12,7 @@ import {
 } from "./index";
 import { createMediaService } from "./internal/create-media-service";
 import { createInMemoryMediaStore } from "./internal/in-memory-store";
-import type { MediaObjectStore } from "./internal/types";
+import type { MediaObjectStore, MediaStore } from "./internal/types";
 
 function grantFrom(result: BeginMediaUploadResult) {
   if (result.status !== "upload_grant") throw new Error("expected upload grant");
@@ -137,6 +137,7 @@ function objectStore(object: Readonly<{ bytes: Uint8Array; mimeType: string; byt
     async inspect(path) { return { path, byteSize: object.byteSize ?? object.bytes.byteLength, mimeType: object.mimeType }; },
     async *read(path) { void path; yield object.bytes; },
     async uploadDerivative() {},
+    async deleteDerivative() {},
   };
 }
 
@@ -153,6 +154,33 @@ function command(overrides: Partial<Readonly<{ purpose: "gallery_image" | "custo
 }
 
 describe("媒體公開介面", () => {
+  it("unbound reconcile callback 仍會透過閉包喚醒縮圖", async () => {
+    const base = createInMemoryMediaStore({ activeGameIds: [gameId] });
+    const claimThumbnail = vi.fn<MediaStore["claimThumbnail"]>(async () => ({ status: "not_ready" }));
+    const service = createMediaService({ store: { ...base, claimThumbnail, claimReconciliationRun: async () => true, findReconcileThumbnails: async () => [gameId] }, objects: objectStore({ bytes: png(), mimeType: "image/png" }) });
+    const callback = service.reconcileMedia;
+    await expect(callback()).resolves.toMatchObject({ status: "completed", thumbnailsWoken: 1 });
+    expect(claimThumbnail).toHaveBeenCalledWith(gameId, expect.objectContaining({ token: expect.any(String) }));
+  });
+
+  it("失敗 reconcile 不會把當日 run 標為 completed，讓過期 lease 可被接手", async () => {
+    const base = createInMemoryMediaStore({ activeGameIds: [gameId] });
+    const completeReconciliationRun = vi.fn<MediaStore["completeReconciliationRun"]>(async () => undefined);
+    const service = createMediaService({ store: { ...base, claimReconciliationRun: async () => true, findReconcileThumbnails: async () => { throw new Error("db unavailable"); }, completeReconciliationRun }, objects: objectStore({ bytes: png(), mimeType: "image/png" }) });
+    await expect(service.reconcileMedia()).resolves.toMatchObject({ status: "failed" });
+    expect(completeReconciliationRun).not.toHaveBeenCalled();
+  });
+
+  it("Storage 已刪除但 expired fence 拒絕完成時，保留 job 供後續冪等 delete", async () => {
+    const base = createInMemoryMediaStore({ activeGameIds: [gameId] });
+    const deleteDerivative = vi.fn(async () => undefined);
+    const completeCleanup = vi.fn<MediaStore["completeCleanup"]>(async () => { throw new MediaFinalizeUnavailableError(); });
+    const failCleanup = vi.fn<MediaStore["failCleanup"]>(async () => { throw new MediaFinalizeUnavailableError(); });
+    const service = createMediaService({ store: { ...base, claimReconciliationRun: async () => true, findReconcileThumbnails: async () => [], claimCleanupJobs: async () => [{ jobId: "job", attemptId: "attempt", objectPath: "thumbnails/known.webp", attemptCount: 2 }], completeCleanup, failCleanup }, objects: { ...objectStore({ bytes: png(), mimeType: "image/png" }), deleteDerivative } });
+    await expect(service.reconcileMedia()).resolves.toMatchObject({ status: "completed", cleanupFailed: 1 });
+    expect(deleteDerivative).toHaveBeenCalledWith("thumbnails/known.webp");
+    expect(failCleanup).toHaveBeenCalledOnce();
+  });
   it("upload capability 固定 TUS transport、單一 ingest/path/size/MIME 與安全重試選項", async () => {
     const service = createMediaService({
       store: createInMemoryMediaStore({ activeGameIds: [gameId] }),

@@ -4,6 +4,7 @@ import { handlePrivateRequest, PrivateRequestInputError } from "@/shared/auth/pr
 import type { AccessTokenVerifier } from "@/shared/auth/verify-access-token";
 import { getRequestId } from "@/shared/observability/request-id";
 import { MEDIA_MAX_BYTES, type MediaService } from "@/modules/media";
+import type { MediaReconcileResult } from "@/modules/media/internal/types";
 
 type Dependencies = Readonly<{
   service: MediaService;
@@ -12,6 +13,8 @@ type Dependencies = Readonly<{
   onUnhandledFailure: (context: Readonly<{ errorCode: string; requestId: string }>) => void | Promise<void>;
   wakeThumbnail?: (assetId: string) => Promise<void>;
   afterResponse?: (task: () => Promise<void>) => void;
+  reconcileMedia?: () => Promise<MediaReconcileResult>;
+  onReconcile?: (input: Readonly<{ requestId: string; result: MediaReconcileResult }>) => void | Promise<void>;
 }>;
 
 const beginSchema = z.object({
@@ -67,6 +70,19 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
   };
   const boundary = <Result extends object>(request: Request, operation: Parameters<typeof handlePrivateRequest<Result>>[1]["operation"]) =>
     handlePrivateRequest(request, { ...dependencies, operation });
+  const scheduleReconcile = (request: Request) => {
+    if (!dependencies.reconcileMedia) return;
+    const requestId = getRequestId(request.headers);
+    afterResponse(async () => {
+      try {
+        const result = await dependencies.reconcileMedia!();
+        await dependencies.onReconcile?.({ requestId, result });
+      } catch {
+        try { await dependencies.onUnhandledFailure({ errorCode: "media_reconcile_after_failed", requestId }); }
+        catch { console.error("media_reconcile_observer_failed"); }
+      }
+    });
+  };
   return {
     options(request: Request) {
       const origin = corsOrigin(request);
@@ -85,7 +101,9 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
       return withCors(request, await boundary(request, async (owner) => {
         const parsed = beginSchema.safeParse(await json(request));
         if (!parsed.success) throw new PrivateRequestInputError("媒體上傳參數無效。");
-        return dependencies.service.beginMediaUpload(owner, parsed.data);
+        const result = await dependencies.service.beginMediaUpload(owner, parsed.data);
+        scheduleReconcile(request);
+        return result;
       }));
     },
     async finalize(request: Request) {
@@ -111,7 +129,9 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
         const parameters = new URL(request.url).searchParams;
         const query = originalReadSchema.safeParse(Object.fromEntries(parameters));
         if (parameters.size > 1 || (!query.success && parameters.size > 0)) throw new PrivateRequestInputError("媒體讀取參數無效。");
-        return dependencies.service.issueOriginalRead(owner, { assetId: parsed.data, disposition: query.success ? query.data.disposition : "attachment" });
+        const result = await dependencies.service.issueOriginalRead(owner, { assetId: parsed.data, disposition: query.success ? query.data.disposition : "attachment" });
+        scheduleReconcile(request);
+        return result;
       }));
     },
     async thumbnail(request: Request, assetId: string) {

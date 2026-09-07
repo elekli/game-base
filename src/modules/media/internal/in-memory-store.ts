@@ -14,6 +14,7 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
   const results = new Map<string, MediaUploadResult>();
   const thumbnails = new Map<string, { state: "pending" | "processing" | "ready" | "failed"; attemptCount: number; cycleAttemptCount: number; cycle: number; leaseToken: string | null; leaseUntil: string | null; activeAttemptId: string | null }>();
   const manualCovers = new Map<string, string>();
+  let reconciliationDate: string | null = null;
 
   function replaceThumbnail(assetId: string, state: "pending" | "processing" | "ready" | "failed"): MediaUploadResult | null {
     for (const [key, result] of results) {
@@ -220,5 +221,22 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
       }
       return null;
     },
+    async claimReconciliationRun() {
+      const date = (input.now?.() ?? new Date()).toISOString().slice(0, 10);
+      if (reconciliationDate === date) return false;
+      reconciliationDate = date;
+      return true;
+    },
+    async completeReconciliationRun() {},
+    async findReconcileThumbnails(limit) {
+      const current = input.now?.() ?? new Date();
+      return [...thumbnails.entries()]
+        .filter(([, job]) => job.state === "pending" || (job.state === "processing" && job.leaseUntil !== null && new Date(job.leaseUntil) <= current))
+        .slice(0, limit)
+        .map(([assetId]) => assetId);
+    },
+    async claimCleanupJobs() { return []; },
+    async completeCleanup() {},
+    async failCleanup() {},
   };
 }

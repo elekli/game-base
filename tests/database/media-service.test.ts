@@ -117,6 +117,7 @@ function objects(bytes = png(), mimeType = "image/png"): MediaObjectStore {
     async inspect(path) { return { path, byteSize: bytes.byteLength, mimeType }; },
     async *read() { yield bytes; },
     async uploadDerivative() {},
+    async deleteDerivative() {},
   };
 }
 
@@ -375,6 +376,7 @@ describe("MediaService 與真 PostgreSQL", () => {
       },
       async *read() { readCount += 1; yield bytes; },
       async uploadDerivative() {},
+      async deleteDerivative() {},
     };
     const service = serviceFor(storage);
     const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
@@ -767,6 +769,7 @@ describe("MediaService 與真 PostgreSQL", () => {
       async inspect(path) { return { path, byteSize: source.byteLength, mimeType: "image/png" }; },
       async *read() { yield source; },
       async uploadDerivative(path) { uploads.push(path); },
+      async deleteDerivative() {},
     };
     const actual = new PostgresMediaStore(database.db);
     const failing: MediaStore = {
@@ -777,6 +780,9 @@ describe("MediaService 與真 PostgreSQL", () => {
       listGameMedia: actual.listGameMedia.bind(actual), updateMediaMetadata: actual.updateMediaMetadata.bind(actual),
       selectManualCover: actual.selectManualCover.bind(actual), useSourceCover: actual.useSourceCover.bind(actual),
       removeMedia: actual.removeMedia.bind(actual), restoreMedia: actual.restoreMedia.bind(actual),
+      claimReconciliationRun: actual.claimReconciliationRun.bind(actual), completeReconciliationRun: actual.completeReconciliationRun.bind(actual),
+      findReconcileThumbnails: actual.findReconcileThumbnails.bind(actual), claimCleanupJobs: actual.claimCleanupJobs.bind(actual),
+      completeCleanup: actual.completeCleanup.bind(actual), failCleanup: actual.failCleanup.bind(actual),
       async adoptThumbnail() { throw new Error("injected pointer transaction failure"); },
     };
     const delays: number[] = [];
@@ -814,6 +820,7 @@ describe("MediaService 與真 PostgreSQL", () => {
       async inspect(path) { return { path, byteSize: source.byteLength, mimeType: "image/png" }; },
       async *read() { reads += 1; if (reads === 2) throw new MediaStorageUnavailableError(); yield source; },
       async uploadDerivative() { uploads += 1; },
+      async deleteDerivative() {},
     };
     const delays: number[] = [];
     let thumbnailAssetId: string | null = null;
@@ -887,5 +894,68 @@ describe("MediaService 與真 PostgreSQL", () => {
     expect(restored.manualCoverAssetId).toBeNull();
     expect(restored.items.map((item) => item.asset.id)).toContain(image.assetId);
     await expect(new PostgresGameStore(database.db).get(gameId)).resolves.toMatchObject({ coverAssetId: null });
+  });
+
+  it("cleanup 只從 immutable attempt ledger claim 可證明孤兒，清除後保留 ledger", async () => {
+    const service = serviceFor();
+    const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    const store = new PostgresMediaStore(database.db);
+    const thumbnail = await store.claimThumbnail(grant.assetId, { token: "73000000-0000-4000-8000-000000000001" });
+    if (thumbnail.status !== "claimed") throw new Error("expected thumbnail claim");
+    await store.markThumbnailUploaded({ derivativeId: thumbnail.derivativeId, attemptId: thumbnail.attempt.id, attemptNumber: thumbnail.attempt.number, leaseToken: "73000000-0000-4000-8000-000000000001" });
+    await store.failThumbnail({ derivativeId: thumbnail.derivativeId, attemptId: thumbnail.attempt.id, attemptNumber: thumbnail.attempt.number, leaseToken: "73000000-0000-4000-8000-000000000001", deterministic: false });
+
+    const claimed = await store.claimCleanupJobs(10, "73000000-0000-4000-8000-000000000002");
+    const ownJob = claimed.find((job) => job.attemptId === thumbnail.attempt.id);
+    expect(ownJob).toEqual(expect.objectContaining({ objectPath: thumbnail.attempt.objectPath }));
+    const whileLive = await store.claimCleanupJobs(10, "73000000-0000-4000-8000-000000000003");
+    expect(whileLive).not.toEqual(expect.arrayContaining([expect.objectContaining({ attemptId: thumbnail.attempt.id })]));
+
+    await runtime.unsafe("update app_private.media_cleanup_jobs set lease_until = clock_timestamp() - interval '1 second' where id = $1", [ownJob!.jobId]);
+    const reclaimed = await store.claimCleanupJobs(10, "73000000-0000-4000-8000-000000000004");
+    expect(reclaimed).toEqual(expect.arrayContaining([expect.objectContaining({
+      jobId: ownJob!.jobId,
+      attemptId: thumbnail.attempt.id,
+      attemptCount: 2,
+    })]));
+    await expect(store.completeCleanup(ownJob!.jobId, "73000000-0000-4000-8000-000000000002"))
+      .rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
+    await store.completeCleanup(ownJob!.jobId, "73000000-0000-4000-8000-000000000004");
+
+    const rows = await runtime.unsafe<{ state: string; retained: boolean }[]>(`
+      select attempt.state, exists(select 1 from app_private.media_derivative_attempts retained where retained.id = attempt.id) as retained
+      from app_private.media_derivative_attempts attempt where attempt.id = $1
+    `, [thumbnail.attempt.id]);
+    expect(rows[0]).toEqual({ state: "cleaned", retained: true });
+  });
+
+  it("reconcile 以 SKIP LOCKED 略過鎖住／有效 lease，釋鎖且到期後才喚醒", async () => {
+    const service = serviceFor();
+    const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+    const store = new PostgresMediaStore(database.db);
+    const first = await store.claimThumbnail(grant.assetId, { token: "74000000-0000-4000-8000-000000000001", durationMs: 500 });
+    if (first.status !== "claimed") throw new Error("expected thumbnail claim");
+    await expect(store.findReconcileThumbnails(25)).resolves.not.toContain(grant.assetId);
+
+    const locked = deferred();
+    const release = deferred();
+    const holder = runtime.begin(async (tx) => {
+      await tx.unsafe("update app_private.media_derivatives set last_error_code = null where asset_id = $1", [grant.assetId]);
+      locked.resolve();
+      await release.promise;
+    });
+    try {
+      await locked.promise;
+      await expect(store.findReconcileThumbnails(25)).resolves.not.toContain(grant.assetId);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      release.resolve();
+      await holder;
+      await expect(store.findReconcileThumbnails(25)).resolves.toContain(grant.assetId);
+    } finally {
+      release.resolve();
+      await holder.catch(() => undefined);
+    }
   });
 });

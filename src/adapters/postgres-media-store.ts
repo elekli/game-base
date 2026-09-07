@@ -593,4 +593,153 @@ export class PostgresMediaStore implements MediaStore {
       return restored[0] ? assetFrom(restored[0]) : null;
     });
   }
+
+  async claimReconciliationRun(leaseToken: string): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      const inserted = await tx.execute(sql`
+        insert into app_private.media_reconciliation_runs (local_date, state, lease_token, lease_until)
+        values ((clock_timestamp() at time zone 'Asia/Taipei')::date, 'processing', ${leaseToken}, clock_timestamp() + interval '5 minutes')
+        on conflict (local_date) do nothing
+        returning local_date
+      `) as Row[];
+      if (inserted[0]) return true;
+      const recovered = await tx.execute(sql`
+        update app_private.media_reconciliation_runs
+        set state = 'processing', lease_token = ${leaseToken}, lease_until = clock_timestamp() + interval '5 minutes',
+          started_at = clock_timestamp(), completed_at = null
+        where local_date = (clock_timestamp() at time zone 'Asia/Taipei')::date
+          and state = 'processing' and lease_until <= clock_timestamp()
+        returning local_date
+      `) as Row[];
+      return Boolean(recovered[0]);
+    });
+  }
+
+  async completeReconciliationRun(leaseToken: string): Promise<void> {
+    const rows = await this.db.execute(sql`
+      update app_private.media_reconciliation_runs
+      set state = 'completed', lease_token = null, lease_until = null, completed_at = clock_timestamp()
+      where local_date = (clock_timestamp() at time zone 'Asia/Taipei')::date
+        and state = 'processing' and lease_token = ${leaseToken}
+      returning local_date
+    `) as Row[];
+    if (!rows[0]) throw new MediaFinalizeUnavailableError();
+  }
+
+  async findReconcileThumbnails(limit: number): Promise<readonly string[]> {
+    const bounded = Math.min(Math.max(Math.floor(limit), 1), 25);
+    return this.db.transaction(async (tx) => {
+      const rows = await tx.execute(sql`
+        select derivative.asset_id
+        from app_private.media_derivatives derivative
+        join app_private.media_assets asset on asset.id = derivative.asset_id and asset.authority_state = 'verified'
+        join app_private.games game on game.id = asset.game_id and game.trashed_at is null
+        join app_private.media_ingests ingest on ingest.id = asset.ingest_id and ingest.state = 'finalized'
+        where derivative.authority_state = 'verified' and derivative.spec = ${MEDIA_THUMBNAIL_SPEC}
+          and ((derivative.state = 'pending' and (derivative.next_attempt_at is null or derivative.next_attempt_at <= clock_timestamp()))
+            or (derivative.state = 'processing' and derivative.lease_until <= clock_timestamp()))
+        order by derivative.id
+        limit ${bounded}
+        for update of derivative skip locked
+      `) as Row[];
+      const due: string[] = [];
+      for (const row of rows) {
+        const verified = await tx.execute(sql`
+          select asset_id from app_private.media_derivatives
+          where asset_id = ${String(row.asset_id)}
+            and ((state = 'pending' and (next_attempt_at is null or next_attempt_at <= clock_timestamp()))
+              or (state = 'processing' and lease_until <= clock_timestamp()))
+        `) as Row[];
+        if (verified[0]) due.push(String(verified[0].asset_id));
+      }
+      return due;
+    });
+  }
+
+  async claimCleanupJobs(limit: number, leaseToken: string) {
+    const bounded = Math.min(Math.max(Math.floor(limit), 1), 25);
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`
+        with candidates as (
+          select attempt.id
+          from app_private.media_derivatives derivative
+          join app_private.media_derivative_attempts attempt on attempt.derivative_id = derivative.id
+          join app_private.media_assets asset on asset.id = derivative.asset_id and asset.authority_state = 'verified'
+          join app_private.games game on game.id = asset.game_id and game.trashed_at is null
+          left join app_private.media_cleanup_jobs job on job.attempt_id = attempt.id
+          where derivative.authority_state = 'verified' and derivative.spec = ${MEDIA_THUMBNAIL_SPEC}
+            and attempt.state in ('reserved', 'uploaded') and job.id is null
+            and attempt.id is distinct from derivative.active_attempt_id
+            and attempt.id is distinct from derivative.adopted_attempt_id
+            and not (derivative.state = 'processing' and derivative.lease_until > clock_timestamp())
+          order by attempt.created_at
+          limit ${bounded}
+          for update of derivative, attempt skip locked
+        ), marked as (
+          update app_private.media_derivative_attempts attempt
+          set state = 'cleanup_pending'
+          from candidates where attempt.id = candidates.id
+          returning attempt.id
+        )
+        insert into app_private.media_cleanup_jobs (attempt_id, state)
+        select id, 'pending' from marked on conflict (attempt_id) do nothing
+      `);
+      const rows = await tx.execute(sql`
+        select job.id as job_id, attempt.id as attempt_id, attempt.object_path, job.attempt_count
+        from app_private.media_cleanup_jobs job
+        join app_private.media_derivative_attempts attempt on attempt.id = job.attempt_id and attempt.state = 'cleanup_pending'
+        join app_private.media_derivatives derivative on derivative.id = attempt.derivative_id
+        join app_private.media_assets asset on asset.id = derivative.asset_id and asset.authority_state = 'verified'
+        join app_private.games game on game.id = asset.game_id and game.trashed_at is null
+        where (job.state in ('pending', 'failed') or (job.state = 'processing' and job.lease_until <= clock_timestamp()))
+          and attempt.id is distinct from derivative.active_attempt_id
+          and attempt.id is distinct from derivative.adopted_attempt_id
+          and not (derivative.state = 'processing' and derivative.lease_until > clock_timestamp())
+        order by job.created_at
+        limit ${bounded}
+        for update of job, derivative, attempt skip locked
+      `) as Row[];
+      const claims = [] as Array<Readonly<{ jobId: string; attemptId: string; objectPath: string; attemptCount: number }>>;
+      for (const row of rows) {
+        const claimed = await tx.execute(sql`
+          update app_private.media_cleanup_jobs
+          set state = 'processing', lease_token = ${leaseToken}, lease_until = clock_timestamp() + interval '5 minutes',
+            attempt_count = attempt_count + 1, last_error_code = null
+          where id = ${String(row.job_id)}
+            and (state in ('pending', 'failed') or (state = 'processing' and lease_until <= clock_timestamp()))
+          returning id
+        `) as Row[];
+        if (claimed[0]) claims.push({ jobId: String(row.job_id), attemptId: String(row.attempt_id), objectPath: String(row.object_path), attemptCount: Number(row.attempt_count) + 1 });
+      }
+      return claims;
+    });
+  }
+
+  async completeCleanup(jobId: string, leaseToken: string): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const jobs = await tx.execute(sql`
+        update app_private.media_cleanup_jobs
+        set state = 'cleaned', lease_token = null, lease_until = null, completed_at = clock_timestamp(), last_error_code = null
+        where id = ${jobId} and state = 'processing' and lease_token = ${leaseToken} and lease_until > clock_timestamp()
+        returning attempt_id
+      `) as Row[];
+      if (!jobs[0]) throw new MediaFinalizeUnavailableError();
+      const attempts = await tx.execute(sql`
+        update app_private.media_derivative_attempts set state = 'cleaned', cleaned_at = clock_timestamp()
+        where id = ${String(jobs[0].attempt_id)} and state = 'cleanup_pending'
+        returning id
+      `) as Row[];
+      if (!attempts[0]) throw new MediaFinalizeUnavailableError();
+    });
+  }
+
+  async failCleanup(jobId: string, leaseToken: string): Promise<void> {
+    const rows = await this.db.execute(sql`
+      update app_private.media_cleanup_jobs
+      set state = 'failed', lease_token = null, lease_until = null, last_error_code = 'media_cleanup_unavailable'
+      where id = ${jobId} and state = 'processing' and lease_token = ${leaseToken} and lease_until > clock_timestamp()
+      returning id
+    `) as Row[];
+    if (!rows[0]) throw new MediaFinalizeUnavailableError();
+  }
 }

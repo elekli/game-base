@@ -10,6 +10,7 @@ type FilesApi = Readonly<{
   info(path: string): StorageResult<Readonly<{ name: string; size?: number; contentType?: string }>>;
   download(path: string): Readonly<{ asStream(): Promise<Readonly<{ data: ReadableStream<Uint8Array> | null; error: unknown }>> }>;
   upload(path: string, body: Uint8Array, options: Readonly<{ contentType: "image/webp"; upsert: false; cacheControl: "0" }>): StorageResult<Readonly<{ path: string }>>;
+  remove(paths: readonly string[]): StorageResult<readonly { name: string }[]>;
 }>;
 
 function directTusEndpoint(supabaseUrl: string): string {
@@ -153,6 +154,14 @@ export class SupabaseMediaObjectStore implements MediaObjectStore {
     try {
       const { data, error } = await this.files.upload(path, bytes, { contentType: "image/webp", upsert: false, cacheControl: "0" });
       if (error || !data || data.path !== path) throw new MediaStorageUnavailableError();
+    } catch (error) { throw error instanceof MediaStorageUnavailableError ? error : new MediaStorageUnavailableError(); }
+  }
+
+  async deleteDerivative(path: string): Promise<void> {
+    assertDerivativePath(path);
+    try {
+      const { error } = await this.files.remove([path]);
+      if (error && !isNotFound(error)) throw new MediaStorageUnavailableError();
     } catch (error) { throw error instanceof MediaStorageUnavailableError ? error : new MediaStorageUnavailableError(); }
   }
 }
