@@ -110,8 +110,16 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
         if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
         const parameters = new URL(request.url).searchParams;
         const query = originalReadSchema.safeParse(Object.fromEntries(parameters));
-        if (!query.success && parameters.size > 0) throw new PrivateRequestInputError("媒體讀取參數無效。");
+        if (parameters.size > 1 || (!query.success && parameters.size > 0)) throw new PrivateRequestInputError("媒體讀取參數無效。");
         return dependencies.service.issueOriginalRead(owner, { assetId: parsed.data, disposition: query.success ? query.data.disposition : "attachment" });
+      }));
+    },
+    async thumbnail(request: Request, assetId: string) {
+      const rejected = crossOriginResponse(request); if (rejected) return rejected;
+      return withCors(request, await boundary(request, async (owner) => {
+        const parsed = assetIdSchema.safeParse(assetId);
+        if (!parsed.success) throw new PrivateRequestInputError("媒體資產參數無效。");
+        return dependencies.service.issueThumbnailRead(owner, { assetId: parsed.data });
       }));
     },
     async list(request: Request, gameId: string) {
@@ -119,7 +127,11 @@ export function createPrivateMediaHandlers(dependencies: Dependencies) {
       return withCors(request, await boundary(request, async (owner) => {
         const parsed = assetIdSchema.safeParse(gameId);
         if (!parsed.success) throw new PrivateRequestInputError("遊戲參數無效。");
-        return dependencies.service.listGameMedia(owner, { gameId: parsed.data });
+        const result = await dependencies.service.listGameMedia(owner, { gameId: parsed.data });
+        if (result.sourceCover?.thumbnailError || result.items.some((item) => item.thumbnailError)) {
+          afterResponse(() => observeBackgroundFailure(request, "media_thumbnail_read_unavailable"));
+        }
+        return result;
       }));
     },
     async metadata(request: Request, assetId: string) {

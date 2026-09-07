@@ -162,6 +162,17 @@ export function createMediaService(dependencies: Readonly<{ store: MediaStore; o
         return { status: "original_read", ...grant, disposition };
       } catch (error) { throw error instanceof MediaOperationError ? error : new MediaStorageUnavailableError(); }
     },
+    async issueThumbnailRead(owner, query) {
+      void owner;
+      let thumbnail: Awaited<ReturnType<MediaStore["findReadableThumbnail"]>>;
+      try { thumbnail = await dependencies.store.findReadableThumbnail(query.assetId); }
+      catch { throw new MediaReadUnavailableError(); }
+      if (!thumbnail || !dependencies.objects.createThumbnailReadGrant) throw new MediaAssetUnavailableError();
+      try {
+        const grant = await dependencies.objects.createThumbnailReadGrant(thumbnail.path, 300);
+        return { status: "thumbnail_read", ...grant };
+      } catch (error) { throw error instanceof MediaOperationError ? error : new MediaStorageUnavailableError(); }
+    },
     async listGameMedia(owner, query) {
       void owner;
       let gallery: Awaited<ReturnType<MediaStore["listGameMedia"]>>;

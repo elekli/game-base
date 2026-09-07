@@ -1,7 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import {
   MEDIA_MAX_BYTES,
   createMediaBatchUpload,
@@ -48,6 +49,7 @@ function Thumbnail({ item, onError }: Readonly<{ item: MediaGalleryItem; onError
 }
 
 export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
+  const router = useRouter();
   const [gallery, setGallery] = useState<MediaGallery | null>(null);
   const [files, setFiles] = useState<readonly MediaBatchFile[]>([]);
   const [purpose, setPurpose] = useState<MediaPurpose>("gallery_image");
@@ -57,6 +59,7 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
   const [busy, setBusy] = useState(false);
   const [undoAssetId, setUndoAssetId] = useState<string | null>(null);
   const [preview, setPreview] = useState<Readonly<{ url: string; name: string; download: () => Promise<void> }> | null>(null);
+  const galleryLoad = useRef<Promise<boolean> | null>(null);
   const [batch] = useState(() => createMediaBatchUpload({
     identityStore: createSessionMediaIdentityStore(gameId),
     async upload({ idempotencyKey, file, purpose: filePurpose, onProgress, onProcessing, registerCancel }) {
@@ -79,13 +82,19 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
     },
   }));
 
-  async function loadGallery(): Promise<boolean> {
-    try {
-      const response = await fetch(`/api/private/media/games/${gameId}`, { cache: "no-store" });
-      setGallery(await responseJson<MediaGallery>(response));
-      setGalleryError("");
-      return true;
-    } catch (error) { setGalleryError(error instanceof Error ? error.message : "相簿讀取失敗。"); return false; }
+  function loadGallery(): Promise<boolean> {
+    if (galleryLoad.current) return galleryLoad.current;
+    const request = (async () => {
+      try {
+        const response = await fetch(`/api/private/media/games/${gameId}`, { cache: "no-store" });
+        setGallery(await responseJson<MediaGallery>(response));
+        setGalleryError("");
+        return true;
+      } catch (error) { setGalleryError(error instanceof Error ? error.message : "相簿讀取失敗。"); return false; }
+    })();
+    galleryLoad.current = request;
+    void request.finally(() => { if (galleryLoad.current === request) galleryLoad.current = null; });
+    return request;
   }
 
   useEffect(() => {
@@ -97,7 +106,7 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
       if (batch.snapshot().some((item) => ["queued", "uploading", "processing"].includes(item.status))) event.preventDefault();
     };
     window.addEventListener("beforeunload", warnOnLeave);
-    return () => { batch.cancel().catch(() => undefined); unsubscribe(); window.removeEventListener("beforeunload", warnOnLeave); };
+    return () => { batch.cancel().catch((error) => console.error("media_upload_cancel_failed", error)); unsubscribe(); window.removeEventListener("beforeunload", warnOnLeave); };
   }, [batch, gameId]);
 
   useEffect(() => {
@@ -112,7 +121,8 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
 
   async function chooseFiles(selected: FileList | null) {
     if (!selected?.length) return;
-    const accepted = [...selected].filter((file) => {
+    const candidates = purpose === "custom_cover" ? [...selected].slice(0, 1) : [...selected];
+    const accepted = candidates.filter((file) => {
       if (file.size > 0 && file.size <= MEDIA_MAX_BYTES) return true;
       setMessage(file.size === 0 ? `${file.name} 是空檔案。` : `${file.name} 超過 50 MB 上限。`);
       return false;
@@ -122,13 +132,15 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
     setMessage("批次已開始；離開頁面前請等候原檔保存完成。");
     await batch.start();
     await loadGallery();
+    if (purpose === "custom_cover") router.refresh();
   }
 
-  async function action(run: () => Promise<void>, pending: string) {
+  async function action(run: () => Promise<void>, pending: string, onCommitted?: () => void) {
     if (busy) return false;
     setBusy(true); setMessage(pending);
     try {
       await run();
+      onCommitted?.();
       if (await loadGallery()) { setMessage("已完成。"); return true; }
       setMessage("已儲存，但重新整理相簿失敗；目前輸入內容已保留。");
       return false;
@@ -156,7 +168,19 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
   }
 
   async function remove(item: MediaGalleryItem) {
-    if (await action(() => post(`/api/private/media/assets/${item.asset.id}/remove`), "正在移除媒體……")) setUndoAssetId(item.asset.id);
+    await action(
+      () => post(`/api/private/media/assets/${item.asset.id}/remove`),
+      "正在移除媒體……",
+      () => {
+        setUndoAssetId(item.asset.id);
+        setGallery((current) => current ? {
+          ...current,
+          manualCoverAssetId: current.manualCoverAssetId === item.asset.id ? null : current.manualCoverAssetId,
+          items: current.items.filter((candidate) => candidate.asset.id !== item.asset.id),
+        } : current);
+        router.refresh();
+      },
+    );
   }
 
   const failedCount = files.filter((file) => file.status === "failed").length;
@@ -176,8 +200,8 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
         {([['gallery_image', '相簿照片'], ['custom_cover', '自訂封面'], ['attachment', '遊戲附件']] as const).map(([value, label]) => <label key={value} className={`flex min-h-12 cursor-pointer items-center justify-center rounded-xl border px-2 text-center text-sm font-semibold focus-within:ring-2 focus-within:ring-emerald-700 ${purpose === value ? "border-emerald-800 bg-emerald-900 text-white" : "border-emerald-950/15 bg-white text-emerald-950"}`}><input className="sr-only" type="radio" name="media-purpose" checked={purpose === value} onChange={() => setPurpose(value)} />{label}</label>)}
       </fieldset>
       <label className="mt-3 flex min-h-14 cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed border-emerald-700 bg-emerald-50 px-4 text-center font-semibold text-emerald-950 hover:bg-emerald-100 focus-within:ring-2 focus-within:ring-emerald-700">
-        <input className="sr-only" type="file" multiple accept={purpose === "attachment" ? undefined : "image/png,image/jpeg,image/gif,image/webp"} onChange={(event) => { void chooseFiles(event.currentTarget.files); event.currentTarget.value = ""; }} />
-        選取多個檔案 <span className="ml-2 text-xs font-normal">每檔上限 50 MB</span>
+        <input className="sr-only" type="file" multiple={purpose !== "custom_cover"} accept={purpose === "attachment" ? undefined : "image/png,image/jpeg,image/gif,image/webp"} onChange={(event) => { void chooseFiles(event.currentTarget.files); event.currentTarget.value = ""; }} />
+        {purpose === "custom_cover" ? "選取一個封面檔案" : "選取多個檔案"} <span className="ml-2 text-xs font-normal">每檔上限 50 MB</span>
       </label>
 
       {files.length > 0 && <div aria-label="批次上傳狀態" className="mt-4 space-y-2">{files.map((file) => <div key={file.idempotencyKey} className="rounded-xl border border-stone-200 bg-white p-3"><div className="flex items-start justify-between gap-3"><span className="min-w-0 truncate text-sm font-medium">{file.file.name}</span><span className={`shrink-0 text-xs font-bold ${file.status === "failed" ? "text-rose-700" : file.status === "succeeded" ? "text-emerald-700" : "text-amber-700"}`}>{statusLabel[file.status]}</span></div>{file.status === "uploading" && <progress aria-label={`${file.file.name} 上傳進度`} className="mt-2 h-2 w-full accent-emerald-700" max={file.file.size} value={file.uploadedBytes} />}{file.error && <p role="alert" className="mt-2 text-xs text-rose-700">{file.error}</p>}</div>)}</div>}
@@ -188,13 +212,13 @@ export function MediaGalleryClient({ gameId }: Readonly<{ gameId: string }>) {
     </div>
 
     <div className="border-t border-emerald-950/10 px-4 py-6 sm:px-6">
-      <div className="flex items-center justify-between gap-3"><div><h3 className="text-lg font-semibold">相簿</h3><p className="text-xs text-stone-500">最新上傳排在前面</p></div>{gallery?.manualCoverAssetId && <button disabled={busy} className="min-h-11 rounded-xl border border-emerald-800 px-3 text-sm font-semibold text-emerald-900" onClick={() => void action(() => post(`/api/private/media/games/${gameId}/cover`, { mode: "source" }), "正在恢復來源封面……")}>恢復來源封面</button>}</div>
-      {undoAssetId && <div role="status" className="mt-3 flex min-h-12 items-center justify-between gap-3 rounded-xl bg-amber-50 px-3 text-sm text-amber-950">媒體已移除。<button className="font-semibold underline" onClick={() => void action(() => post(`/api/private/media/assets/${undoAssetId}/restore`), "正在還原媒體……").then((ok) => { if (ok) setUndoAssetId(null); })}>立即還原</button></div>}
-      {images.length === 0 ? <p className="mt-4 rounded-2xl bg-stone-100 px-4 py-8 text-center text-sm text-stone-600">還沒有相簿照片。一次選取多張，系統會逐檔保存。</p> : <div className="mt-4 grid grid-cols-2 gap-3">{images.map((item) => <ImageCard key={item.asset.id} item={item} busy={busy} download={() => download(item)} preview={() => previewOriginal(item)} remove={() => remove(item)} save={(caption) => action(() => post(`/api/private/media/assets/${item.asset.id}/metadata`, { caption }), "正在儲存圖片說明……")} setCover={() => action(() => post(`/api/private/media/games/${gameId}/cover`, { mode: "manual", assetId: item.asset.id }), "正在更換封面……")} retry={() => action(() => post(`/api/private/media/assets/${item.asset.id}/retry-thumbnail`), "正在重試縮圖……")} reload={loadGallery} isCover={gallery?.manualCoverAssetId === item.asset.id} />)}</div>}
-      {gallery?.sourceCover && <div className="mt-4 rounded-2xl border border-stone-200 bg-white p-3"><p className="mb-2 text-sm font-semibold">來源封面</p><div className="h-28 overflow-hidden rounded-xl"><Thumbnail item={gallery.sourceCover} /></div><div className="mt-2 grid grid-cols-2 gap-2"><button className="min-h-11 rounded-xl border border-emerald-800 text-xs font-semibold text-emerald-900" onClick={() => void previewOriginal(gallery.sourceCover!)}>預覽原檔</button><button className="min-h-11 rounded-xl border border-emerald-800 text-xs font-semibold text-emerald-900" onClick={() => void download(gallery.sourceCover!)}>下載原檔</button>{gallery.sourceCover.thumbnail?.state === "failed" ? <button className="min-h-11 rounded-xl border border-rose-700 text-xs font-semibold text-rose-800" onClick={() => void action(() => post(`/api/private/media/assets/${gallery.sourceCover!.asset.id}/retry-thumbnail`), "正在重試來源封面縮圖……")}>重試縮圖</button> : gallery.sourceCover.thumbnailError && <button className="min-h-11 rounded-xl border border-amber-700 text-xs font-semibold text-amber-900" onClick={() => void loadGallery()}>重新載入縮圖</button>}</div></div>}
+      <div className="flex items-center justify-between gap-3"><div><h3 className="text-lg font-semibold">相簿</h3><p className="text-xs text-stone-500">最新上傳排在前面</p></div>{gallery?.manualCoverAssetId && <button disabled={busy} className="min-h-11 rounded-xl border border-emerald-800 px-3 text-sm font-semibold text-emerald-900" onClick={() => void action(() => post(`/api/private/media/games/${gameId}/cover`, { mode: "source" }), "正在恢復來源封面……", () => router.refresh())}>恢復來源封面</button>}</div>
+      {images.length === 0 ? <p className="mt-4 rounded-2xl bg-stone-100 px-4 py-8 text-center text-sm text-stone-600">還沒有相簿照片。一次選取多張，系統會逐檔保存。</p> : <div className="mt-4 grid grid-cols-2 gap-3">{images.map((item) => <ImageCard key={item.asset.id} item={item} busy={busy} download={() => download(item)} preview={() => previewOriginal(item)} remove={() => remove(item)} save={(caption) => action(() => post(`/api/private/media/assets/${item.asset.id}/metadata`, { caption }), "正在儲存圖片說明……")} setCover={() => action(() => post(`/api/private/media/games/${gameId}/cover`, { mode: "manual", assetId: item.asset.id }), "正在更換封面……", () => router.refresh())} retry={() => action(() => post(`/api/private/media/assets/${item.asset.id}/retry-thumbnail`), "正在重試縮圖……")} reload={loadGallery} isCover={gallery?.manualCoverAssetId === item.asset.id} />)}</div>}
+      {gallery?.sourceCover && <div className="mt-4 rounded-2xl border border-stone-200 bg-white p-3"><p className="mb-2 text-sm font-semibold">來源封面</p><div className="h-28 overflow-hidden rounded-xl"><Thumbnail item={gallery.sourceCover} onError={() => void loadGallery()} /></div><div className="mt-2 grid grid-cols-2 gap-2"><button className="min-h-11 rounded-xl border border-emerald-800 text-xs font-semibold text-emerald-900" onClick={() => void previewOriginal(gallery.sourceCover!)}>預覽原檔</button><button className="min-h-11 rounded-xl border border-emerald-800 text-xs font-semibold text-emerald-900" onClick={() => void download(gallery.sourceCover!)}>下載原檔</button>{gallery.sourceCover.thumbnail?.state === "failed" ? <button className="min-h-11 rounded-xl border border-rose-700 text-xs font-semibold text-rose-800" onClick={() => void action(() => post(`/api/private/media/assets/${gallery.sourceCover!.asset.id}/retry-thumbnail`), "正在重試來源封面縮圖……")}>重試縮圖</button> : gallery.sourceCover.thumbnailError && <button className="min-h-11 rounded-xl border border-amber-700 text-xs font-semibold text-amber-900" onClick={() => void loadGallery()}>重新載入縮圖</button>}</div></div>}
     </div>
 
     <div className="border-t border-emerald-950/10 px-4 py-6 sm:px-6"><h3 className="text-lg font-semibold">遊戲附件</h3>{attachments.length === 0 ? <p className="mt-3 text-sm text-stone-600">尚未加入規則書或玩家輔助檔案。</p> : <div className="mt-3 space-y-3">{attachments.map((item) => <AttachmentCard key={item.asset.id} item={item} busy={busy} save={(body) => action(() => post(`/api/private/media/assets/${item.asset.id}/metadata`, body), "正在儲存附件說明……")} download={() => download(item)} remove={() => remove(item)} />)}</div>}</div>
+    {undoAssetId && <div role="status" className="fixed inset-x-4 bottom-4 z-40 flex min-h-12 items-center justify-between gap-3 rounded-xl bg-amber-100 px-4 text-sm text-amber-950 shadow-xl sm:left-auto sm:w-96">媒體已移除。<button className="font-semibold underline" onClick={() => void action(() => post(`/api/private/media/assets/${undoAssetId}/restore`), "正在還原媒體……", () => setUndoAssetId(null))}>立即還原</button></div>}
     {preview && <div role="dialog" aria-modal="true" aria-label={`${preview.name} 原檔預覽`} className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/75 p-4"><div className="max-h-full w-full max-w-lg overflow-auto rounded-2xl bg-white p-4"><Image unoptimized src={preview.url} alt={preview.name} width={1200} height={900} className="max-h-[70vh] w-full object-contain" /><div className="mt-3 grid grid-cols-2 gap-2"><button className="min-h-11 rounded-xl border" onClick={() => setPreview(null)}>關閉預覽</button><button className="min-h-11 rounded-xl bg-emerald-900 text-white" onClick={() => void preview.download()}>下載原檔</button></div></div></div>}
   </section>;
 }

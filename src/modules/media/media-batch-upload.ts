@@ -25,9 +25,10 @@ export type MediaBatchUploader = (input: Readonly<{
 
 type Listener = (files: readonly MediaBatchFile[]) => void;
 export type MediaBatchIdentityStore = Readonly<{
-  find(file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"], occurrence?: number): string | null;
+  find(file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"]): string | null;
   remember(file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"], idempotencyKey: string): void;
   forget?(file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"], idempotencyKey: string): void;
+  discard?(file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"]): void;
 }>;
 
 export function createSessionMediaIdentityStore(namespace: string): MediaBatchIdentityStore {
@@ -39,33 +40,39 @@ export function createSessionMediaIdentityStore(namespace: string): MediaBatchId
     console.warn("media_upload_identity_persistence_unavailable");
   };
   const signature = (file: MediaBatchFile["file"], purpose: MediaBatchFile["purpose"]) => JSON.stringify([namespace, purpose, file.name, file.size, file.type, file.lastModified ?? null]);
-  const read = (): Record<string, string[]> => {
+  const read = (): Record<string, string> => {
     try {
       const parsed = JSON.parse(sessionStorage.getItem("puizeru:media-upload-identities") ?? "{}") as Record<string, unknown>;
       return Object.fromEntries(Object.entries(parsed).flatMap(([key, value]) => {
-        if (typeof value === "string") return [[key, [value]]];
-        if (Array.isArray(value) && value.every((item) => typeof item === "string")) return [[key, value]];
+        if (typeof value === "string") return [[key, value]];
+        if (Array.isArray(value) && value.length === 1 && typeof value[0] === "string") return [[key, value[0]]];
         return [];
       }));
     }
-    catch { warnUnavailable(); return Object.fromEntries([...fallback.entries()].map(([key, value]) => [key.replace(/:[0-9]+$/, ""), [value]])); }
+    catch { warnUnavailable(); return Object.fromEntries(fallback); }
   };
   return {
-    find(file, purpose, occurrence = 0) { return read()[signature(file, purpose)]?.[occurrence] ?? fallback.get(`${signature(file, purpose)}:${occurrence}`) ?? null; },
+    find(file, purpose) { return read()[signature(file, purpose)] ?? fallback.get(signature(file, purpose)) ?? null; },
     remember(file, purpose, key) {
       const id = signature(file, purpose);
-      const existing = read()[id] ?? [];
-      if (existing.includes(key)) return;
-      fallback.set(`${id}:${existing.length}`, key);
-      try { sessionStorage.setItem("puizeru:media-upload-identities", JSON.stringify({ ...read(), [id]: [...existing, key] })); } catch { warnUnavailable(); }
+      fallback.set(id, key);
+      try { sessionStorage.setItem("puizeru:media-upload-identities", JSON.stringify({ ...read(), [id]: key })); } catch { warnUnavailable(); }
     },
     forget(file, purpose, key) {
       const id = signature(file, purpose);
-      for (const fallbackKey of [...fallback.keys()]) if (fallback.get(fallbackKey) === key) fallback.delete(fallbackKey);
+      if (fallback.get(id) === key) fallback.delete(id);
       try {
         const stored = read();
-        const remaining = (stored[id] ?? []).filter((candidate) => candidate !== key);
-        if (remaining.length) stored[id] = remaining; else delete stored[id];
+        if (stored[id] === key) delete stored[id];
+        sessionStorage.setItem("puizeru:media-upload-identities", JSON.stringify(stored));
+      } catch { warnUnavailable(); }
+    },
+    discard(file, purpose) {
+      const id = signature(file, purpose);
+      fallback.delete(id);
+      try {
+        const stored = read();
+        delete stored[id];
         sessionStorage.setItem("puizeru:media-upload-identities", JSON.stringify(stored));
       } catch { warnUnavailable(); }
     },
@@ -93,6 +100,7 @@ export function createMediaBatchUpload(input: Readonly<{
   let running: Promise<void> | null = null;
   let cancelled = false;
   const activeCancels = new Map<string, () => Promise<void>>();
+  const cancelSignals = new Map<string, (error: Error) => void>();
   const listeners = new Set<Listener>();
   const emit = () => listeners.forEach((listener) => listener(files));
   const update = (key: string, patch: Partial<MediaBatchFile>) => {
@@ -104,25 +112,27 @@ export function createMediaBatchUpload(input: Readonly<{
     if (cancelled || item.status !== "queued") return;
     update(item.idempotencyKey, { status: "uploading", error: null });
     try {
-      const result = await input.upload({
+      const cancellation = new Promise<never>((_resolve, reject) => cancelSignals.set(item.idempotencyKey, reject));
+      const result = await Promise.race([input.upload({
         idempotencyKey: item.idempotencyKey,
         file: item.file,
         purpose: item.purpose,
         onProgress: (uploadedBytes) => update(item.idempotencyKey, { uploadedBytes }),
         onProcessing: () => update(item.idempotencyKey, { status: "processing" }),
         registerCancel: (cancel) => activeCancels.set(item.idempotencyKey, cancel),
-      });
+      }), cancellation]);
       if (cancelled) update(item.idempotencyKey, { status: "cancelled" });
       else {
         input.identityStore?.forget?.(item.file, item.purpose, item.idempotencyKey);
         update(item.idempotencyKey, { status: "succeeded", assetId: result.assetId, thumbnailState: result.thumbnailState });
       }
     } catch (error) {
+      const cancelFailed = error instanceof Error && error.message === "media_upload_cancel_failed";
       update(item.idempotencyKey, {
-        status: cancelled ? "cancelled" : "failed",
-        error: cancelled ? null : error instanceof Error ? error.message : "檔案上傳失敗，請重試。",
+        status: cancelFailed ? "failed" : cancelled ? "cancelled" : "failed",
+        error: cancelFailed ? "暫停上傳失敗，請重新整理後確認狀態。" : cancelled ? null : error instanceof Error ? error.message : "檔案上傳失敗，請重試。",
       });
-    } finally { activeCancels.delete(item.idempotencyKey); }
+    } finally { activeCancels.delete(item.idempotencyKey); cancelSignals.delete(item.idempotencyKey); }
   }
 
   async function drain() {
@@ -146,15 +156,17 @@ export function createMediaBatchUpload(input: Readonly<{
   return {
     add(selected: readonly MediaBatchFile["file"][], purpose: MediaBatchFile["purpose"] = "gallery_image") {
       const activeKeys = new Set(files.filter((item) => ["queued", "uploading", "processing"].includes(item.status)).map((item) => item.idempotencyKey));
-      const occurrences = new Map<string, number>();
+      const signatures = selected.map((file) => JSON.stringify([purpose, file.name, file.size, file.type, file.lastModified ?? null]));
+      const ambiguous = new Set(signatures.filter((signature, index) => signatures.indexOf(signature) !== index || signatures.lastIndexOf(signature) !== index));
+      if (ambiguous.size) console.warn("media_upload_identity_ambiguous");
       files = [...files, ...selected.flatMap((file) => {
         const signature = JSON.stringify([purpose, file.name, file.size, file.type, file.lastModified ?? null]);
-        const occurrence = occurrences.get(signature) ?? 0;
-        occurrences.set(signature, occurrence + 1);
-        const idempotencyKey = input.identityStore?.find(file, purpose, occurrence) ?? createId(file, purpose);
+        const persistIdentity = !ambiguous.has(signature);
+        if (!persistIdentity) input.identityStore?.discard?.(file, purpose);
+        const idempotencyKey = (persistIdentity ? input.identityStore?.find(file, purpose) : null) ?? createId(file, purpose);
         if (activeKeys.has(idempotencyKey)) return [];
         activeKeys.add(idempotencyKey);
-        input.identityStore?.remember(file, purpose, idempotencyKey);
+        if (persistIdentity) input.identityStore?.remember(file, purpose, idempotencyKey);
         return [{ idempotencyKey, file, purpose, status: "queued" as const, uploadedBytes: 0,
           error: null, assetId: null, thumbnailState: null }];
       })];
@@ -168,9 +180,17 @@ export function createMediaBatchUpload(input: Readonly<{
     },
     async cancel() {
       cancelled = true;
-      await Promise.allSettled([...activeCancels.values()].map((cancel) => cancel()));
-      files = files.map((item) => ["queued", "uploading", "processing"].includes(item.status) ? { ...item, status: "cancelled" } : item);
+      const entries = [...activeCancels.entries()];
+      const results = await Promise.allSettled(entries.map(([, cancel]) => cancel()));
+      const failedKeys = new Set(results.flatMap((result, index) => result.status === "rejected" ? [entries[index]![0]] : []));
+      for (const [key, reject] of cancelSignals) reject(new Error(failedKeys.has(key) ? "media_upload_cancel_failed" : "media_upload_cancelled"));
+      files = files.map((item) => ["queued", "uploading", "processing"].includes(item.status) ? {
+        ...item,
+        status: failedKeys.has(item.idempotencyKey) ? "failed" : "cancelled",
+        error: failedKeys.has(item.idempotencyKey) ? "暫停上傳失敗，請重新整理後確認狀態。" : null,
+      } : item);
       emit();
+      if (failedKeys.size) throw new Error("media_upload_cancel_failed");
     },
     snapshot: () => files,
     subscribe(listener: Listener) {

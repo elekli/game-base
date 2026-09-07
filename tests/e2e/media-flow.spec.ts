@@ -10,6 +10,7 @@ test("#65 390px 相簿 fixture：附件短效下載請求與回應", async ({ pa
   const gameIdPattern = /\/games\/([^/]+)$/;
   let failedOnce = false;
   let originalReadCount = 0;
+  const removedAssetIds = new Set<string>();
   const originalDispositions: string[] = [];
   const image = (id: string, state: "pending" | "failed" | "ready", caption: string) => ({
     asset: { id, gameId: "11111111-1111-4111-8111-111111111111", purpose: "gallery_image", originalFileName: `${caption}.png`, actualMimeType: "image/png", byteSize: 100, width: 640, height: 480, removedAt: null, createdAt: "2026-09-07T00:00:00.000Z", caption, displayName: null, description: null },
@@ -27,7 +28,7 @@ test("#65 390px 相簿 fixture：附件短效下載請求與回應", async ({ pa
   await page.route("**/api/private/media/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    if (request.method() === "GET" && /\/media\/games\//.test(path)) return route.fulfill({ json: { gameId: path.split("/").at(-1), manualCoverAssetId: null, sourceCover: null, items } });
+    if (request.method() === "GET" && /\/media\/games\//.test(path)) return route.fulfill({ json: { gameId: path.split("/").at(-1), manualCoverAssetId: null, sourceCover: null, items: items.filter((item) => !removedAssetIds.has(item.asset.id)) } });
     if (path.endsWith("/uploads/begin")) {
       const body = request.postDataJSON() as { originalFileName: string };
       if (body.originalFileName === "broken.png" && !failedOnce) { failedOnce = true; return route.fulfill({ status: 503, json: { message: "模擬網路中斷" } }); }
@@ -38,6 +39,9 @@ test("#65 390px 相簿 fixture：附件短效下載請求與回應", async ({ pa
       originalDispositions.push(new URL(request.url()).searchParams.get("disposition") ?? "");
       return route.fulfill({ json: { url: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3C/svg%3E", expiresAt: "2099-01-01T00:01:00.000Z", disposition: "attachment" } });
     }
+    const assetId = path.split("/").at(-2);
+    if (request.method() === "POST" && path.endsWith("/remove") && assetId) { removedAssetIds.add(assetId); return route.fulfill({ json: {} }); }
+    if (request.method() === "POST" && path.endsWith("/restore") && assetId) { removedAssetIds.delete(assetId); return route.fulfill({ json: {} }); }
     return route.fulfill({ json: {} });
   });
 
@@ -66,6 +70,9 @@ test("#65 390px 相簿 fixture：附件短效下載請求與回應", async ({ pa
 
   await page.getByRole("button", { name: "移除" }).first().click();
   await expect(page.getByRole("button", { name: "立即還原" })).toBeVisible();
+  await expect(page.getByText("桌遊夜", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "立即還原" }).click();
+  await expect(page.getByText("桌遊夜", { exact: true })).toBeVisible();
 
   const chooser = page.getByLabel(/選取多個檔案/);
   await chooser.setInputFiles([

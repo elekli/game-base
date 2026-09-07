@@ -3,6 +3,7 @@ import postgres from "postgres";
 import sharp from "sharp";
 import { createDatabase } from "@/adapters/database";
 import { PostgresMediaStore } from "@/adapters/postgres-media-store";
+import { PostgresGameStore } from "@/adapters/database-game-store";
 import {
   MediaAssetUnavailableError,
   MediaStoredObjectInvalidError,
@@ -740,7 +741,7 @@ describe("MediaService 與真 PostgreSQL", () => {
     const failing: MediaStore = {
       begin: actual.begin.bind(actual), renewGrant: actual.renewGrant.bind(actual), claimFinalize: actual.claimFinalize.bind(actual),
       releaseIncomplete: actual.releaseIncomplete.bind(actual), rejectInvalid: actual.rejectInvalid.bind(actual), completeFinalize: actual.completeFinalize.bind(actual),
-      findReadableOriginal: actual.findReadableOriginal.bind(actual), claimThumbnail: actual.claimThumbnail.bind(actual),
+      findReadableOriginal: actual.findReadableOriginal.bind(actual), findReadableThumbnail: actual.findReadableThumbnail.bind(actual), claimThumbnail: actual.claimThumbnail.bind(actual),
       markThumbnailUploaded: actual.markThumbnailUploaded.bind(actual), failThumbnail: actual.failThumbnail.bind(actual), retryThumbnail: actual.retryThumbnail.bind(actual),
       listGameMedia: actual.listGameMedia.bind(actual), updateMediaMetadata: actual.updateMediaMetadata.bind(actual),
       selectManualCover: actual.selectManualCover.bind(actual), useSourceCover: actual.useSourceCover.bind(actual),
@@ -836,6 +837,7 @@ describe("MediaService 與真 PostgreSQL", () => {
     const image = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
     await service.finalizeMediaUpload(owner, { idempotencyKey: key });
     await service.selectManualCover(owner, { gameId, assetId: image.assetId });
+    await expect(new PostgresGameStore(database.db).get(gameId)).resolves.toMatchObject({ coverAssetId: image.assetId });
 
     await expect(service.removeMedia(owner, { assetId: image.assetId })).resolves.toMatchObject({
       asset: { id: image.assetId, removedAt: expect.any(String) },
@@ -853,5 +855,6 @@ describe("MediaService 與真 PostgreSQL", () => {
     const restored = await service.listGameMedia(owner, { gameId });
     expect(restored.manualCoverAssetId).toBeNull();
     expect(restored.items.map((item) => item.asset.id)).toContain(image.assetId);
+    await expect(new PostgresGameStore(database.db).get(gameId)).resolves.toMatchObject({ coverAssetId: null });
   });
 });

@@ -38,6 +38,7 @@ export type UploadGrant = Readonly<{
 }>;
 
 export type OriginalMediaRead = Readonly<{ status: "original_read"; url: string; expiresAt: string; disposition: "inline" | "attachment" }>;
+export type ThumbnailMediaRead = Readonly<{ status: "thumbnail_read"; url: string; expiresAt: string }>;
 export type MediaRemovalResult = Readonly<{ asset: MediaAsset; manualCoverAssetId: string | null }>;
 
 export type MediaAsset = Readonly<{
@@ -93,6 +94,7 @@ export type MediaService = Readonly<{
   finalizeMediaUpload(owner: OwnerIdentity, command: FinalizeMediaUploadCommand): Promise<FinalizeMediaUploadResult>;
   retryThumbnail(owner: OwnerIdentity, command: RetryThumbnailCommand): Promise<MediaDerivative>;
   issueOriginalRead(owner: OwnerIdentity, query: Readonly<{ assetId: string; disposition?: "inline" | "attachment" }>): Promise<OriginalMediaRead>;
+  issueThumbnailRead(owner: OwnerIdentity, query: Readonly<{ assetId: string }>): Promise<ThumbnailMediaRead>;
   listGameMedia(owner: OwnerIdentity, query: Readonly<{ gameId: string }>): Promise<MediaGallery>;
   updateMediaMetadata(owner: OwnerIdentity, command: Readonly<{ assetId: string; caption?: string | null; displayName?: string | null; description?: string | null }>): Promise<MediaAsset>;
   selectManualCover(owner: OwnerIdentity, command: Readonly<{ gameId: string; assetId: string }>): Promise<Readonly<{ manualCoverAssetId: string }>>;

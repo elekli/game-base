@@ -256,6 +256,23 @@ export class PostgresMediaStore implements MediaStore {
     return rows[0] ? { path: String(rows[0].original_object_path), fileName: String(rows[0].original_file_name) } : null;
   }
 
+  async findReadableThumbnail(assetId: string): Promise<Readonly<{ path: string }> | null> {
+    const rows = await this.db.execute(sql`
+      select derivative.current_object_path
+      from app_private.media_derivatives derivative
+      join app_private.media_assets asset on asset.id = derivative.asset_id
+      join app_private.media_ingests ingest on ingest.id = asset.ingest_id
+      join app_private.games game on game.id = asset.game_id
+      where asset.id = ${assetId}
+        and asset.authority_state = 'verified' and asset.removed_at is null and asset.superseded_at is null
+        and asset.purpose <> 'attachment' and ingest.state = 'finalized' and game.trashed_at is null
+        and derivative.authority_state = 'verified' and derivative.spec = ${MEDIA_THUMBNAIL_SPEC}
+        and derivative.state = 'ready' and derivative.current_object_path is not null
+      limit 1
+    `) as Row[];
+    return rows[0] ? { path: String(rows[0].current_object_path) } : null;
+  }
+
   async claimThumbnail(assetId: string, lease: Readonly<{ token: string; durationMs?: number }>) {
     return this.db.transaction(async (tx) => {
       const rows = await tx.execute(sql`
@@ -423,40 +440,43 @@ export class PostgresMediaStore implements MediaStore {
   }
 
   async listGameMedia(gameId: string) {
-    const games = await this.db.execute(sql`
-      select game.manual_cover_asset_id, identity.source_cover_asset_id
-      from app_private.games game
-      left join app_private.external_game_identities identity on identity.id = game.external_game_identity_id
-      where game.id = ${gameId} and game.trashed_at is null
-    `) as Row[];
-    if (!games[0]) throw new MediaGameUnavailableError();
-    const rows = await this.db.execute(sql`
-      select asset.id as asset_id, asset.game_id, asset.purpose, asset.original_file_name,
-        asset.actual_mime_type, asset.byte_size, asset.width, asset.height, asset.removed_at,
-        asset.created_at, asset.caption, asset.display_name, asset.description,
-        derivative.spec, derivative.state as derivative_state, derivative.current_object_path
-      from app_private.media_assets asset
-      join app_private.media_ingests ingest on ingest.id = asset.ingest_id and ingest.state = 'finalized'
-      left join app_private.media_derivatives derivative on derivative.asset_id = asset.id
-        and derivative.authority_state = 'verified' and derivative.spec = ${MEDIA_THUMBNAIL_SPEC}
-      where asset.game_id = ${gameId} and asset.authority_state = 'verified'
-        and asset.removed_at is null and asset.superseded_at is null
-      order by asset.created_at desc, asset.id
-    `) as Row[];
-    const mapped = rows.map((row) => ({
-      asset: assetFrom(row),
-      thumbnail: row.spec === null || row.spec === undefined ? null : {
-        assetId: String(row.asset_id), spec: MEDIA_THUMBNAIL_SPEC,
-        state: row.derivative_state as MediaDerivative["state"],
-      },
-      thumbnailPath: row.derivative_state === "ready" && row.current_object_path ? String(row.current_object_path) : null,
-    }));
-    const sourceId = games[0].source_cover_asset_id === null ? null : String(games[0].source_cover_asset_id);
-    return {
-      manualCoverAssetId: games[0].manual_cover_asset_id === null ? null : String(games[0].manual_cover_asset_id),
-      sourceCover: sourceId ? mapped.find((item) => item.asset.id === sourceId) ?? null : null,
-      items: mapped.filter((item) => item.asset.id !== sourceId),
-    };
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`set transaction isolation level repeatable read read only`);
+      const games = await tx.execute(sql`
+        select game.manual_cover_asset_id, identity.source_cover_asset_id
+        from app_private.games game
+        left join app_private.external_game_identities identity on identity.id = game.external_game_identity_id
+        where game.id = ${gameId} and game.trashed_at is null
+      `) as Row[];
+      if (!games[0]) throw new MediaGameUnavailableError();
+      const rows = await tx.execute(sql`
+        select asset.id as asset_id, asset.game_id, asset.purpose, asset.original_file_name,
+          asset.actual_mime_type, asset.byte_size, asset.width, asset.height, asset.removed_at,
+          asset.created_at, asset.caption, asset.display_name, asset.description,
+          derivative.spec, derivative.state as derivative_state, derivative.current_object_path
+        from app_private.media_assets asset
+        join app_private.media_ingests ingest on ingest.id = asset.ingest_id and ingest.state = 'finalized'
+        left join app_private.media_derivatives derivative on derivative.asset_id = asset.id
+          and derivative.authority_state = 'verified' and derivative.spec = ${MEDIA_THUMBNAIL_SPEC}
+        where asset.game_id = ${gameId} and asset.authority_state = 'verified'
+          and asset.removed_at is null and asset.superseded_at is null
+        order by asset.created_at desc, asset.id
+      `) as Row[];
+      const mapped = rows.map((row) => ({
+        asset: assetFrom(row),
+        thumbnail: row.spec === null || row.spec === undefined ? null : {
+          assetId: String(row.asset_id), spec: MEDIA_THUMBNAIL_SPEC,
+          state: row.derivative_state as MediaDerivative["state"],
+        },
+        thumbnailPath: row.derivative_state === "ready" && row.current_object_path ? String(row.current_object_path) : null,
+      }));
+      const sourceId = games[0].source_cover_asset_id === null ? null : String(games[0].source_cover_asset_id);
+      return {
+        manualCoverAssetId: games[0].manual_cover_asset_id === null ? null : String(games[0].manual_cover_asset_id),
+        sourceCover: sourceId ? mapped.find((item) => item.asset.id === sourceId) ?? null : null,
+        items: mapped.filter((item) => item.asset.id !== sourceId),
+      };
+    });
   }
 
   async updateMediaMetadata(command: Readonly<{ assetId: string; caption?: string | null; displayName?: string | null; description?: string | null }>): Promise<MediaAsset | null> {

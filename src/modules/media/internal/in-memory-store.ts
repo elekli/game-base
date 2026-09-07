@@ -117,6 +117,12 @@ export function createInMemoryMediaStore(input: Readonly<{ activeGameIds: readon
       const ingest = [...ingests.values()].find((candidate) => candidate.reservedAssetId === assetId && candidate.state === "finalized");
       return ingest ? { path: ingest.originalObjectPath, fileName: result.asset.originalFileName } : null;
     },
+    async findReadableThumbnail(assetId) {
+      const result = [...results.values()].find((candidate) => candidate.asset.id === assetId);
+      return result?.asset.removedAt === null && thumbnails.get(assetId)?.state === "ready"
+        ? { path: `thumbnails/${assetId}/current.webp` }
+        : null;
+    },
     async claimThumbnail(assetId, lease) {
       const job = thumbnails.get(assetId);
       if (!job) return { status: results.has(assetId) ? "not_found" as const : "not_found" as const };

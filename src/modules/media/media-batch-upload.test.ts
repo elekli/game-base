@@ -78,12 +78,13 @@ describe("media batch upload", () => {
     expect(createId).toHaveBeenCalledTimes(1);
   });
 
-  it("成功後移除 intent，且相同中繼資料的兩次選取各自保留", async () => {
-    const identities = new Map<string, string[]>();
+  it("相同中繼資料的兩個檔案各自上傳，且不沿用可能對錯內容的持久身分", async () => {
+    const identities = new Map<string, string>();
     const identityStore = {
-      find(selected: { name: string }, purpose: string, occurrence = 0) { return identities.get(`${purpose}:${selected.name}`)?.[occurrence] ?? null; },
-      remember(selected: { name: string }, purpose: string, key: string) { const id = `${purpose}:${selected.name}`; identities.set(id, [...(identities.get(id) ?? []), key]); },
-      forget(selected: { name: string }, purpose: string, key: string) { const id = `${purpose}:${selected.name}`; identities.set(id, (identities.get(id) ?? []).filter((candidate) => candidate !== key)); },
+      find(selected: { name: string }, purpose: string) { return identities.get(`${purpose}:${selected.name}`) ?? null; },
+      remember(selected: { name: string }, purpose: string, key: string) { identities.set(`${purpose}:${selected.name}`, key); },
+      forget(selected: { name: string }, purpose: string, key: string) { const id = `${purpose}:${selected.name}`; if (identities.get(id) === key) identities.delete(id); },
+      discard(selected: { name: string }, purpose: string) { identities.delete(`${purpose}:${selected.name}`); },
     };
     let keyNumber = 1;
     const batch = createMediaBatchUpload({
@@ -94,10 +95,10 @@ describe("media batch upload", () => {
     batch.add([file("same.png"), file("same.png")]);
     expect(batch.snapshot()).toHaveLength(2);
     await batch.start();
-    expect([...identities.values()].flat()).toEqual([]);
+    expect([...identities.values()]).toEqual([]);
   });
 
-  it("同一批同中繼資料的兩個檔案各有可續傳身分，成功不會刪掉另一個 intent", async () => {
+  it("同中繼資料檔案重新掛載後產生新身分，不會因選取順序反轉而混用續傳內容", async () => {
     const keys = ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"];
     let index = 0;
     const identityStore = createSessionLikeIdentityStore();
@@ -133,21 +134,38 @@ describe("media batch upload", () => {
     expect(transportCancel).toHaveBeenCalledOnce();
     expect(batch.snapshot()[0]?.status).toBe("cancelled");
   });
+
+  it("transport 取消失敗會具名拒絕且解除批次執行，不會假報已暫停", async () => {
+    const batch = createMediaBatchUpload({
+      upload: vi.fn(async ({ registerCancel }) => {
+        registerCancel(async () => { throw new Error("transport refused abort"); });
+        await new Promise(() => undefined);
+        return { assetId: "unreachable", thumbnailState: null };
+      }),
+      createId: () => "00000000-0000-4000-8000-000000000001",
+    });
+    batch.add([file("resume.png")]);
+    const run = batch.start();
+    await vi.waitFor(() => expect(batch.snapshot()[0]?.status).toBe("uploading"));
+    await expect(batch.cancel()).rejects.toThrow("media_upload_cancel_failed");
+    await expect(run).resolves.toBeUndefined();
+    expect(batch.snapshot()[0]).toMatchObject({ status: "failed", error: "暫停上傳失敗，請重新整理後確認狀態。" });
+  });
 });
 
 function createSessionLikeIdentityStore() {
-  const values = new Map<string, string[]>();
+  const values = new Map<string, string>();
   const signature = (selected: { name: string }, purpose: string) => `${purpose}:${selected.name}`;
   return {
-    find(selected: { name: string }, purpose: string, occurrence = 0) { return values.get(signature(selected, purpose))?.[occurrence] ?? null; },
+    find(selected: { name: string }, purpose: string) { return values.get(signature(selected, purpose)) ?? null; },
     remember(selected: { name: string }, purpose: string, key: string) {
       const id = signature(selected, purpose);
-      const existing = values.get(id) ?? [];
-      if (!existing.includes(key)) values.set(id, [...existing, key]);
+      values.set(id, key);
     },
     forget(selected: { name: string }, purpose: string, key: string) {
       const id = signature(selected, purpose);
-      values.set(id, (values.get(id) ?? []).filter((candidate) => candidate !== key));
+      if (values.get(id) === key) values.delete(id);
     },
+    discard(selected: { name: string }, purpose: string) { values.delete(signature(selected, purpose)); },
   };
 }

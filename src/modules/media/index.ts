@@ -12,6 +12,7 @@ export type {
   MediaService,
   MediaUploadResult,
   OriginalMediaRead,
+  ThumbnailMediaRead,
   MediaRemovalResult,
   RetryThumbnailCommand,
   UploadGrant,

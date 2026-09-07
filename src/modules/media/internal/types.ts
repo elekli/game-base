@@ -78,6 +78,7 @@ export type MediaStore = Readonly<{
   rejectInvalid(idempotencyKey: string, leaseToken: string): Promise<void>;
   completeFinalize(idempotencyKey: string, leaseToken: string, object: ValidatedMediaObject): Promise<MediaUploadResult>;
   findReadableOriginal(assetId: string): Promise<Readonly<{ path: string; fileName: string }> | null>;
+  findReadableThumbnail(assetId: string): Promise<Readonly<{ path: string }> | null>;
   claimThumbnail(assetId: string, lease: Readonly<{ token: string; durationMs?: number }>): Promise<ThumbnailClaim>;
   markThumbnailUploaded(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string }>): Promise<void>;
   adoptThumbnail(claim: Readonly<{ derivativeId: string; attemptId: string; attemptNumber: number; leaseToken: string; width: number; height: number; byteSize: number }>): Promise<void>;
