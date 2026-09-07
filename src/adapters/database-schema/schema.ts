@@ -232,8 +232,8 @@ export const mediaCleanupJobsInAppPrivate = appPrivate.table("media_cleanup_jobs
 			name: "media_cleanup_jobs_attempt_id_fkey"
 		}).onDelete("restrict"),
 	pgPolicy("runtime_media_cleanup_jobs_insert", { as: "permissive", for: "insert", to: ["app_runtime"], withCheck: sql`true`  }),
-	pgPolicy("runtime_media_cleanup_jobs_select", { as: "permissive", for: "select", to: ["app_runtime"], using: sql`true`  }),
-	pgPolicy("runtime_media_cleanup_jobs_update", { as: "permissive", for: "update", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+	pgPolicy("runtime_media_cleanup_jobs_select", { as: "permissive", for: "select", to: ["app_runtime"] }),
+	pgPolicy("runtime_media_cleanup_jobs_update", { as: "permissive", for: "update", to: ["app_runtime"] }),
 ]);
 
 export const mediaDerivativeAttemptsInAppPrivate = appPrivate.table("media_derivative_attempts", {
@@ -359,8 +359,8 @@ export const mediaReconciliationRunsInAppPrivate = appPrivate.table("media_recon
 	completedAt: timestamp("completed_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
 	pgPolicy("runtime_media_reconciliation_runs_insert", { as: "permissive", for: "insert", to: ["app_runtime"], withCheck: sql`true`  }),
-	pgPolicy("runtime_media_reconciliation_runs_select", { as: "permissive", for: "select", to: ["app_runtime"], using: sql`true`  }),
-	pgPolicy("runtime_media_reconciliation_runs_update", { as: "permissive", for: "update", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+	pgPolicy("runtime_media_reconciliation_runs_select", { as: "permissive", for: "select", to: ["app_runtime"] }),
+	pgPolicy("runtime_media_reconciliation_runs_update", { as: "permissive", for: "update", to: ["app_runtime"] }),
 ]);
 
 export const platformsInAppPrivate = appPrivate.table("platforms", {
