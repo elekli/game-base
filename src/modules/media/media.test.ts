@@ -7,6 +7,7 @@ import {
   MediaStoredObjectInvalidError,
   MediaFinalizeUnavailableError,
   MediaUploadIdempotencyConflictError,
+  MediaStorageUnavailableError,
   type BeginMediaUploadResult,
 } from "./index";
 import { createMediaService } from "./internal/create-media-service";
@@ -130,7 +131,8 @@ function animatedWebp(input: Readonly<{
 
 function objectStore(object: Readonly<{ bytes: Uint8Array; mimeType: string; byteSize?: number }>): MediaObjectStore {
   return {
-    async createUploadGrant(path) { return { uploadUrl: `https://storage.example.test/upload/${encodeURIComponent(path)}`, token: `grant:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }; },
+    async createUploadGrant(path) { return { uploadUrl: "https://storage.example.test/upload/resumable/sign", token: `grant:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }; },
+    async createOriginalReadGrant(path, fileName) { return { url: `https://storage.example.test/signed/${encodeURIComponent(path)}?download=${encodeURIComponent(fileName)}`, expiresAt: "2026-09-06T00:01:00.000Z" }; },
     async inspect(path) { return { path, byteSize: object.byteSize ?? object.bytes.byteLength, mimeType: object.mimeType }; },
     async *read(path) { void path; yield object.bytes; },
   };
@@ -149,6 +151,84 @@ function command(overrides: Partial<Readonly<{ purpose: "gallery_image" | "custo
 }
 
 describe("媒體公開介面", () => {
+  it("upload capability 固定 TUS transport、單一 ingest/path/size/MIME 與安全重試選項", async () => {
+    const service = createMediaService({
+      store: createInMemoryMediaStore({ activeGameIds: [gameId] }),
+      objects: objectStore({ bytes: png(), mimeType: "image/png" }),
+    });
+
+    const grant = grantFrom(await service.beginMediaUpload(owner, command()));
+
+    expect(grant.upload).toMatchObject({
+      protocol: "tus",
+      endpoint: "https://storage.example.test/upload/resumable/sign",
+      headers: { "x-signature": expect.stringContaining("grant:") },
+      metadata: {
+        bucketName: "game-media",
+        objectName: expect.stringMatching(/^originals\/[0-9a-f-]+\/[0-9a-f-]+$/),
+        contentType: "image/png",
+        cacheControl: "0",
+      },
+      declaredByteSize: png().byteLength,
+      maxByteSize: MEDIA_MAX_BYTES,
+      chunkSize: 6 * 1024 * 1024,
+      retryDelays: [0, 3_000, 5_000, 10_000, 20_000],
+      uploadDataDuringCreation: true,
+      resumeFromPreviousUpload: true,
+      removeFingerprintOnSuccess: true,
+      upsert: false,
+      fingerprint: `puizeru:${grant.ingestId}:${grant.upload.metadata.objectName}`,
+    });
+    expect(grant.upload).not.toHaveProperty("authorization");
+    expect(grant.upload.headers).not.toHaveProperty("authorization");
+  });
+
+  it("begin 回應遺失後重發新 token，但保留同一 TUS resume fingerprint 與 object path", async () => {
+    let attempt = 0;
+    const objects = objectStore({ bytes: png(), mimeType: "image/png" });
+    const service = createMediaService({
+      store: createInMemoryMediaStore({ activeGameIds: [gameId] }),
+      objects: { ...objects, async createUploadGrant() { attempt += 1; return { uploadUrl: "https://storage.example.test/upload/resumable/sign", token: `token-${attempt}`, expiresAt: "2026-09-06T02:00:00.000Z" }; } },
+    });
+
+    const first = grantFrom(await service.beginMediaUpload(owner, command()));
+    const retry = grantFrom(await service.beginMediaUpload(owner, command()));
+
+    expect(retry.ingestId).toBe(first.ingestId);
+    expect(retry.assetId).toBe(first.assetId);
+    expect(retry.upload.fingerprint).toBe(first.upload.fingerprint);
+    expect(retry.upload.metadata.objectName).toBe(first.upload.metadata.objectName);
+    expect(retry.upload.headers["x-signature"]).not.toBe(first.upload.headers["x-signature"]);
+  });
+
+  it("finalized asset 每次重新授權才取得 60 秒 attachment signed read", async () => {
+    const signed = vi.fn(async (_path: string, fileName: string) => ({
+      url: `https://storage.example.test/signed/original?download=${encodeURIComponent(fileName)}&token=opaque`,
+      expiresAt: "2026-09-06T00:01:00.000Z",
+    }));
+    const store = createInMemoryMediaStore({ activeGameIds: [gameId], now: () => new Date("2026-09-06T00:00:00.000Z") });
+    const service = createMediaService({
+      store,
+      objects: { ...objectStore({ bytes: png(), mimeType: "image/png" }), createOriginalReadGrant: signed },
+      now: () => new Date("2026-09-06T00:00:00.000Z"),
+    });
+    await service.beginMediaUpload(owner, command());
+    const finalized = await service.finalizeMediaUpload(owner, { idempotencyKey });
+    if ("status" in finalized) throw new Error("expected finalized upload");
+
+    const first = await service.issueOriginalRead(owner, { assetId: finalized.asset.id });
+    const second = await service.issueOriginalRead(owner, { assetId: finalized.asset.id });
+
+    expect(first).toEqual({
+      status: "original_read",
+      url: expect.stringContaining("download="),
+      expiresAt: "2026-09-06T00:01:00.000Z",
+      disposition: "attachment",
+    });
+    expect(second.url).toContain("token=opaque");
+    expect(signed).toHaveBeenCalledTimes(2);
+    expect(signed).toHaveBeenCalledWith(expect.stringMatching(/^originals\//), "桌遊照片.png", 60);
+  });
   it("begin 對同一原檔冪等，且拒絕相同鍵配上不同不可變參數", async () => {
     const service = createMediaService({
       store: createInMemoryMediaStore({ activeGameIds: [gameId] }),
@@ -187,6 +267,24 @@ describe("媒體公開介面", () => {
     const service = createMediaService({ store, objects });
     await expect(service.beginMediaUpload(owner, command())).rejects.toBeInstanceOf(MediaBeginUnavailableError);
     await expect(service.beginMediaUpload(owner, command())).resolves.toMatchObject({ status: "upload_grant" });
+  });
+
+  it("正式 Storage adapter 的具名 grant failure 不穿透深模組 begin 邊界", async () => {
+    const service = createMediaService({
+      store: createInMemoryMediaStore({ activeGameIds: [gameId] }),
+      objects: { ...objectStore({ bytes: png(), mimeType: "image/png" }), async createUploadGrant() { throw new MediaStorageUnavailableError(); } },
+    });
+    await expect(service.beginMediaUpload(owner, command())).rejects.toBeInstanceOf(MediaBeginUnavailableError);
+  });
+
+  it("正式 Storage adapter 的具名 inspect failure 不穿透深模組 finalize 邊界", async () => {
+    const objects = objectStore({ bytes: png(), mimeType: "image/png" });
+    const service = createMediaService({
+      store: createInMemoryMediaStore({ activeGameIds: [gameId] }),
+      objects: { ...objects, async inspect() { throw new MediaStorageUnavailableError(); } },
+    });
+    await service.beginMediaUpload(owner, command());
+    await expect(service.finalizeMediaUpload(owner, { idempotencyKey })).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
   });
 
   it("begin 對空檔與超過 50 MiB 使用相同的具名邊界錯誤", async () => {

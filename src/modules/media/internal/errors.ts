@@ -38,3 +38,15 @@ export class MediaFinalizeUnavailableError extends MediaOperationError {
 export class MediaBeginUnavailableError extends MediaOperationError {
   constructor() { super("media_begin_unavailable", "媒體上傳暫時無法開始，請重試。"); this.name = "MediaBeginUnavailableError"; }
 }
+
+export class MediaAssetUnavailableError extends MediaOperationError {
+  constructor() { super("media_asset_unavailable", "找不到可讀取的媒體原檔。"); this.name = "MediaAssetUnavailableError"; }
+}
+
+export class MediaStorageUnavailableError extends MediaOperationError {
+  constructor() { super("media_storage_unavailable", "媒體儲存服務暫時無法使用，請重試。"); this.name = "MediaStorageUnavailableError"; }
+}
+
+export class MediaReadUnavailableError extends MediaOperationError {
+  constructor() { super("media_read_unavailable", "媒體原檔暫時無法授權讀取，請重試。"); this.name = "MediaReadUnavailableError"; }
+}

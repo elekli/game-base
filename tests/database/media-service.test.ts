@@ -3,6 +3,7 @@ import postgres from "postgres";
 import { createDatabase } from "@/adapters/database";
 import { PostgresMediaStore } from "@/adapters/postgres-media-store";
 import {
+  MediaAssetUnavailableError,
   MediaStoredObjectInvalidError,
   MediaFinalizeUnavailableError,
   MediaGameUnavailableError,
@@ -108,6 +109,7 @@ function png(): Uint8Array {
 function objects(bytes = png(), mimeType = "image/png"): MediaObjectStore {
   return {
     async createUploadGrant(path) { return { uploadUrl: `https://storage.example.test/upload/${encodeURIComponent(path)}`, token: `token:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }; },
+    async createOriginalReadGrant(path, fileName) { return { url: `https://storage.example.test/${encodeURIComponent(path)}?download=${encodeURIComponent(fileName)}`, expiresAt: "2026-09-06T00:01:00.000Z" }; },
     async inspect(path) { return { path, byteSize: bytes.byteLength, mimeType }; },
     async *read() { yield bytes; },
   };
@@ -161,6 +163,18 @@ function beginCommand(overrides: Partial<Readonly<{ idempotencyKey: string; purp
 }
 
 describe("MediaService 與真 PostgreSQL", () => {
+  it("只有 finalized、active 且遊戲未移除的 asset 可重發 original read", async () => {
+    const service = serviceFor();
+    const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+
+    await expect(service.issueOriginalRead(owner, { assetId: grant.assetId })).resolves.toMatchObject({
+      status: "original_read", disposition: "attachment", url: expect.stringContaining("download="),
+    });
+    await runtime.unsafe("update app_private.media_assets set removed_at = now(), removed_reason = 'owner_removed' where id = $1", [grant.assetId]);
+    await expect(service.issueOriginalRead(owner, { assetId: grant.assetId })).rejects.toBeInstanceOf(MediaAssetUnavailableError);
+  });
+
   it("trash 先取得遊戲列鎖時，公開 begin 等待提交後拒絕且不留下 ingest", async () => {
     const applicationName = "media_begin_trash_race";
     const raceDatabase = createDatabase(namedRoleUrl("app_runtime", applicationName));
@@ -328,6 +342,7 @@ describe("MediaService 與真 PostgreSQL", () => {
     const bytes = png();
     const storage: MediaObjectStore = {
       async createUploadGrant(path) { return { uploadUrl: `https://storage.example.test/upload/${encodeURIComponent(path)}`, token: `token:${path}`, expiresAt: "2026-09-06T02:00:00.000Z" }; },
+      async createOriginalReadGrant(path, fileName) { return { url: `https://storage.example.test/${encodeURIComponent(path)}?download=${encodeURIComponent(fileName)}`, expiresAt: "2026-09-06T00:01:00.000Z" }; },
       async inspect(path) {
         inspectCount += 1;
         inspectStarted.resolve();
