@@ -570,6 +570,40 @@ export function verifyProductionDeploymentSourceFileBytes(
   }
 }
 
+export async function readProductionDeploymentSourceFileBytes({
+  commitSha,
+  file,
+  repositoryRoot,
+  timeoutMs = 10_000,
+}: Readonly<{
+  commitSha: string;
+  file: ProductionDeploymentSourceManifestFile;
+  repositoryRoot: string;
+  timeoutMs?: number;
+}>): Promise<Buffer> {
+  if (
+    !FULL_SHA.test(commitSha) ||
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > 10_000
+  ) {
+    throw new ProductionDeploymentSourceFileByteMismatchError();
+  }
+  const validatedFile = validateProductionDeploymentSourceManifestFile(file);
+  const bytes = await runGitCapture(
+    repositoryRoot,
+    ["cat-file", "blob", `${commitSha}:${validatedFile.path}`],
+    {
+      maxBytes: validatedFile.size,
+      budget: { deadlineAt: Date.now() + timeoutMs, processCount: 0 },
+    },
+  ).catch(() => {
+    throw new ProductionDeploymentSourceFileByteMismatchError();
+  });
+  verifyProductionDeploymentSourceFileBytes(validatedFile, bytes);
+  return bytes;
+}
+
 export async function buildProductionDeploymentSourceManifest({
   commitSha,
   limits: requestedLimits,
