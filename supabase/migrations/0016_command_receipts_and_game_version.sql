@@ -2,7 +2,7 @@ grant app_migrator to postgres;
 set local role app_migrator;
 
 alter table app_private.games
-  add column version bigint not null default 1 check (version > 0);
+  add column version bigint default 1 check (coalesce(version > 0, false));
 
 create table app_private.command_receipts (
   command_id uuid primary key,

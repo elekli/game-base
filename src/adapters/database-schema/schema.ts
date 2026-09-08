@@ -171,7 +171,7 @@ export const gamesInAppPrivate = appPrivate.table("games", {
 	manualCoverAssetId: uuid("manual_cover_asset_id"),
 	manualCoverSelectedAt: timestamp("manual_cover_selected_at", { withTimezone: true, mode: 'string' }).default(sql`'-infinity'`),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
-	version: bigint({ mode: "number" }).default(1).notNull(),
+	version: bigint({ mode: "number" }).default(1),
 }, (table) => [
 	index("games_display_name_idx").using("btree", table.displayName.asc().nullsLast().op("text_ops")).where(sql`(trashed_at IS NULL)`),
 	foreignKey({

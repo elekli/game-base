@@ -2,7 +2,6 @@ begin;
 select plan(18);
 
 select has_column('app_private', 'games', 'version', 'games expose an optimistic concurrency version');
-select col_not_null('app_private', 'games', 'version', 'game version cannot be null');
 select col_default_is('app_private', 'games', 'version', '1', 'new games start at version one');
 select has_table('app_private', 'command_receipts', 'command receipts persist retry outcomes');
 select has_pk('app_private', 'command_receipts', 'command id is the receipt identity');
@@ -20,6 +19,11 @@ select ok(not has_table_privilege('anon', 'app_private.command_receipts', 'selec
 grant app_runtime to postgres;
 grant usage on schema extensions to app_runtime;
 set local role app_runtime;
+select extensions.throws_like(
+  $$insert into app_private.games (medium, display_name, version) values ('board_game', 'null version probe', null)$$,
+  '%violates check constraint%',
+  'game version cannot be null'
+);
 insert into app_private.command_receipts (command_id, owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256)
 values ('44444444-4444-4444-8444-444444444444', 'pgtap-owner', 'game.edit', 'game', '55555555-5555-4555-8555-555555555555', 1, repeat('a', 64));
 select extensions.ok((select expires_at = created_at + interval '90 days' from app_private.command_receipts where command_id = '44444444-4444-4444-8444-444444444444'), 'receipt retention is exactly 90 days');
