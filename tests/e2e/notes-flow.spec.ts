@@ -139,18 +139,11 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await page.getByRole("link", { name: gameName }).click();
   await expect(page).toHaveURL(/\/games\/[0-9a-f-]+$/);
   const gameUrl = page.url();
-  await page.getByRole("button", { name: "新增筆記" }).click();
+  await page.getByRole("link", { name: "新增筆記" }).click();
+  await expect(page).toHaveURL(`${gameUrl}#notes-heading`);
   await page.getByRole("textbox", { name: "新增筆記內容" }).fill("歷史導覽原文");
   await expect(page.getByText("已儲存", { exact: true })).toBeVisible();
 
-  await page.evaluate(() => {
-    window.history.pushState(window.history.state, "", "#history-one");
-    window.history.pushState(window.history.state, "", "#history-two");
-    window.history.pushState(window.history.state, "", "#history-three");
-    window.history.pushState(window.history.state, "", "#history-four");
-    window.history.back();
-  });
-  await expect(page).toHaveURL(`${gameUrl}#history-three`);
   const editor = page.getByRole("textbox", { name: "編輯筆記" });
   await page.evaluate(() => {
     const originalFetch = window.fetch.bind(window);
@@ -169,19 +162,61 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await expect(page.getByText("儲存失敗", { exact: true })).toBeVisible();
 
   let dialog = page.waitForEvent("dialog");
-  let traversal = page.evaluate(() => window.history.go(-2));
+  let traversal = page.evaluate(() => window.history.back());
   let warning = await dialog;
   await warning.dismiss();
   await traversal;
-  await expect(page).toHaveURL(`${gameUrl}#history-three`);
+  await expect(page).toHaveURL(`${gameUrl}#notes-heading`);
   await expect(editor).toHaveValue("取消導覽後仍保留");
+  await page.close();
 
-  dialog = page.waitForEvent("dialog");
-  traversal = page.evaluate(() => window.history.go(-2));
+  const historyPage = await browser.newPage();
+  await historyPage.addInitScript(() => {
+    (window as Window & { __disableNavigationApiForTests?: boolean }).__disableNavigationApiForTests = true;
+  });
+  await authenticatePage(historyPage);
+  await historyPage.goto(gameUrl);
+  const historyEditor = historyPage.getByRole("textbox", { name: "編輯筆記" });
+  await expect(historyEditor).toBeVisible();
+  await historyPage.evaluate(() => {
+    window.history.pushState(window.history.state, "", "#history-one");
+    window.history.pushState(window.history.state, "", "#history-two");
+    window.history.pushState(window.history.state, "", "#history-three");
+    window.history.pushState(window.history.state, "", "#history-four");
+    window.history.back();
+  });
+  await expect(historyPage).toHaveURL(`${gameUrl}#history-three`);
+  await historyPage.evaluate(() => {
+    const originalFetch = window.fetch.bind(window);
+    let dropped = false;
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init);
+      const response = await originalFetch(input, init);
+      if (!dropped && request.headers.has("Next-Action")) {
+        dropped = true;
+        throw new TypeError("keep multi-step navigation guard unsettled");
+      }
+      return response;
+    };
+  });
+  await historyEditor.fill("多步取消後仍保留");
+  await expect(historyPage.getByText("儲存失敗", { exact: true })).toBeVisible();
+
+  dialog = historyPage.waitForEvent("dialog");
+  traversal = historyPage.evaluate(() => window.history.go(-2));
+  warning = await dialog;
+  await warning.dismiss();
+  await traversal;
+  await expect(historyPage).toHaveURL(`${gameUrl}#history-three`);
+  await expect(historyEditor).toHaveValue("多步取消後仍保留");
+
+  dialog = historyPage.waitForEvent("dialog");
+  traversal = historyPage.evaluate(() => window.history.go(-2));
   warning = await dialog;
   await warning.accept();
   await traversal;
-  await expect(page).toHaveURL(`${gameUrl}#history-one`);
+  await expect(historyPage).toHaveURL(`${gameUrl}#history-one`);
+  await historyPage.close();
 
   const forwardPage = await browser.newPage();
   await forwardPage.addInitScript(() => {
@@ -253,7 +288,6 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await expect(routePage).toHaveURL(gameUrl);
   await expect(routeEditor).toHaveValue("請求未送出時的跨頁本地內容");
   await routePage.close();
-  await page.close();
 });
 
 test("#69 明確拒絕的草稿可修正後重送", async ({ page }, testInfo) => {

@@ -40,7 +40,7 @@ export function installHistoryTracking() {
     const destination = (event.state ?? {}) as Record<string, unknown>;
     const nextPosition = destination[historyPositionKey];
     if (typeof nextPosition === "number") {
-      lastHistoryDelta = nextPosition - historyPosition;
+      lastHistoryDelta = nextPosition - historyPosition || -1;
       historyPosition = nextPosition;
     } else {
       lastHistoryDelta = -1;
@@ -64,9 +64,27 @@ export function installHistoryTracking() {
     if (navigationEvent.navigationType === "traverse" && unsettledEditors.size > 0 && !window.confirm(leaveMessage())) event.preventDefault();
   };
   const beforeLink = (event: MouseEvent) => {
-    if (unsettledEditors.size === 0) return;
     const anchor = (event.target as Element | null)?.closest("a[href]") as HTMLAnchorElement | null;
-    if (anchor && anchor.target !== "_blank" && !window.confirm(leaveMessage())) event.preventDefault();
+    if (!anchor || anchor.target === "_blank" || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (unsettledEditors.size > 0 && !window.confirm(leaveMessage())) {
+      event.preventDefault();
+      return;
+    }
+    const sourceUrl = new URL(window.location.href);
+    const destinationUrl = new URL(anchor.href, sourceUrl);
+    const isNativeFragment = destinationUrl.origin === sourceUrl.origin
+      && destinationUrl.pathname === sourceUrl.pathname
+      && destinationUrl.search === sourceUrl.search
+      && destinationUrl.hash !== sourceUrl.hash;
+    if (!isNativeFragment) return;
+    const sourcePosition = historyPosition;
+    window.setTimeout(() => {
+      if (event.defaultPrevented || window.location.href !== destinationUrl.href) return;
+      const currentState = (window.history.state ?? {}) as Record<string, unknown>;
+      if (currentState[historyPositionKey] !== sourcePosition) return;
+      historyPosition = sourcePosition + 1;
+      originalReplaceState({ ...currentState, [historyPositionKey]: historyPosition }, "");
+    }, 0);
   };
   const controlledWindow = window as Window & { navigation?: { addEventListener(type: "navigate", listener: EventListener): void }; __disableNavigationApiForTests?: boolean };
   const navigation = controlledWindow.__disableNavigationApiForTests ? undefined : controlledWindow.navigation;
