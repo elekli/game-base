@@ -15,6 +15,7 @@ type NavigationGuardState = {
   lastHistoryDelta: number;
   suppressedHistoryPosition: number | null;
   suppressedHistoryUrl: string | null;
+  pendingUrlCorrection: { position: number; url: string } | null;
   currentUrl: string;
   unsettledEditors: Map<symbol, boolean>;
 };
@@ -32,6 +33,7 @@ function navigationGuardState() {
     lastHistoryDelta: -1,
     suppressedHistoryPosition: null,
     suppressedHistoryUrl: null,
+    pendingUrlCorrection: null,
     currentUrl: window.location.href,
     unsettledEditors: new Map(),
   };
@@ -54,11 +56,25 @@ export function installHistoryTracking() {
   const originalPushState = window.history.pushState.bind(window.history);
   const originalReplaceState = window.history.replaceState.bind(window.history);
   window.history.pushState = (data, unused, url) => {
+    guard.pendingUrlCorrection = null;
     guard.historyPosition += 1;
     originalPushState({ ...(data ?? {}), [historyPositionKey]: guard.historyPosition }, unused, url);
     guard.currentUrl = window.location.href;
   };
   window.history.replaceState = (data, unused, url) => {
+    const pendingCorrection = guard.pendingUrlCorrection;
+    const requestedUrl = url === undefined || url === null ? window.location.href : new URL(url, window.location.href).href;
+    const nextData = (data ?? {}) as Record<string, unknown>;
+    if (pendingCorrection
+      && window.history.state?.[historyPositionKey] === pendingCorrection.position
+      && nextData.__NA === true
+      && requestedUrl !== pendingCorrection.url) {
+      guard.pendingUrlCorrection = null;
+      originalReplaceState({ ...nextData, [historyPositionKey]: guard.historyPosition }, unused, pendingCorrection.url);
+      guard.currentUrl = window.location.href;
+      return;
+    }
+    guard.pendingUrlCorrection = null;
     originalReplaceState({ ...(data ?? {}), [historyPositionKey]: guard.historyPosition }, unused, url);
     guard.currentUrl = window.location.href;
   };
@@ -78,14 +94,12 @@ export function installHistoryTracking() {
       guard.suppressedHistoryUrl = null;
       guard.currentUrl = restoredUrl ?? window.location.href;
       event.stopImmediatePropagation();
-      if (restoredUrl) {
+      if (restoredUrl && typeof nextPosition === "number") {
+        const correction = { position: nextPosition, url: restoredUrl };
+        guard.pendingUrlCorrection = correction;
         window.setTimeout(() => {
-          if (guard.currentUrl !== restoredUrl || window.history.state?.[historyPositionKey] !== nextPosition) return;
-          if (window.location.href !== restoredUrl) {
-            originalReplaceState(window.history.state, "", restoredUrl);
-          }
-          guard.currentUrl = window.location.href;
-        }, 100);
+          if (guard.pendingUrlCorrection === correction) guard.pendingUrlCorrection = null;
+        }, 300);
       }
       return;
     }
@@ -111,6 +125,7 @@ export function installHistoryTracking() {
     if (navigationEvent.navigationType === "traverse" && guard.unsettledEditors.size > 0 && !window.confirm(leaveMessage())) event.preventDefault();
   };
   const beforeLink = (event: MouseEvent) => {
+    guard.pendingUrlCorrection = null;
     const anchor = (event.target as Element | null)?.closest("a[href]") as HTMLAnchorElement | null;
     if (!anchor || anchor.target === "_blank" || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     if (guard.unsettledEditors.size > 0 && !window.confirm(leaveMessage())) {
