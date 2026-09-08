@@ -6,6 +6,39 @@ import type { NoteRecord } from "@/modules/notes";
 
 type SaveStatus = "idle" | "pending" | "saving" | "saved" | "failed" | "conflict" | "removal_pending" | "removed";
 type Failure = Readonly<{ message: string; currentNote?: NoteRecord }>;
+type PendingSave = { fingerprint: string; commandId: string; noteId: string | null; version: number; content: string };
+
+const historyPositionKey = "__puizeruHistoryPosition";
+let historyTrackingInstalled = false;
+let historyPosition = 0;
+let lastHistoryDirection: "back" | "forward" = "back";
+
+function installHistoryTracking() {
+  if (historyTrackingInstalled) return;
+  historyTrackingInstalled = true;
+  const state = (window.history.state ?? {}) as Record<string, unknown>;
+  historyPosition = typeof state[historyPositionKey] === "number" ? state[historyPositionKey] : 0;
+  if (state[historyPositionKey] === undefined) window.history.replaceState({ ...state, [historyPositionKey]: historyPosition }, "");
+  const originalPushState = window.history.pushState.bind(window.history);
+  const originalReplaceState = window.history.replaceState.bind(window.history);
+  window.history.pushState = (data, unused, url) => {
+    historyPosition += 1;
+    originalPushState({ ...(data ?? {}), [historyPositionKey]: historyPosition }, unused, url);
+  };
+  window.history.replaceState = (data, unused, url) => {
+    originalReplaceState({ ...(data ?? {}), [historyPositionKey]: historyPosition }, unused, url);
+  };
+  window.addEventListener("popstate", (event) => {
+    const destination = (event.state ?? {}) as Record<string, unknown>;
+    const nextPosition = destination[historyPositionKey];
+    if (typeof nextPosition === "number") {
+      lastHistoryDirection = nextPosition > historyPosition ? "forward" : "back";
+      historyPosition = nextPosition;
+    } else {
+      lastHistoryDirection = "back";
+    }
+  });
+}
 
 function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId: string; initial?: NoteRecord; onCreated?: (note: NoteRecord) => void; onDiscard?: () => void }>) {
   const [noteId, setNoteId] = useState(initial?.id ?? null);
@@ -16,8 +49,9 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
   const [failure, setFailure] = useState<Failure | null>(null);
   const [failureAction, setFailureAction] = useState<"save" | "remove" | "restore" | null>(null);
   const [createOutcomeUncertain, setCreateOutcomeUncertain] = useState(false);
-  const pendingCommand = useRef<{ fingerprint: string; commandId: string } | null>(null);
+  const pendingCommand = useRef<PendingSave | null>(null);
   const lifecycleCommand = useRef<{ fingerprint: string; commandId: string } | null>(null);
+  const saveOutcomeUncertain = useRef(false);
 
   const unsettled = status === "pending" || status === "saving" || status === "failed" || status === "conflict" || status === "removal_pending";
 
@@ -25,17 +59,21 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
     if (!content.trim() || status === "saving" || status === "removed") return;
     const creating = noteId === null;
     const fingerprint = JSON.stringify({ noteId, version: forceVersion ?? version, content });
-    if (pendingCommand.current?.fingerprint !== fingerprint) pendingCommand.current = { fingerprint, commandId: crypto.randomUUID() };
+    if (!saveOutcomeUncertain.current && pendingCommand.current?.fingerprint !== fingerprint) {
+      pendingCommand.current = { fingerprint, commandId: crypto.randomUUID(), noteId, version: forceVersion ?? version, content };
+    }
     const command = pendingCommand.current;
+    if (!command) return;
     setStatus("saving");
     setFailure(null);
     setFailureAction(null);
     let result;
     try {
-      result = noteId
-        ? await updateNote({ commandId: command.commandId, noteId, expectedVersion: forceVersion ?? version, content })
-        : await createNote({ commandId: command.commandId, gameId, content });
+      result = command.noteId
+        ? await updateNote({ commandId: command.commandId, noteId: command.noteId, expectedVersion: command.version, content: command.content })
+        : await createNote({ commandId: command.commandId, gameId, content: command.content });
     } catch {
+      saveOutcomeUncertain.current = true;
       setFailure({ message: "無法確認筆記是否已儲存，請用相同操作重試。" });
       setFailureAction("save");
       if (creating) setCreateOutcomeUncertain(true);
@@ -43,24 +81,31 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
       return;
     }
     if (!result.ok) {
+      saveOutcomeUncertain.current = false;
+      pendingCommand.current = null;
       setFailure({ message: result.message, currentNote: result.currentNote });
       setFailureAction("save");
-      if (creating) setCreateOutcomeUncertain(true);
+      setCreateOutcomeUncertain(false);
       setStatus(result.code === "command_version_conflict" && result.currentNote ? "conflict" : "failed");
       return;
     }
     setNoteId(result.resourceId);
     setVersion(result.version);
-    setSavedContent(content);
+    setSavedContent(command.content);
     pendingCommand.current = null;
+    saveOutcomeUncertain.current = false;
     setFailureAction(null);
     setCreateOutcomeUncertain(false);
-    setStatus("saved");
+    setStatus(content === command.content ? "saved" : "pending");
     if (creating && onCreated) {
       const now = new Date().toISOString();
-      onCreated({ id: result.resourceId, gameId, content, version: result.version, state: "active", createdAt: now, updatedAt: now });
+      onCreated({ id: result.resourceId, gameId, content: command.content, version: result.version, state: "active", createdAt: now, updatedAt: now });
     }
   }, [content, gameId, noteId, onCreated, status, version]);
+
+  useEffect(() => {
+    installHistoryTracking();
+  }, []);
 
   useEffect(() => {
     if (status !== "pending" || !content.trim()) return;
@@ -78,7 +123,7 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
     };
     const beforeHistory = () => {
       const message = status === "removal_pending" ? "筆記已清空但尚未確認移除。仍要離開並保留原文嗎？" : "筆記仍有未儲存內容。仍要離開嗎？";
-      if (!window.confirm(message)) window.setTimeout(() => window.history.forward(), 0);
+      if (!window.confirm(message)) window.setTimeout(() => window.history.go(lastHistoryDirection === "forward" ? -1 : 1), 0);
     };
     const beforeNavigate = (event: Event) => {
       const navigationEvent = event as Event & { navigationType?: string };
@@ -108,7 +153,7 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
       pendingCommand.current = null;
       setStatus(noteId ? "removal_pending" : "idle");
     } else {
-      setStatus(value === savedContent ? "idle" : "pending");
+      setStatus(!saveOutcomeUncertain.current && value === savedContent ? "idle" : "pending");
     }
   }
 
@@ -131,7 +176,7 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
     setStatus("removed");
   }
 
-  async function restore(forceVersion?: number) {
+  async function restore(forceVersion?: number, restoredServerContent?: string) {
     if (!noteId) return;
     const expectedVersion = forceVersion ?? version;
     const fingerprint = `restore:${noteId}:${expectedVersion}`;
@@ -145,7 +190,8 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
     if (!result.ok) { setFailure({ message: result.message, currentNote: result.currentNote }); setFailureAction("restore"); setStatus(result.code === "command_version_conflict" && result.currentNote ? "conflict" : "failed"); return; }
     setVersion(result.version);
     lifecycleCommand.current = null;
-    setStatus("saved");
+    if (restoredServerContent !== undefined) setSavedContent(restoredServerContent);
+    setStatus(restoredServerContent !== undefined && content !== restoredServerContent ? "pending" : "saved");
   }
 
   function retryFailure() {
@@ -162,6 +208,7 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
     setFailureAction(null);
     lifecycleCommand.current = null;
     pendingCommand.current = null;
+    saveOutcomeUncertain.current = false;
     setStatus(current.state === "removed" ? "removed" : "idle");
   }
 
@@ -182,6 +229,10 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
       setContent(current.content);
       setSavedContent(current.content);
       return void restore(current.version);
+    }
+    if (current.state === "removed") {
+      setSavedContent(current.content);
+      return void restore(current.version, current.content);
     }
     return void save(current.version);
   }

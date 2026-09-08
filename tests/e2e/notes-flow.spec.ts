@@ -2,6 +2,7 @@ import { expect } from "@playwright/test";
 import { authenticatePage, test } from "./fixtures";
 
 test("#69 390px 筆記：空白草稿、自動儲存、衝突與可復原移除", async ({ browser, page }, testInfo) => {
+  testInfo.setTimeout(60_000);
   await authenticatePage(page);
   const gameName = `#69 筆記驗收 ${Date.now()}`;
 
@@ -56,6 +57,20 @@ test("#69 390px 筆記：空白草稿、自動儲存、衝突與可復原移除"
   await expect(page.getByRole("textbox", { name: "編輯筆記" }).first()).toHaveValue("分頁 B 的本地內容");
   await expect(page.getByText("已儲存", { exact: true }).first()).toBeVisible();
 
+  await page.reload();
+  await other.reload();
+  const currentEditor = page.getByRole("textbox", { name: "編輯筆記" }).first();
+  const locallyEdited = other.getByRole("textbox", { name: "編輯筆記" }).first();
+  await locallyEdited.fill("遠端移除時仍要保留的本地內容");
+  await currentEditor.fill("");
+  await page.getByRole("button", { name: "確認移除" }).click();
+  await expect(page.getByText("筆記已移除，原文仍安全保留。", { exact: true })).toBeVisible();
+  await expect(other.getByText("版本衝突", { exact: true })).toBeVisible();
+  await other.getByRole("button", { name: "保留我的內容並重送" }).click();
+  const recoveredEditor = other.getByRole("textbox", { name: "編輯筆記" }).first();
+  await expect(recoveredEditor).toHaveValue("遠端移除時仍要保留的本地內容");
+  await expect(recoveredEditor.locator("xpath=ancestor::article").getByText("已儲存", { exact: true })).toBeVisible();
+
   expect(await other.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await other.screenshot({ path: testInfo.outputPath("notes-conflict-and-recovery-390.png"), fullPage: true });
 
@@ -74,4 +89,105 @@ test("#69 390px 筆記：空白草稿、自動儲存、衝突與可復原移除"
   await expect(other).toHaveURL(gameUrl);
   await expect(historyEditor).toHaveValue("尚未儲存的上一頁警告");
   await other.close();
+});
+
+test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", async ({ browser }, testInfo) => {
+  testInfo.setTimeout(45_000);
+  const page = await browser.newPage();
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "navigation", { configurable: true, value: undefined });
+  });
+  await authenticatePage(page);
+  const gameName = `#69 歷史導覽 ${Date.now()}`;
+  await page.goto("/games/new");
+  await page.getByText("找不到？建立手動條目").click();
+  await page.getByRole("textbox", { name: "遊戲名稱" }).fill(gameName);
+  await page.getByRole("button", { name: "建立手動條目" }).click();
+  await page.getByRole("link", { name: gameName }).click();
+  await expect(page).toHaveURL(/\/games\/[0-9a-f-]+$/);
+  const gameUrl = page.url();
+  await page.getByRole("button", { name: "新增筆記" }).click();
+  await page.getByRole("textbox", { name: "新增筆記內容" }).fill("歷史導覽原文");
+  await expect(page.getByText("已儲存", { exact: true })).toBeVisible();
+
+  await page.evaluate(() => {
+    window.history.pushState(window.history.state, "", "#history-one");
+    window.history.pushState(window.history.state, "", "#history-two");
+    window.history.back();
+  });
+  await expect(page).toHaveURL(`${gameUrl}#history-one`);
+  const editor = page.getByRole("textbox", { name: "編輯筆記" });
+  await editor.fill("取消導覽後仍保留");
+  await expect(editor).toHaveValue("取消導覽後仍保留");
+
+  let dialog = page.waitForEvent("dialog");
+  let traversal = page.evaluate(() => window.history.forward());
+  let warning = await dialog;
+  await warning.dismiss();
+  await traversal;
+  await expect(page).toHaveURL(`${gameUrl}#history-one`);
+  await expect(editor).toHaveValue("取消導覽後仍保留");
+
+  dialog = page.waitForEvent("dialog");
+  traversal = page.evaluate(() => window.history.back());
+  warning = await dialog;
+  await warning.dismiss();
+  await traversal;
+  await expect(page).toHaveURL(`${gameUrl}#history-one`);
+  await expect(editor).toHaveValue("取消導覽後仍保留");
+  await page.close();
+});
+
+test("#69 明確拒絕的草稿可修正後重送", async ({ page }, testInfo) => {
+  testInfo.setTimeout(45_000);
+  await authenticatePage(page);
+  const gameName = `#69 草稿修正 ${Date.now()}`;
+  await page.goto("/games/new");
+  await page.getByText("找不到？建立手動條目").click();
+  await page.getByRole("textbox", { name: "遊戲名稱" }).fill(gameName);
+  await page.getByRole("button", { name: "建立手動條目" }).click();
+  await page.getByRole("link", { name: gameName }).click();
+  await page.getByRole("button", { name: "新增筆記" }).click();
+  const draft = page.getByRole("textbox", { name: "新增筆記內容" });
+  await draft.fill("字".repeat(100_001));
+  await expect(page.getByText("儲存失敗", { exact: true })).toBeVisible();
+  await expect(draft).toBeEnabled();
+  await draft.fill("修正後可儲存的內容");
+  await expect(page.getByText("已儲存", { exact: true })).toBeVisible();
+});
+
+test("#69 更新回應遺失後改回舊文，會先確認未決命令再儲存", async ({ page }, testInfo) => {
+  testInfo.setTimeout(45_000);
+  await authenticatePage(page);
+  const gameName = `#69 回應遺失 ${Date.now()}`;
+  await page.goto("/games/new");
+  await page.getByText("找不到？建立手動條目").click();
+  await page.getByRole("textbox", { name: "遊戲名稱" }).fill(gameName);
+  await page.getByRole("button", { name: "建立手動條目" }).click();
+  await page.getByRole("link", { name: gameName }).click();
+  await page.getByRole("button", { name: "新增筆記" }).click();
+  await page.getByRole("textbox", { name: "新增筆記內容" }).fill("原文 A");
+  await expect(page.getByText("已儲存", { exact: true })).toBeVisible();
+
+  await page.evaluate(() => {
+    const originalFetch = window.fetch.bind(window);
+    let dropped = false;
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init);
+      const response = await originalFetch(input, init);
+      if (!dropped && request.headers.has("Next-Action")) {
+        dropped = true;
+        throw new TypeError("simulated response loss");
+      }
+      return response;
+    };
+  });
+
+  const editor = page.getByRole("textbox", { name: "編輯筆記" });
+  await editor.fill("已送達但回應遺失的 B");
+  await expect(page.getByText("儲存失敗", { exact: true })).toBeVisible();
+  await editor.fill("原文 A");
+  await expect(editor.locator("xpath=ancestor::article").getByText("已儲存", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("textbox", { name: "編輯筆記" })).toHaveValue("原文 A");
 });
