@@ -397,8 +397,8 @@ export const noteCommandReceiptsInAppPrivate = appPrivate.table("note_command_re
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	resultVersion: bigint("result_version", { mode: "number" }),
 	resultState: text("result_state"),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
-	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).default(sql`(clock_timestamp() + '90 days'::interval)`).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).default(sql`(now() + '90 days'::interval)`).notNull(),
 }, (table) => [
 	index("note_command_receipts_expiry_idx").using("btree", table.expiresAt.asc().nullsLast().op("timestamptz_ops"), table.commandId.asc().nullsLast().op("timestamptz_ops")),
 	pgPolicy("runtime_note_command_receipts", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),

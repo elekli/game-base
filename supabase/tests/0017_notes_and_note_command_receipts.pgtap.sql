@@ -1,5 +1,5 @@
 begin;
-select plan(20);
+select plan(21);
 
 select has_table('app_private', 'notes', 'notes persist owner-authored Markdown');
 select has_pk('app_private', 'notes', 'note id is stable identity');
@@ -39,6 +39,9 @@ select extensions.throws_like(
 insert into app_private.note_command_receipts (command_id, owner_id, command_kind, target_kind, target_id, payload_sha256)
 values ('33333333-3333-4333-8333-333333333333', 'owner', 'note.create', 'game', '11111111-1111-4111-8111-111111111111', repeat('a', 64));
 select extensions.ok((select expires_at = created_at + interval '90 days' from app_private.note_command_receipts where command_id = '33333333-3333-4333-8333-333333333333'), 'note receipt retention is exactly 90 days');
+insert into app_private.note_command_receipts (command_id, owner_id, command_kind, target_kind, target_id, payload_sha256)
+select gen_random_uuid(), 'owner', 'note.create', 'game', '11111111-1111-4111-8111-111111111111', repeat('c', 64) from generate_series(1, 100);
+select extensions.ok((select bool_and(expires_at = created_at + interval '90 days') from app_private.note_command_receipts), 'consecutive receipts share one stable clock per row');
 select extensions.throws_like(
   $$insert into app_private.note_command_receipts (command_id, owner_id, command_kind, target_kind, target_id, payload_sha256) values ('44444444-4444-4444-8444-444444444444', 'owner', 'note.update', 'game', '11111111-1111-4111-8111-111111111111', repeat('b', 64))$$,
   '%violates check constraint%',

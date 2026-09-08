@@ -26,8 +26,8 @@ create table app_private.note_command_receipts (
   result_id uuid,
   result_version bigint check (result_version > 0),
   result_state text check (result_state in ('active', 'removed')),
-  created_at timestamptz not null default clock_timestamp(),
-  expires_at timestamptz not null default (clock_timestamp() + interval '90 days'),
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null default (now() + interval '90 days'),
   check ((command_kind = 'note.create' and target_kind = 'game' and expected_version is null)
     or (command_kind <> 'note.create' and target_kind = 'note' and expected_version is not null)),
   check ((result_id is null) = (result_version is null) and (result_version is null) = (result_state is null)),
