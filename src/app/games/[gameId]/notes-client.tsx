@@ -69,7 +69,6 @@ export function installHistoryTracking() {
       && window.history.state?.[historyPositionKey] === pendingCorrection.position
       && nextData.__NA === true
       && requestedUrl !== pendingCorrection.url) {
-      guard.pendingUrlCorrection = null;
       originalReplaceState({ ...nextData, [historyPositionKey]: guard.historyPosition }, unused, pendingCorrection.url);
       guard.currentUrl = window.location.href;
       return;

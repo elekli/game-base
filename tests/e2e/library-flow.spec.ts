@@ -1,7 +1,8 @@
 import { expect } from "@playwright/test";
 import { authenticatePage, test } from "./fixtures";
 
-test.describe.configure({ mode: "serial" });
+// serial 群組重試會在同一個記憶體儲存重播前段測試，固定 fixture 身分會污染後續嘗試。
+test.describe.configure({ mode: "serial", retries: 0 });
 
 test.beforeEach(async ({ page }) => {
   await authenticatePage(page);
@@ -253,11 +254,19 @@ test("#40 board-only facets apply OR／AND and clear when switching to multiple 
   await page.getByLabel("最低重度").fill("2.5");
   await page.getByLabel("最高重度").fill("4");
   await page.getByRole("button", { name: "套用篩選" }).click();
+  await expect.poll(() => {
+    const url = new URL(page.url());
+    return [url.searchParams.get("weightMin"), url.searchParams.get("weightMax")];
+  }).toEqual(["2.5", "4"]);
   await expect(page.getByRole("heading", { name: "篩選驗收合作" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "篩選驗收策略" })).toHaveCount(0);
   await page.getByLabel("最低重度").fill("");
   await page.getByLabel("最高重度").fill("");
   await page.getByRole("button", { name: "套用篩選" }).click();
+  await expect.poll(() => {
+    const url = new URL(page.url());
+    return [url.searchParams.get("weightMin"), url.searchParams.get("weightMax")];
+  }).toEqual([null, null]);
   await expect(page.getByRole("heading", { name: "篩選驗收合作" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "篩選驗收策略" })).toBeVisible();
   await page.locator("#library-sort").selectOption("weight_asc");

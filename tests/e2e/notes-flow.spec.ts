@@ -131,7 +131,7 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
     (window as Window & { __disableNavigationApiForTests?: boolean }).__disableNavigationApiForTests = true;
   });
   await authenticatePage(page);
-  const gameName = `#69 歷史導覽 ${Date.now()}`;
+  const gameName = `#69 歷史導覽 ${Date.now()}-${testInfo.workerIndex}-${testInfo.repeatEachIndex}`;
   await page.goto("/games/new");
   await page.getByText("找不到？建立手動條目").click();
   await page.getByRole("textbox", { name: "遊戲名稱" }).fill(gameName);
@@ -169,6 +169,11 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await page.evaluate(() => window.history.back());
   await expect(page).toHaveURL(`${gameUrl}#notes-heading`);
   await expect(editor).toHaveValue("取消導覽後仍保留");
+  await page.waitForTimeout(700);
+  await page.evaluate((urlWithoutHash) => {
+    window.history.replaceState({ ...window.history.state, __NA: true }, "", urlWithoutHash);
+  }, gameUrl);
+  await expect(page).toHaveURL(`${gameUrl}#notes-heading`);
   await page.waitForTimeout(700);
   await page.evaluate((urlWithoutHash) => {
     window.history.replaceState({ ...window.history.state, __NA: true }, "", urlWithoutHash);
