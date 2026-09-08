@@ -144,7 +144,12 @@ describe("Postgres command receipts", () => {
     const game = await store.createManual("命令收據測試：跨界等待", "board_game");
     const command = { ownerId, commandId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", expectedVersion: 1, gameId: game.id, payload: { displayName: "命令收據測試：跨界等待完成" } } as const;
     await store.editWithCommand(command);
-    await runtimeDatabase.unsafe("update app_private.command_receipts set created_at = now() - interval '89 days', expires_at = now() + interval '1 day' where command_id = $1", [command.commandId]);
+    await runtimeDatabase.unsafe(`
+      with boundary as (select clock_timestamp() + interval '1 second' as expires_at)
+      update app_private.command_receipts
+      set created_at = boundary.expires_at - interval '90 days', expires_at = boundary.expires_at
+      from boundary where command_id = $1
+    `, [command.commandId]);
 
     let confirmLocked!: () => void;
     let releaseLock!: () => void;
@@ -154,7 +159,6 @@ describe("Postgres command receipts", () => {
       await tx.unsafe("select command_id from app_private.command_receipts where command_id = $1 for update", [command.commandId]);
       confirmLocked();
       await release;
-      await tx.unsafe("update app_private.command_receipts set created_at = now() - interval '90 days', expires_at = now() where command_id = $1", [command.commandId]);
     });
     await locked;
 
@@ -166,7 +170,41 @@ describe("Postgres command receipts", () => {
       retry.then(() => "settled"),
       new Promise<string>((resolve) => setTimeout(() => resolve("waiting"), 50)),
     ])).resolves.toBe("waiting");
+    await new Promise((resolve) => setTimeout(resolve, 1_050));
     releaseLock();
+    await blocker;
+
+    const result = await retry;
+    expect(result.value).toBeNull();
+    expect(result.error).toBeInstanceOf(CommandVersionConflictError);
+  });
+
+  it("reclaims the command when cleanup deletes its receipt during lock acquisition", async () => {
+    const game = await store.createManual("命令收據測試：清理競態", "board_game");
+    const command = { ownerId, commandId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", expectedVersion: 1, gameId: game.id, payload: { displayName: "命令收據測試：清理競態完成" } } as const;
+    await store.editWithCommand(command);
+    await runtimeDatabase.unsafe("update app_private.command_receipts set created_at = now() - interval '90 days', expires_at = now() where command_id = $1", [command.commandId]);
+
+    let confirmDeleted!: () => void;
+    let releaseDelete!: () => void;
+    const deleted = new Promise<void>((resolve) => { confirmDeleted = resolve; });
+    const release = new Promise<void>((resolve) => { releaseDelete = resolve; });
+    const blocker = migrationDatabase.begin(async (tx) => {
+      await tx.unsafe("delete from app_private.command_receipts where command_id = $1", [command.commandId]);
+      confirmDeleted();
+      await release;
+    });
+    await deleted;
+
+    const retry = store.editWithCommand(command).then(
+      (value) => ({ value, error: null }),
+      (error: unknown) => ({ value: null, error }),
+    );
+    await expect(Promise.race([
+      retry.then(() => "settled"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("waiting"), 50)),
+    ])).resolves.toBe("waiting");
+    releaseDelete();
     await blocker;
 
     const result = await retry;
