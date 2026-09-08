@@ -223,17 +223,25 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await expect(historyPage.getByText("儲存失敗", { exact: true })).toBeVisible();
 
   let dialog = historyPage.waitForEvent("dialog");
-  let traversal = historyPage.evaluate(() => window.history.go(-2));
+  const guardedTraversal = historyPage.evaluate(() => {
+    const source = {
+      url: window.location.href,
+      position: window.history.state?.__puizeruHistoryPosition as number,
+    };
+    window.history.go(-2);
+    return source;
+  });
   let warning = await dialog;
   await warning.dismiss();
-  await traversal;
-  await expect(historyPage).toHaveURL(`${gameUrl}#history-three`);
+  const source = await guardedTraversal;
+  await expect(historyPage).toHaveURL(source.url);
+  await expect.poll(() => historyPage.evaluate(() => window.history.state?.__puizeruHistoryPosition)).toBe(source.position);
   await expect(historyEditor).toHaveValue("多步取消後仍保留");
   await historyPage.waitForTimeout(300);
-  await expect(historyPage).toHaveURL(`${gameUrl}#history-three`);
+  await expect(historyPage).toHaveURL(source.url);
 
   dialog = historyPage.waitForEvent("dialog");
-  traversal = historyPage.evaluate(() => window.history.go(-2));
+  let traversal = historyPage.evaluate(() => window.history.go(-2));
   warning = await dialog;
   await warning.accept();
   await traversal;

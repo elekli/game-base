@@ -376,7 +376,7 @@ test("#41 owner searches and combines actual-platform and free-tag filters on mo
   await page.getByRole("search").getByLabel("搜尋收藏庫").fill("#41");
   await page.getByRole("search").getByLabel("Steam").check();
   await expect(page).toHaveURL(/search=%2341/);
-  expect(new URL(page.url()).searchParams.get("platform")).toBe("Steam");
+  await expect.poll(() => new URL(page.url()).searchParams.get("platform")).toBe("Steam");
   await expect(page.getByRole("heading", { name: "#41 Steam 動作驗收" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "#41 Switch 劇情驗收" })).toHaveCount(0);
 
