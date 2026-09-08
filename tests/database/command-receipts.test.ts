@@ -140,6 +140,40 @@ describe("Postgres command receipts", () => {
     await expect(store.get(game.id)).resolves.toMatchObject({ playerCountNote: "保留內容", version: 2 });
   });
 
+  it("rechecks expiry after a receipt-lock wait crosses the boundary", async () => {
+    const game = await store.createManual("命令收據測試：跨界等待", "board_game");
+    const command = { ownerId, commandId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", expectedVersion: 1, gameId: game.id, payload: { displayName: "命令收據測試：跨界等待完成" } } as const;
+    await store.editWithCommand(command);
+    await runtimeDatabase.unsafe("update app_private.command_receipts set created_at = now() - interval '89 days', expires_at = now() + interval '1 day' where command_id = $1", [command.commandId]);
+
+    let confirmLocked!: () => void;
+    let releaseLock!: () => void;
+    const locked = new Promise<void>((resolve) => { confirmLocked = resolve; });
+    const release = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const blocker = migrationDatabase.begin(async (tx) => {
+      await tx.unsafe("select command_id from app_private.command_receipts where command_id = $1 for update", [command.commandId]);
+      confirmLocked();
+      await release;
+      await tx.unsafe("update app_private.command_receipts set created_at = now() - interval '90 days', expires_at = now() where command_id = $1", [command.commandId]);
+    });
+    await locked;
+
+    const retry = store.editWithCommand(command).then(
+      (value) => ({ value, error: null }),
+      (error: unknown) => ({ value: null, error }),
+    );
+    await expect(Promise.race([
+      retry.then(() => "settled"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("waiting"), 50)),
+    ])).resolves.toBe("waiting");
+    releaseLock();
+    await blocker;
+
+    const result = await retry;
+    expect(result.value).toBeNull();
+    expect(result.error).toBeInstanceOf(CommandVersionConflictError);
+  });
+
   it("stops replay at the 90-day boundary even behind a full cleanup backlog", async () => {
     const game = await store.createManual("命令收據測試：到期邊界", "board_game");
     const expiredCommand = { ownerId, commandId: "99999999-9999-4999-8999-999999999999", expectedVersion: 1, gameId: game.id, payload: { displayName: "命令收據測試：已到期" } } as const;

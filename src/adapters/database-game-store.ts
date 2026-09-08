@@ -453,14 +453,7 @@ export class PostgresGameStore implements GameStore {
     const payload = normalizeGameEditPayload(command.payload);
     const payloadSha256 = commandPayloadSha256(payload);
     return this.db.transaction(async (tx) => {
-      await this.deleteExpiredCommandReceipts(tx, 100);
-      await tx.execute(sql`
-        delete from app_private.command_receipts
-        where command_id = ${command.commandId}
-          and expires_at <= now()
-          and result_version is not null
-      `);
-      const claimed = await tx.execute(sql`
+      let claimed = await tx.execute(sql`
         insert into app_private.command_receipts
           (command_id, owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256)
         values
@@ -468,14 +461,38 @@ export class PostgresGameStore implements GameStore {
         on conflict (command_id) do nothing
         returning command_id
       `) as Row[];
-      const receiptRows = await tx.execute(sql`
+      let receiptRows = await tx.execute(sql`
         select owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256, result_version, result_state
         from app_private.command_receipts
         where command_id = ${command.commandId}
         for update
       `) as Row[];
-      const receipt = receiptRows[0];
+      let receipt = receiptRows[0];
       if (!receipt) throw new SourcePersistenceFailedError();
+      if (claimed.length === 0 && receipt.result_version !== null) {
+        const expiryRows = await tx.execute(sql`
+          select expires_at <= clock_timestamp() as expired
+          from app_private.command_receipts
+          where command_id = ${command.commandId}
+        `) as Row[];
+        if (expiryRows[0]?.expired === true) {
+          await tx.execute(sql`delete from app_private.command_receipts where command_id = ${command.commandId}`);
+          claimed = await tx.execute(sql`
+            insert into app_private.command_receipts
+              (command_id, owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256)
+            values
+              (${command.commandId}, ${command.ownerId}, 'game.edit', 'game', ${command.gameId}, ${command.expectedVersion}, ${payloadSha256})
+            returning command_id
+          `) as Row[];
+          receiptRows = await tx.execute(sql`
+            select owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256, result_version, result_state
+            from app_private.command_receipts
+            where command_id = ${command.commandId}
+          `) as Row[];
+          receipt = receiptRows[0];
+          if (!receipt) throw new SourcePersistenceFailedError();
+        }
+      }
       if (
         String(receipt.owner_id) !== command.ownerId
         || receipt.command_kind !== "game.edit"
@@ -484,6 +501,7 @@ export class PostgresGameStore implements GameStore {
         || Number(receipt.expected_version) !== command.expectedVersion
         || receipt.payload_sha256 !== payloadSha256
       ) throw new CommandIdempotencyConflictError();
+      await this.deleteExpiredCommandReceipts(tx, 100);
       if (claimed.length === 0 && receipt.result_version !== null && receipt.result_state !== null) {
         return {
           resourceId: command.gameId,
