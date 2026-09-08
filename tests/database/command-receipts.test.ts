@@ -12,6 +12,7 @@ const ownerId = "command-receipts-test-owner";
 const options = { max: 1, prepare: false, onnotice: () => undefined } as const;
 let controlDatabase!: ReturnType<typeof postgres>;
 let runtimeDatabase!: ReturnType<typeof postgres>;
+let migrationDatabase!: ReturnType<typeof postgres>;
 let applicationDatabase!: ReturnType<typeof createDatabase>;
 let store!: PostgresGameStore;
 
@@ -21,7 +22,19 @@ function runtimeUrl(): string {
   return url.toString();
 }
 
+function migratorUrl(): string {
+  const url = new URL(directDatabaseUrl as string);
+  url.searchParams.set("options", "-c role=app_migrator");
+  return url.toString();
+}
+
+async function dropReceiptFailure(): Promise<void> {
+  await migrationDatabase.unsafe("drop trigger if exists command_receipts_test_failure on app_private.command_receipts");
+  await migrationDatabase.unsafe("drop function if exists app_private.command_receipts_test_failure()");
+}
+
 async function cleanTestData(): Promise<void> {
+  await dropReceiptFailure();
   await runtimeDatabase.unsafe("delete from app_private.command_receipts where owner_id = $1", [ownerId]);
   await runtimeDatabase.unsafe("delete from app_private.games where display_name like '命令收據測試：%'");
 }
@@ -29,7 +42,9 @@ async function cleanTestData(): Promise<void> {
 beforeAll(async () => {
   controlDatabase = postgres(directDatabaseUrl as string, options);
   await controlDatabase.unsafe("grant app_runtime to postgres");
+  await controlDatabase.unsafe("grant app_migrator to postgres");
   runtimeDatabase = postgres(runtimeUrl(), options);
+  migrationDatabase = postgres(migratorUrl(), options);
   applicationDatabase = createDatabase(runtimeUrl());
   store = new PostgresGameStore(applicationDatabase.db);
   await cleanTestData();
@@ -41,7 +56,9 @@ afterAll(async () => {
   await cleanTestData();
   await applicationDatabase.close();
   await runtimeDatabase.end();
+  await migrationDatabase.end();
   await controlDatabase.unsafe("revoke app_runtime from postgres");
+  await controlDatabase.unsafe("revoke app_migrator from postgres");
   await controlDatabase.end();
 });
 
@@ -74,6 +91,44 @@ describe("Postgres command receipts", () => {
     await expect(runtimeDatabase.unsafe("select count(*)::int as count from app_private.command_receipts where owner_id = $1", [ownerId])).resolves.toEqual([{ count: 1 }]);
   });
 
+  it("serializes the same command id and replays exactly one committed result", async () => {
+    const game = await store.createManual("命令收據測試：同 ID 並行", "board_game");
+    const command = { ownerId, commandId: "77777777-7777-4777-8777-777777777777", expectedVersion: 1, gameId: game.id, payload: { displayName: "命令收據測試：同 ID 完成" } } as const;
+
+    const results = await Promise.all([store.editWithCommand(command), store.editWithCommand(command)]);
+
+    expect(results).toEqual(expect.arrayContaining([
+      { resourceId: game.id, version: 2, state: "active", replayed: false },
+      { resourceId: game.id, version: 2, state: "active", replayed: true },
+    ]));
+    await expect(store.get(game.id)).resolves.toMatchObject({ displayName: "命令收據測試：同 ID 完成", version: 2 });
+    await expect(runtimeDatabase.unsafe("select count(*)::int as count from app_private.command_receipts where command_id = $1", [command.commandId])).resolves.toEqual([{ count: 1 }]);
+  });
+
+  it("rolls back content, version, and receipt when receipt completion fails, then accepts the original retry", async () => {
+    const game = await store.createManual("命令收據測試：尾端回滾", "board_game");
+    const command = { ownerId, commandId: "88888888-8888-4888-8888-888888888888", expectedVersion: 1, gameId: game.id, payload: { displayName: "命令收據測試：尾端回滾完成", tags: ["應共同回滾"] } } as const;
+    await migrationDatabase.unsafe(`
+      create function app_private.command_receipts_test_failure()
+      returns trigger language plpgsql as $$
+      begin
+        if new.owner_id = '${ownerId}' and new.result_version is not null then
+          raise exception 'command receipt completion failure';
+        end if;
+        return new;
+      end;
+      $$
+    `);
+    await migrationDatabase.unsafe("create trigger command_receipts_test_failure before update of result_version on app_private.command_receipts for each row execute function app_private.command_receipts_test_failure()");
+
+    await expect(store.editWithCommand(command)).rejects.toThrow();
+    await expect(store.get(game.id)).resolves.toMatchObject({ displayName: "命令收據測試：尾端回滾", tags: [], version: 1 });
+    await expect(runtimeDatabase.unsafe("select count(*)::int as count from app_private.command_receipts where command_id = $1", [command.commandId])).resolves.toEqual([{ count: 0 }]);
+
+    await dropReceiptFailure();
+    await expect(store.editWithCommand(command)).resolves.toEqual({ resourceId: game.id, version: 2, state: "active", replayed: false });
+  });
+
   it("cleans bounded expired receipts without deleting owner content", async () => {
     const game = await store.createManual("命令收據測試：清理", "board_game");
     const commandId = "33333333-3333-4333-8333-333333333333";
@@ -83,5 +138,18 @@ describe("Postgres command receipts", () => {
     await expect(store.cleanupExpiredCommandReceipts(0)).resolves.toBe(0);
     await expect(store.cleanupExpiredCommandReceipts(501)).resolves.toBe(1);
     await expect(store.get(game.id)).resolves.toMatchObject({ playerCountNote: "保留內容", version: 2 });
+  });
+
+  it("stops replay at the 90-day boundary and opportunistically cleans expired receipts", async () => {
+    const game = await store.createManual("命令收據測試：到期邊界", "board_game");
+    const expiredCommand = { ownerId, commandId: "99999999-9999-4999-8999-999999999999", expectedVersion: 1, gameId: game.id, payload: { displayName: "命令收據測試：已到期" } } as const;
+    await store.editWithCommand(expiredCommand);
+    await runtimeDatabase.unsafe("update app_private.command_receipts set created_at = now() - interval '90 days', expires_at = now() where command_id = $1", [expiredCommand.commandId]);
+
+    await expect(store.editWithCommand(expiredCommand)).rejects.toBeInstanceOf(CommandVersionConflictError);
+
+    const next = { ownerId, commandId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", expectedVersion: 2, gameId: game.id, payload: { displayName: "命令收據測試：清理後" } } as const;
+    await expect(store.editWithCommand(next)).resolves.toMatchObject({ version: 3, replayed: false });
+    await expect(runtimeDatabase.unsafe("select count(*)::int as count from app_private.command_receipts where command_id = $1", [expiredCommand.commandId])).resolves.toEqual([{ count: 0 }]);
   });
 });

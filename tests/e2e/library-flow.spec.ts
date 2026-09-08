@@ -156,6 +156,44 @@ test("#36 owner data keeps source platforms read-only and hides platform editing
   await page.screenshot({ path: testInfo.outputPath("owner-data-390.png"), fullPage: true });
 });
 
+test("#68 response-loss retry preserves form values and replays the same command", async ({ page }) => {
+  const originalName = "#68 回應遺失原名稱";
+  const updatedName = "#68 回應遺失後完成";
+  await page.goto("/games/new");
+  await page.getByText("找不到？建立手動條目").click();
+  await page.getByRole("textbox", { name: "遊戲名稱" }).fill(originalName);
+  await page.getByRole("button", { name: "建立手動條目" }).click();
+  await page.getByRole("link", { name: originalName }).click();
+  await page.getByText("編輯擁有者資料").click();
+
+  let droppedResponse = false;
+  await page.route("**/games/**", async (route) => {
+    const request = route.request();
+    if (!droppedResponse && request.method() === "POST" && request.headers()["next-action"]) {
+      await route.fetch();
+      droppedResponse = true;
+      await route.abort("failed");
+      return;
+    }
+    await route.continue();
+  });
+
+  const displayName = page.getByLabel("自訂顯示名稱");
+  await displayName.fill(updatedName);
+  await page.getByLabel("自由標籤（以逗號分隔）").fill("回應遺失, 可重試");
+  await page.getByRole("button", { name: "儲存資料" }).click();
+  await expect.poll(() => droppedResponse).toBe(true);
+  await expect(displayName).toHaveValue(updatedName);
+
+  await page.unroute("**/games/**");
+  await Promise.all([
+    page.waitForEvent("load"),
+    page.getByRole("button", { name: "儲存資料" }).click(),
+  ]);
+  await expect(page.getByRole("heading", { name: updatedName })).toBeVisible();
+  await expect(page.getByText("回應遺失、可重試", { exact: true })).toBeVisible();
+});
+
 test("#39 refresh failure keeps safe source data and retry succeeds once per click", async ({ page }, testInfo) => {
   await page.goto("/games/new");
   await page.getByLabel("搜尋遊戲").fill("刷新驗收遊戲");

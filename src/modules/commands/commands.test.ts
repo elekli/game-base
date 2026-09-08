@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { commandIdentityForPayload, commandPayloadSha256, normalizeGameEditPayload } from "./index";
+import { commandPayloadSha256, normalizeGameEditPayload } from "./index";
+import { commandIdentityForPayload } from "./client";
 import { InMemoryGameStore } from "@/modules/games";
 import { CommandIdempotencyConflictError, CommandVersionConflictError } from "./index";
 

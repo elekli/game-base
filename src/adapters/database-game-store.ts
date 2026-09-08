@@ -116,6 +116,23 @@ function uniqueNames(values: readonly string[]): readonly string[] {
 export class PostgresGameStore implements GameStore {
   constructor(private readonly db: ProductionExecutor) {}
 
+  private async deleteExpiredCommandReceipts(executor: QueryExecutor, limit: number): Promise<number> {
+    const rows = await executor.execute(sql`
+      with expired as (
+        select command_id from app_private.command_receipts
+        where expires_at <= now() and result_version is not null
+        order by expires_at, command_id
+        limit ${limit}
+        for update skip locked
+      )
+      delete from app_private.command_receipts receipt
+      using expired
+      where receipt.command_id = expired.command_id
+      returning receipt.command_id
+    `) as Row[];
+    return rows.length;
+  }
+
   private readonly selectFields = sql`g.id, g.version, g.medium, g.display_name, g.player_count_note, g.external_game_identity_id, g.trashed_at, g.created_at, custom_name.name as custom_display_name, i.snapshot,
     coalesce(g.manual_cover_asset_id, i.source_cover_asset_id) as cover_asset_id,
     (select derivative.state from app_private.media_derivatives derivative
@@ -436,6 +453,7 @@ export class PostgresGameStore implements GameStore {
     const payload = normalizeGameEditPayload(command.payload);
     const payloadSha256 = commandPayloadSha256(payload);
     return this.db.transaction(async (tx) => {
+      await this.deleteExpiredCommandReceipts(tx, 100);
       const claimed = await tx.execute(sql`
         insert into app_private.command_receipts
           (command_id, owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256)
@@ -531,20 +549,7 @@ export class PostgresGameStore implements GameStore {
   async cleanupExpiredCommandReceipts(limit: number): Promise<number> {
     const boundedLimit = Math.max(0, Math.min(Math.trunc(limit), 500));
     if (boundedLimit === 0) return 0;
-    const rows = await this.db.execute(sql`
-      with expired as (
-        select command_id from app_private.command_receipts
-        where expires_at <= now() and result_version is not null
-        order by expires_at, command_id
-        limit ${boundedLimit}
-        for update skip locked
-      )
-      delete from app_private.command_receipts receipt
-      using expired
-      where receipt.command_id = expired.command_id
-      returning receipt.command_id
-    `) as Row[];
-    return rows.length;
+    return this.deleteExpiredCommandReceipts(this.db, boundedLimit);
   }
 
   private async readContributorMatches(executor: QueryExecutor, gameId: string, name: string): Promise<readonly ContributorMatch[]> {
