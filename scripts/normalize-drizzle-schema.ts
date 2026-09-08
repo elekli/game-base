@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
+import { normalizeRelationsOrdering, normalizeSchemaOrdering } from "./drizzle-schema-normalization";
 
 const schemaPath = "src/adapters/database-schema/schema.ts";
 const relationsPath = "src/adapters/database-schema/relations.ts";
@@ -75,8 +76,12 @@ for (const constraintName of [
 if (normalizedSchema.includes("AnyPgColumn") && !normalizedSchema.includes("type AnyPgColumn")) {
   normalizedSchema = normalizedSchema.replace("import { pgTable,", "import { pgTable, type AnyPgColumn,");
 }
+normalizedSchema = normalizeSchemaOrdering(normalizedSchema);
 if (normalizedSchema !== schema) writeFileSync(schemaPath, normalizedSchema);
 
 if (relations.trim() === emptyRelationsOutput) {
   writeFileSync(relationsPath, "export {};\n");
+} else {
+  const normalizedRelations = normalizeRelationsOrdering(relations);
+  if (normalizedRelations !== relations) writeFileSync(relationsPath, normalizedRelations);
 }
