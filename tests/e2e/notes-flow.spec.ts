@@ -181,6 +181,11 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await historyPage.goto(gameUrl);
   const historyEditor = historyPage.getByRole("textbox", { name: "編輯筆記" });
   await expect(historyEditor).toBeVisible();
+  await expect.poll(() => historyPage.evaluate(() => {
+    const guardedWindow = window as Window & { __puizeruNavigationGuardState?: { installed?: boolean } };
+    return guardedWindow.__puizeruNavigationGuardState?.installed === true
+      && typeof window.history.state?.__puizeruHistoryPosition === "number";
+  })).toBe(true);
   await historyPage.evaluate(() => {
     window.history.pushState(window.history.state, "", "#history-one");
     window.history.pushState(window.history.state, "", "#history-two");
