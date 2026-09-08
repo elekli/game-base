@@ -187,64 +187,7 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
 
   const historyPage = await browser.newPage();
   await historyPage.addInitScript(() => {
-    const debugWindow = window as Window & {
-      __disableNavigationApiForTests?: boolean;
-      __DEBUG_69_historyTrace?: unknown[];
-    };
-    debugWindow.__disableNavigationApiForTests = true;
-    debugWindow.__DEBUG_69_historyTrace = [];
-    const snapshot = (kind: string, requestedUrl?: string | URL | null, data?: unknown) => {
-      const guard = (window as Window & {
-        __puizeruNavigationGuardState?: {
-          historyPosition: number;
-          lastHistoryDelta: number;
-          suppressedHistoryPosition: number | null;
-          suppressedHistoryUrl: string | null;
-          pendingUrlCorrection: { position: number; url: string } | null;
-          currentUrl: string;
-          unsettledEditors: Map<symbol, boolean>;
-        };
-      }).__puizeruNavigationGuardState;
-      const trace = debugWindow.__DEBUG_69_historyTrace;
-      trace?.push({
-        kind,
-        href: window.location.href,
-        requestedUrl: requestedUrl?.toString() ?? null,
-        statePosition: window.history.state?.__puizeruHistoryPosition ?? null,
-        dataPosition: (data as Record<string, unknown> | null)?.__puizeruHistoryPosition ?? null,
-        next: (data as Record<string, unknown> | null)?.__NA ?? null,
-        guard: guard ? {
-          historyPosition: guard.historyPosition,
-          lastHistoryDelta: guard.lastHistoryDelta,
-          suppressedHistoryPosition: guard.suppressedHistoryPosition,
-          suppressedHistoryUrl: guard.suppressedHistoryUrl,
-          pendingUrlCorrection: guard.pendingUrlCorrection,
-          currentUrl: guard.currentUrl,
-          unsettledEditorCount: guard.unsettledEditors.size,
-        } : null,
-        caller: new Error().stack?.split("\n").slice(2, 5).join(" | ") ?? null,
-      });
-      if (trace && trace.length > 80) trace.splice(0, trace.length - 80);
-    };
-    const originalPushState = window.history.pushState.bind(window.history);
-    const originalReplaceState = window.history.replaceState.bind(window.history);
-    const originalGo = window.history.go.bind(window.history);
-    window.history.pushState = ((data: unknown, unused: string, url?: string | URL | null) => {
-      snapshot("push", url, data);
-      return originalPushState(data, unused, url);
-    }) as typeof window.history.pushState;
-    window.history.replaceState = ((data: unknown, unused: string, url?: string | URL | null) => {
-      snapshot("replace", url, data);
-      return originalReplaceState(data, unused, url);
-    }) as typeof window.history.replaceState;
-    window.history.go = ((delta?: number) => {
-      snapshot("go", String(delta ?? 0));
-      return originalGo(delta);
-    }) as typeof window.history.go;
-    window.addEventListener("popstate", () => {
-      snapshot("pop-before");
-      queueMicrotask(() => snapshot("pop-after"));
-    }, true);
+    (window as Window & { __disableNavigationApiForTests?: boolean }).__disableNavigationApiForTests = true;
   });
   await authenticatePage(historyPage);
   await historyPage.goto(gameUrl);
@@ -280,24 +223,25 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await expect(historyPage.getByText("儲存失敗", { exact: true })).toBeVisible();
 
   let dialog = historyPage.waitForEvent("dialog");
-  let traversal = historyPage.evaluate(() => window.history.go(-2));
+  const guardedTraversal = historyPage.evaluate(() => {
+    const source = {
+      url: window.location.href,
+      position: window.history.state?.__puizeruHistoryPosition as number,
+    };
+    window.history.go(-2);
+    return source;
+  });
   let warning = await dialog;
   await warning.dismiss();
-  await traversal;
-  try {
-    await expect(historyPage).toHaveURL(`${gameUrl}#history-three`);
-  } catch (error) {
-    console.log("[DEBUG-69-history]", JSON.stringify(await historyPage.evaluate(() => (
-      window as Window & { __DEBUG_69_historyTrace?: unknown[] }
-    ).__DEBUG_69_historyTrace)));
-    throw error;
-  }
+  const source = await guardedTraversal;
+  await expect(historyPage).toHaveURL(source.url);
+  await expect.poll(() => historyPage.evaluate(() => window.history.state?.__puizeruHistoryPosition)).toBe(source.position);
   await expect(historyEditor).toHaveValue("多步取消後仍保留");
   await historyPage.waitForTimeout(300);
-  await expect(historyPage).toHaveURL(`${gameUrl}#history-three`);
+  await expect(historyPage).toHaveURL(source.url);
 
   dialog = historyPage.waitForEvent("dialog");
-  traversal = historyPage.evaluate(() => window.history.go(-2));
+  let traversal = historyPage.evaluate(() => window.history.go(-2));
   warning = await dialog;
   await warning.accept();
   await traversal;
