@@ -217,6 +217,8 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await traversal;
   await expect(historyPage).toHaveURL(`${gameUrl}#history-three`);
   await expect(historyEditor).toHaveValue("多步取消後仍保留");
+  await historyPage.waitForTimeout(300);
+  await expect(historyPage).toHaveURL(`${gameUrl}#history-three`);
 
   dialog = historyPage.waitForEvent("dialog");
   traversal = historyPage.evaluate(() => window.history.go(-2));

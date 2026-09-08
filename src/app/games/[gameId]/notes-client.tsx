@@ -14,6 +14,8 @@ type NavigationGuardState = {
   historyPosition: number;
   lastHistoryDelta: number;
   suppressedHistoryPosition: number | null;
+  suppressedHistoryUrl: string | null;
+  currentUrl: string;
   unsettledEditors: Map<symbol, boolean>;
 };
 type GuardedWindow = Window & {
@@ -29,6 +31,8 @@ function navigationGuardState() {
     historyPosition: 0,
     lastHistoryDelta: -1,
     suppressedHistoryPosition: null,
+    suppressedHistoryUrl: null,
+    currentUrl: window.location.href,
     unsettledEditors: new Map(),
   };
   return guardedWindow.__puizeruNavigationGuardState;
@@ -52,11 +56,14 @@ export function installHistoryTracking() {
   window.history.pushState = (data, unused, url) => {
     guard.historyPosition += 1;
     originalPushState({ ...(data ?? {}), [historyPositionKey]: guard.historyPosition }, unused, url);
+    guard.currentUrl = window.location.href;
   };
   window.history.replaceState = (data, unused, url) => {
     originalReplaceState({ ...(data ?? {}), [historyPositionKey]: guard.historyPosition }, unused, url);
+    guard.currentUrl = window.location.href;
   };
   const beforeHistory = (event: PopStateEvent) => {
+    const sourceUrl = guard.currentUrl;
     const destination = (event.state ?? {}) as Record<string, unknown>;
     const nextPosition = destination[historyPositionKey];
     if (typeof nextPosition === "number") {
@@ -66,18 +73,36 @@ export function installHistoryTracking() {
       guard.lastHistoryDelta = -1;
     }
     if (typeof nextPosition === "number" && guard.suppressedHistoryPosition === nextPosition) {
+      const restoredUrl = guard.suppressedHistoryUrl;
       guard.suppressedHistoryPosition = null;
+      guard.suppressedHistoryUrl = null;
+      guard.currentUrl = restoredUrl ?? window.location.href;
       event.stopImmediatePropagation();
+      if (restoredUrl) {
+        window.setTimeout(() => {
+          if (window.location.href !== restoredUrl) {
+            originalReplaceState(window.history.state, "", restoredUrl);
+          }
+          guard.currentUrl = window.location.href;
+        }, 100);
+      }
       return;
     }
     guard.suppressedHistoryPosition = null;
-    if (guard.unsettledEditors.size === 0) return;
+    guard.suppressedHistoryUrl = null;
+    if (guard.unsettledEditors.size === 0) {
+      guard.currentUrl = window.location.href;
+      return;
+    }
     const compensationDelta = -guard.lastHistoryDelta;
     const sourcePosition = guard.historyPosition + compensationDelta;
     if (!window.confirm(leaveMessage())) {
       event.stopImmediatePropagation();
       guard.suppressedHistoryPosition = sourcePosition;
+      guard.suppressedHistoryUrl = sourceUrl;
       window.setTimeout(() => window.history.go(compensationDelta), 50);
+    } else {
+      guard.currentUrl = window.location.href;
     }
   };
   const beforeNavigate = (event: Event) => {
