@@ -199,7 +199,10 @@ test("#39 refresh failure keeps safe source data and retry succeeds once per cli
   await page.goto("/games/new");
   await page.getByLabel("搜尋遊戲").fill("刷新驗收遊戲");
   await page.getByRole("button", { name: "同時搜尋" }).click();
-  await page.getByRole("button", { name: "展開確認並加入" }).click();
+  await Promise.all([
+    page.waitForURL(/\/$/),
+    page.getByRole("button", { name: "展開確認並加入" }).click(),
+  ]);
   await page.getByRole("link", { name: "刷新驗收遊戲" }).click();
   const description = page.locator("details").filter({ hasText: "來源介紹" });
   await expect(description).not.toHaveAttribute("open", "");
@@ -230,8 +233,10 @@ test("#40 board-only facets apply OR／AND and clear when switching to multiple 
     await page.goto("/games/new");
     await page.getByLabel("搜尋遊戲").fill(title);
     await page.getByRole("button", { name: "同時搜尋" }).click();
-    await page.getByRole("button", { name: "展開確認並加入" }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await Promise.all([
+      page.waitForURL(/\/$/),
+      page.getByRole("button", { name: "展開確認並加入" }).click(),
+    ]);
   }
   await page.goto("/");
   await page.getByLabel("桌遊").check();
