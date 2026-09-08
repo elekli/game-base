@@ -88,6 +88,22 @@ test("#69 390px 筆記：空白草稿、自動儲存、衝突與可復原移除"
   await other.reload();
   await expect(other.getByRole("textbox", { name: "編輯筆記" }).first()).toHaveValue("遠端移除時仍要保留的本地內容");
 
+  await page.reload();
+  const serverEditor = page.getByRole("textbox", { name: "編輯筆記" }).first();
+  const secondLocalEdit = other.getByRole("textbox", { name: "編輯筆記" }).first();
+  await secondLocalEdit.fill("還原再次衝突時保留的本地內容");
+  await serverEditor.fill("");
+  await page.getByRole("button", { name: "確認移除" }).click();
+  await expect(other.getByText("版本衝突", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "立即復原" }).click();
+  await expect(page.getByText("已儲存", { exact: true }).first()).toBeVisible();
+  await other.getByRole("button", { name: "保留我的內容並重送" }).click();
+  await expect(other.getByRole("button", { name: "以最新版本再次還原" })).toBeVisible();
+  await other.getByRole("button", { name: "以最新版本再次還原" }).click();
+  await expect(secondLocalEdit.locator("xpath=ancestor::article").getByText("已儲存", { exact: true })).toBeVisible();
+  await other.reload();
+  await expect(other.getByRole("textbox", { name: "編輯筆記" }).first()).toHaveValue("還原再次衝突時保留的本地內容");
+
   expect(await other.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await other.screenshot({ path: testInfo.outputPath("notes-conflict-and-recovery-390.png"), fullPage: true });
 
@@ -160,6 +176,13 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await expect(page).toHaveURL(`${gameUrl}#history-three`);
   await expect(editor).toHaveValue("取消導覽後仍保留");
 
+  dialog = page.waitForEvent("dialog");
+  traversal = page.evaluate(() => window.history.go(-2));
+  warning = await dialog;
+  await warning.accept();
+  await traversal;
+  await expect(page).toHaveURL(`${gameUrl}#history-one`);
+
   const forwardPage = await browser.newPage();
   await forwardPage.addInitScript(() => {
     (window as Window & { __disableNavigationApiForTests?: boolean }).__disableNavigationApiForTests = true;
@@ -168,6 +191,7 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await forwardPage.goto(gameUrl);
   const forwardEditor = forwardPage.getByRole("textbox", { name: "編輯筆記" });
   await expect(forwardEditor).toBeVisible();
+  await expect.poll(() => forwardPage.evaluate(() => typeof window.history.state?.__puizeruHistoryPosition)).toBe("number");
   await forwardPage.evaluate(() => {
     window.history.pushState(window.history.state, "", "#history-forward");
   });

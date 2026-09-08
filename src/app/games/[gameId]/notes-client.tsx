@@ -14,7 +14,6 @@ let historyPosition = 0;
 let lastHistoryDelta = -1;
 let suppressedHistoryPosition: number | null = null;
 const unsettledEditors = new Map<symbol, boolean>();
-const historyEntries = new Map<number, { state: unknown; url: string }>();
 
 function leaveMessage() {
   return [...unsettledEditors.values()].some(Boolean)
@@ -28,17 +27,14 @@ function installHistoryTracking() {
   const state = (window.history.state ?? {}) as Record<string, unknown>;
   historyPosition = typeof state[historyPositionKey] === "number" ? state[historyPositionKey] : 0;
   if (state[historyPositionKey] === undefined) window.history.replaceState({ ...state, [historyPositionKey]: historyPosition }, "");
-  historyEntries.set(historyPosition, { state: window.history.state, url: window.location.href });
   const originalPushState = window.history.pushState.bind(window.history);
   const originalReplaceState = window.history.replaceState.bind(window.history);
   window.history.pushState = (data, unused, url) => {
     historyPosition += 1;
     originalPushState({ ...(data ?? {}), [historyPositionKey]: historyPosition }, unused, url);
-    historyEntries.set(historyPosition, { state: window.history.state, url: window.location.href });
   };
   window.history.replaceState = (data, unused, url) => {
     originalReplaceState({ ...(data ?? {}), [historyPositionKey]: historyPosition }, unused, url);
-    historyEntries.set(historyPosition, { state: window.history.state, url: window.location.href });
   };
   const beforeHistory = (event: PopStateEvent) => {
     const destination = (event.state ?? {}) as Record<string, unknown>;
@@ -59,16 +55,7 @@ function installHistoryTracking() {
     const sourcePosition = historyPosition + compensationDelta;
     if (!window.confirm(leaveMessage())) {
       suppressedHistoryPosition = sourcePosition;
-      const sourceEntry = historyEntries.get(sourcePosition);
-      if (sourceEntry) {
-        originalReplaceState(sourceEntry.state, "", sourceEntry.url);
-        historyPosition = sourcePosition;
-      }
-      window.setTimeout(() => {
-        if (compensationDelta === -1) window.history.back();
-        else if (compensationDelta === 1) window.history.forward();
-        else window.history.go(compensationDelta);
-      }, 50);
+      window.setTimeout(() => window.history.go(compensationDelta), 50);
     }
   };
   const beforeNavigate = (event: Event) => {
@@ -251,6 +238,14 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
     lifecycleCommand.current = null;
     pendingCommand.current = null;
     setVersion(current.version);
+    if (failureAction === "restore" && restoreFollowupBaseline.current !== null) {
+      if (current.state === "active") {
+        restoreFollowupBaseline.current = null;
+        setSavedContent(current.content);
+        return void save(current.version);
+      }
+      return void restore(current.version, current.content);
+    }
     if ((failureAction === "remove" && current.state === "removed") || (failureAction === "restore" && current.state === "active")) {
       loadCurrentNote(current);
       return;
