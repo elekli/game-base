@@ -221,6 +221,38 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await expect(forwardPage).toHaveURL(gameUrl);
   await expect(forwardEditor).toHaveValue("取消前進後仍保留");
   await forwardPage.close();
+
+  const routePage = await browser.newPage();
+  await routePage.addInitScript(() => {
+    (window as Window & { __disableNavigationApiForTests?: boolean }).__disableNavigationApiForTests = true;
+  });
+  await authenticatePage(routePage);
+  await routePage.goto("/");
+  await routePage.getByRole("link", { name: new RegExp(gameName) }).click();
+  await expect(routePage).toHaveURL(gameUrl);
+  const routeEditor = routePage.getByRole("textbox", { name: "編輯筆記" });
+  await routePage.evaluate(() => {
+    const originalFetch = window.fetch.bind(window);
+    let rejected = false;
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init);
+      if (!rejected && request.headers.has("Next-Action")) {
+        rejected = true;
+        throw new TypeError("simulated request failure before send");
+      }
+      return originalFetch(input, init);
+    };
+  });
+  await routeEditor.fill("請求未送出時的跨頁本地內容");
+  await expect(routePage.getByText("儲存失敗", { exact: true })).toBeVisible();
+  dialog = routePage.waitForEvent("dialog");
+  traversal = routePage.evaluate(() => window.history.back());
+  warning = await dialog;
+  await warning.dismiss();
+  await traversal;
+  await expect(routePage).toHaveURL(gameUrl);
+  await expect(routeEditor).toHaveValue("請求未送出時的跨頁本地內容");
+  await routePage.close();
   await page.close();
 });
 

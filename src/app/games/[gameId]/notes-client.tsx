@@ -21,7 +21,7 @@ function leaveMessage() {
     : "筆記仍有未儲存內容。仍要離開嗎？";
 }
 
-function installHistoryTracking() {
+export function installHistoryTracking() {
   if (historyTrackingInstalled) return;
   historyTrackingInstalled = true;
   const state = (window.history.state ?? {}) as Record<string, unknown>;
@@ -54,6 +54,7 @@ function installHistoryTracking() {
     const compensationDelta = -lastHistoryDelta;
     const sourcePosition = historyPosition + compensationDelta;
     if (!window.confirm(leaveMessage())) {
+      event.stopImmediatePropagation();
       suppressedHistoryPosition = sourcePosition;
       window.setTimeout(() => window.history.go(compensationDelta), 50);
     }
@@ -76,6 +77,8 @@ function installHistoryTracking() {
   else window.addEventListener("popstate", beforeHistory);
   document.addEventListener("click", beforeLink, true);
 }
+
+if (typeof window !== "undefined") installHistoryTracking();
 
 function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId: string; initial?: NoteRecord; onCreated?: (note: NoteRecord) => void; onDiscard?: () => void }>) {
   const [noteId, setNoteId] = useState(initial?.id ?? null);
@@ -141,10 +144,6 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
       onCreated({ id: result.resourceId, gameId, content: command.content, version: result.version, state: "active", createdAt: now, updatedAt: now });
     }
   }, [content, gameId, noteId, onCreated, status, version]);
-
-  useEffect(() => {
-    installHistoryTracking();
-  }, []);
 
   useEffect(() => {
     const id = guardId.current;
