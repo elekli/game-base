@@ -266,6 +266,28 @@
       "withCheck": "true"
     },
     {
+      "table": "note_command_receipts",
+      "name": "runtime_note_command_receipts",
+      "validFrom": "0017",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "notes",
+      "name": "runtime_notes",
+      "validFrom": "0017",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
       "table": "platforms",
       "name": "runtime_platforms",
       "validFrom": "0004",

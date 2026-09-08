@@ -4,7 +4,7 @@ import { NamedError } from "@/shared/errors/named-error";
 
 export const COMMAND_RECEIPT_RETENTION_DAYS = 90;
 
-export type CommandResourceState = "active" | "trashed";
+export type CommandResourceState = "active" | "trashed" | "removed";
 
 export type GameEditCommand = Readonly<{
   ownerId: string;

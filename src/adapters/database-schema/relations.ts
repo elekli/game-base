@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm/relations";
-import { externalGameIdentitiesInAppPrivate, bggCurrentMetricsInAppPrivate, externalGameCategoriesInAppPrivate, sourceCategoriesInAppPrivate, externalPlayerProfilesInAppPrivate, externalSupportedPlatformsInAppPrivate, gamesInAppPrivate, gameNamesInAppPrivate, gamePlatformsInAppPrivate, platformsInAppPrivate, gameTagsInAppPrivate, tagsInAppPrivate, manualContributionsInAppPrivate, contributorsInAppPrivate, mediaIngestsInAppPrivate, mediaAssetsInAppPrivate, mediaDerivativeAttemptsInAppPrivate, mediaCleanupJobsInAppPrivate, mediaDerivativesInAppPrivate, mediaIngestOperationsInAppPrivate, sourceContributionsInAppPrivate, sourceRefreshOperationsInAppPrivate } from "./schema";
+import { externalGameIdentitiesInAppPrivate, bggCurrentMetricsInAppPrivate, sourceCategoriesInAppPrivate, externalGameCategoriesInAppPrivate, externalPlayerProfilesInAppPrivate, externalSupportedPlatformsInAppPrivate, gamesInAppPrivate, gameNamesInAppPrivate, gamePlatformsInAppPrivate, platformsInAppPrivate, gameTagsInAppPrivate, tagsInAppPrivate, contributorsInAppPrivate, manualContributionsInAppPrivate, mediaIngestsInAppPrivate, mediaAssetsInAppPrivate, mediaDerivativeAttemptsInAppPrivate, mediaCleanupJobsInAppPrivate, mediaDerivativesInAppPrivate, mediaIngestOperationsInAppPrivate, notesInAppPrivate, sourceContributionsInAppPrivate, sourceRefreshOperationsInAppPrivate } from "./schema";
 
 export const bggCurrentMetricsInAppPrivateRelations = relations(bggCurrentMetricsInAppPrivate, ({one}) => ({
 	externalGameIdentitiesInAppPrivate: one(externalGameIdentitiesInAppPrivate, {
@@ -24,13 +24,13 @@ export const externalGameIdentitiesInAppPrivateRelations = relations(externalGam
 }));
 
 export const externalGameCategoriesInAppPrivateRelations = relations(externalGameCategoriesInAppPrivate, ({one}) => ({
-	externalGameIdentitiesInAppPrivate: one(externalGameIdentitiesInAppPrivate, {
-		fields: [externalGameCategoriesInAppPrivate.identityId],
-		references: [externalGameIdentitiesInAppPrivate.id]
-	}),
 	sourceCategoriesInAppPrivate: one(sourceCategoriesInAppPrivate, {
 		fields: [externalGameCategoriesInAppPrivate.categoryId],
 		references: [sourceCategoriesInAppPrivate.id]
+	}),
+	externalGameIdentitiesInAppPrivate: one(externalGameIdentitiesInAppPrivate, {
+		fields: [externalGameCategoriesInAppPrivate.identityId],
+		references: [externalGameIdentitiesInAppPrivate.id]
 	}),
 }));
 
@@ -76,6 +76,7 @@ export const gamesInAppPrivateRelations = relations(gamesInAppPrivate, ({one, ma
 	manualContributionsInAppPrivates: many(manualContributionsInAppPrivate),
 	mediaIngestOperationsInAppPrivates: many(mediaIngestOperationsInAppPrivate),
 	mediaIngestsInAppPrivates: many(mediaIngestsInAppPrivate),
+	notesInAppPrivates: many(notesInAppPrivate),
 	sourceRefreshOperationsInAppPrivates: many(sourceRefreshOperationsInAppPrivate),
 }));
 
@@ -110,13 +111,13 @@ export const tagsInAppPrivateRelations = relations(tagsInAppPrivate, ({many}) =>
 }));
 
 export const manualContributionsInAppPrivateRelations = relations(manualContributionsInAppPrivate, ({one}) => ({
-	gamesInAppPrivate: one(gamesInAppPrivate, {
-		fields: [manualContributionsInAppPrivate.gameId],
-		references: [gamesInAppPrivate.id]
-	}),
 	contributorsInAppPrivate: one(contributorsInAppPrivate, {
 		fields: [manualContributionsInAppPrivate.contributorId],
 		references: [contributorsInAppPrivate.id]
+	}),
+	gamesInAppPrivate: one(gamesInAppPrivate, {
+		fields: [manualContributionsInAppPrivate.gameId],
+		references: [gamesInAppPrivate.id]
 	}),
 }));
 
@@ -166,34 +167,41 @@ export const mediaDerivativesInAppPrivateRelations = relations(mediaDerivativesI
 }));
 
 export const mediaIngestOperationsInAppPrivateRelations = relations(mediaIngestOperationsInAppPrivate, ({one}) => ({
+	gamesInAppPrivate: one(gamesInAppPrivate, {
+		fields: [mediaIngestOperationsInAppPrivate.gameId],
+		references: [gamesInAppPrivate.id]
+	}),
 	mediaIngestsInAppPrivate: one(mediaIngestsInAppPrivate, {
 		fields: [mediaIngestOperationsInAppPrivate.ingestId],
 		references: [mediaIngestsInAppPrivate.id]
 	}),
+}));
+
+export const notesInAppPrivateRelations = relations(notesInAppPrivate, ({one}) => ({
 	gamesInAppPrivate: one(gamesInAppPrivate, {
-		fields: [mediaIngestOperationsInAppPrivate.gameId],
+		fields: [notesInAppPrivate.gameId],
 		references: [gamesInAppPrivate.id]
 	}),
 }));
 
 export const sourceContributionsInAppPrivateRelations = relations(sourceContributionsInAppPrivate, ({one}) => ({
-	externalGameIdentitiesInAppPrivate: one(externalGameIdentitiesInAppPrivate, {
-		fields: [sourceContributionsInAppPrivate.identityId],
-		references: [externalGameIdentitiesInAppPrivate.id]
-	}),
 	contributorsInAppPrivate: one(contributorsInAppPrivate, {
 		fields: [sourceContributionsInAppPrivate.contributorId],
 		references: [contributorsInAppPrivate.id]
 	}),
+	externalGameIdentitiesInAppPrivate: one(externalGameIdentitiesInAppPrivate, {
+		fields: [sourceContributionsInAppPrivate.identityId],
+		references: [externalGameIdentitiesInAppPrivate.id]
+	}),
 }));
 
 export const sourceRefreshOperationsInAppPrivateRelations = relations(sourceRefreshOperationsInAppPrivate, ({one}) => ({
-	gamesInAppPrivate: one(gamesInAppPrivate, {
-		fields: [sourceRefreshOperationsInAppPrivate.gameId],
-		references: [gamesInAppPrivate.id]
-	}),
 	externalGameIdentitiesInAppPrivate: one(externalGameIdentitiesInAppPrivate, {
 		fields: [sourceRefreshOperationsInAppPrivate.externalGameIdentityId],
 		references: [externalGameIdentitiesInAppPrivate.id]
+	}),
+	gamesInAppPrivate: one(gamesInAppPrivate, {
+		fields: [sourceRefreshOperationsInAppPrivate.gameId],
+		references: [gamesInAppPrivate.id]
 	}),
 }));

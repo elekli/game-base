@@ -56,15 +56,15 @@ export const externalGameCategoriesInAppPrivate = appPrivate.table("external_gam
 }, (table) => [
 	index("external_game_categories_category_id_idx").using("btree", table.categoryId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
-			columns: [table.identityId],
-			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
-			name: "external_game_categories_identity_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
 			columns: [table.categoryId],
 			foreignColumns: [sourceCategoriesInAppPrivate.id],
 			name: "external_game_categories_category_id_fkey"
 		}).onDelete("restrict"),
+	foreignKey({
+			columns: [table.identityId],
+			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
+			name: "external_game_categories_identity_id_fkey"
+		}).onDelete("cascade"),
 	pgPolicy("runtime_external_game_categories", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
@@ -195,15 +195,15 @@ export const manualContributionsInAppPrivate = appPrivate.table("manual_contribu
 }, (table) => [
 	index("manual_contributions_contributor_id_idx").using("btree", table.contributorId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
-			columns: [table.gameId],
-			foreignColumns: [gamesInAppPrivate.id],
-			name: "manual_contributions_game_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
 			columns: [table.contributorId],
 			foreignColumns: [contributorsInAppPrivate.id],
 			name: "manual_contributions_contributor_id_fkey"
 		}).onDelete("restrict"),
+	foreignKey({
+			columns: [table.gameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "manual_contributions_game_id_fkey"
+		}).onDelete("cascade"),
 	pgPolicy("runtime_manual_contributions", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
@@ -322,14 +322,14 @@ export const mediaIngestOperationsInAppPrivate = appPrivate.table("media_ingest_
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	foreignKey({
-			columns: [table.ingestId],
-			foreignColumns: [mediaIngestsInAppPrivate.id],
-			name: "media_ingest_operations_ingest_id_fkey"
-		}).onDelete("restrict"),
-	foreignKey({
 			columns: [table.gameId],
 			foreignColumns: [gamesInAppPrivate.id],
 			name: "media_ingest_operations_game_id_fkey"
+		}).onDelete("restrict"),
+	foreignKey({
+			columns: [table.ingestId],
+			foreignColumns: [mediaIngestsInAppPrivate.id],
+			name: "media_ingest_operations_ingest_id_fkey"
 		}).onDelete("restrict"),
 	pgPolicy("runtime_media_ingest_operations_insert", { as: "permissive", for: "insert", to: ["app_runtime"], withCheck: sql`true`  }),
 	pgPolicy("runtime_media_ingest_operations_select", { as: "permissive", for: "select", to: ["app_runtime"] }),
@@ -384,6 +384,45 @@ export const mediaReconciliationRunsInAppPrivate = appPrivate.table("media_recon
 	pgPolicy("runtime_media_reconciliation_runs_update", { as: "permissive", for: "update", to: ["app_runtime"] }),
 ]);
 
+export const noteCommandReceiptsInAppPrivate = appPrivate.table("note_command_receipts", {
+	commandId: uuid("command_id").notNull(),
+	ownerId: text("owner_id").notNull(),
+	commandKind: text("command_kind").notNull(),
+	targetKind: text("target_kind").notNull(),
+	targetId: uuid("target_id").notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	expectedVersion: bigint("expected_version", { mode: "number" }),
+	payloadSha256: text("payload_sha256").notNull(),
+	resultId: uuid("result_id"),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	resultVersion: bigint("result_version", { mode: "number" }),
+	resultState: text("result_state"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).default(sql`(clock_timestamp() + '90 days'::interval)`).notNull(),
+}, (table) => [
+	index("note_command_receipts_expiry_idx").using("btree", table.expiresAt.asc().nullsLast().op("timestamptz_ops"), table.commandId.asc().nullsLast().op("timestamptz_ops")),
+	pgPolicy("runtime_note_command_receipts", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
+export const notesInAppPrivate = appPrivate.table("notes", {
+	id: uuid().notNull(),
+	gameId: uuid("game_id").notNull(),
+	content: text().notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	version: bigint({ mode: "number" }).default(1).notNull(),
+	removedAt: timestamp("removed_at", { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+}, (table) => [
+	index("notes_active_game_idx").using("btree", table.gameId.asc().nullsLast().op("uuid_ops"), table.createdAt.asc().nullsLast().op("timestamptz_ops"), table.id.asc().nullsLast().op("uuid_ops")).where(sql`(removed_at IS NULL)`),
+	foreignKey({
+			columns: [table.gameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "notes_game_id_fkey"
+		}).onDelete("restrict"),
+	pgPolicy("runtime_notes", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
 export const platformsInAppPrivate = appPrivate.table("platforms", {
 	id: uuid().defaultRandom().notNull(),
 	name: text().notNull(),
@@ -428,15 +467,15 @@ export const sourceContributionsInAppPrivate = appPrivate.table("source_contribu
 }, (table) => [
 	index("source_contributions_identity_id_idx").using("btree", table.identityId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
-			columns: [table.identityId],
-			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
-			name: "source_contributions_identity_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
 			columns: [table.contributorId],
 			foreignColumns: [contributorsInAppPrivate.id],
 			name: "source_contributions_contributor_id_fkey"
 		}).onDelete("restrict"),
+	foreignKey({
+			columns: [table.identityId],
+			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
+			name: "source_contributions_identity_id_fkey"
+		}).onDelete("cascade"),
 	pgPolicy("runtime_source_contributions", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
@@ -448,14 +487,14 @@ export const sourceRefreshOperationsInAppPrivate = appPrivate.table("source_refr
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	foreignKey({
-			columns: [table.gameId],
-			foreignColumns: [gamesInAppPrivate.id],
-			name: "source_refresh_operations_game_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
 			columns: [table.externalGameIdentityId],
 			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
 			name: "source_refresh_operations_external_game_identity_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.gameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "source_refresh_operations_game_id_fkey"
 		}).onDelete("cascade"),
 	pgPolicy("runtime_source_refresh_operations_insert", { as: "permissive", for: "insert", to: ["app_runtime"], withCheck: sql`true`  }),
 	pgPolicy("runtime_source_refresh_operations_select", { as: "permissive", for: "select", to: ["app_runtime"] }),
