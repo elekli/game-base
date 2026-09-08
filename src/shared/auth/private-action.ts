@@ -14,6 +14,7 @@ import {
   CommandVersionConflictError,
   type CommandResourceState,
 } from "@/modules/commands";
+import { NoteContentBlankError, NoteGameUnavailableError, NoteStateConflictError, NoteVersionConflictError, type NoteRecord } from "@/modules/notes";
 
 type PrivateActionDependencies = Readonly<{
   verifyAccessToken: AccessTokenVerifier;
@@ -21,7 +22,7 @@ type PrivateActionDependencies = Readonly<{
   onUnhandledFailure: (context: Readonly<{ errorCode: string; requestId: string }>) => void | Promise<void>;
 }>;
 
-type PrivateActionFailureCode = "access_denied" | "invalid_input" | "library_conflict" | "source_operation" | "command_version_conflict" | "command_idempotency_conflict" | "command_target_not_found" | "operation_failed";
+type PrivateActionFailureCode = "access_denied" | "invalid_input" | "library_conflict" | "source_operation" | "command_version_conflict" | "command_idempotency_conflict" | "command_target_not_found" | "note_content_blank" | "note_game_unavailable" | "note_state_conflict" | "operation_failed";
 
 export type PrivateActionResult<Success extends object = Record<never, never>> =
   | (Readonly<{ ok: true }> & Success)
@@ -35,6 +36,7 @@ export type PrivateActionResult<Success extends object = Record<never, never>> =
     retryAfterSeconds?: number;
     currentVersion?: number;
     currentState?: CommandResourceState;
+    currentNote?: NoteRecord;
   }>;
 
 type PrivateActionOptions<Input, Success extends object> = PrivateActionDependencies & Readonly<{
@@ -79,6 +81,18 @@ export async function handlePrivateAction<Input, Success extends object>(
     }
     return { ok: true, ...(await options.operation(owner, parsed.data)) };
   } catch (error) {
+    if (error instanceof NoteVersionConflictError) {
+      return { ok: false, code: "command_version_conflict", message: error.message, requestId, currentVersion: error.current.version, currentState: error.current.state, currentNote: error.current };
+    }
+    if (error instanceof NoteContentBlankError || error instanceof NoteGameUnavailableError || error instanceof NoteStateConflictError) {
+      return {
+        ok: false,
+        code: error.code as "note_content_blank" | "note_game_unavailable" | "note_state_conflict",
+        message: error.message,
+        requestId,
+        ...(error instanceof NoteStateConflictError ? { currentVersion: error.current.version, currentState: error.current.state, currentNote: error.current } : {}),
+      };
+    }
     if (error instanceof CommandVersionConflictError) {
       return { ok: false, code: "command_version_conflict", message: error.message, requestId, currentVersion: error.currentVersion, currentState: error.currentState };
     }
