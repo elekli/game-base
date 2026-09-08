@@ -38,7 +38,7 @@ function release(): ProductionDeploymentRelease {
       requestIds: [REQUEST_ID],
       counts: {
         baseline: { row: 0, object: 0 },
-        mutation: { row: 1, object: 1 },
+        mutation: { row: 1, object: 2 },
         cleanup: { row: 0, object: 0 },
       },
       checks: {
@@ -49,6 +49,9 @@ function release(): ProductionDeploymentRelease {
         "private-storage-direct-denied": "passed",
         "canary-row-round-trip": "passed",
         "canary-object-round-trip": "passed",
+        "private-media-original-read": "passed",
+        "media-thumbnail-generated": "passed",
+        "private-media-thumbnail-read": "passed",
         "canary-cleanup-counts": "passed",
       },
     },

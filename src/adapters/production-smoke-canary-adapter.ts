@@ -1,13 +1,15 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import postgres from "postgres";
+import sharp from "sharp";
 
 import {
   calculateProductionSmokePayloadSha256,
   PRODUCTION_SMOKE_NAMESPACE,
   PRODUCTION_SMOKE_OBJECT_PATH,
-  PRODUCTION_SMOKE_ROW_ID,
+  PRODUCTION_SMOKE_THUMBNAIL_OBJECT_PATH,
   type ProductionSmokePersistedPhase,
 } from "../../scripts/production-smoke-canary";
 import type {
@@ -52,7 +54,7 @@ type CanaryRow = Readonly<{
 }>;
 
 type ObjectSnapshot = Readonly<{
-  count: 0 | 1;
+  count: 0 | 1 | 2;
   identity?: string;
   generation?: string;
   payloadSha256?: string;
@@ -88,8 +90,8 @@ export type ProductionSmokeDatabase = Readonly<{
 }>;
 
 export type ProductionSmokeObjectStore = Readonly<{
-  inspect(expectedCanonicalBytes: Uint8Array, signal?: AbortSignal): Promise<ObjectSnapshot>;
-  upload(canonicalBytes: Uint8Array, signal?: AbortSignal): Promise<void>;
+  inspect(expected: CanonicalProductionSmokeMedia, signal?: AbortSignal): Promise<ObjectSnapshot>;
+  upload(canonical: CanonicalProductionSmokeMedia, signal?: AbortSignal): Promise<void>;
   remove(signal?: AbortSignal): Promise<void>;
 }>;
 
@@ -111,19 +113,44 @@ function identityFor(executionSha: string) {
   return `${PRODUCTION_SMOKE_NAMESPACE}:${executionSha}`;
 }
 
-export function canonicalProductionSmokeObjectBytes(input: Readonly<{
+export type CanonicalProductionSmokeMedia = Readonly<{
+  identity: string;
+  generation: string;
+  payloadSha256: string;
+  original: Uint8Array;
+  thumbnail: Uint8Array;
+}>;
+
+export async function canonicalProductionSmokeMedia(input: Readonly<{
   executionSha: string;
   generation: string;
-}>): Uint8Array {
+}>): Promise<CanonicalProductionSmokeMedia> {
   const identity = identityFor(input.executionSha);
-  return new TextEncoder().encode(JSON.stringify({
+  const payloadSha256 = calculateProductionSmokePayloadSha256(input.executionSha);
+  const seed = createHash("sha256").update(JSON.stringify({
     namespace: PRODUCTION_SMOKE_NAMESPACE,
-    rowId: PRODUCTION_SMOKE_ROW_ID,
-    objectPath: PRODUCTION_SMOKE_OBJECT_PATH,
     identity,
     generation: input.generation,
-    payloadSha256: calculateProductionSmokePayloadSha256(input.executionSha),
-  }));
+    payloadSha256,
+  })).digest();
+  const pixels = Buffer.alloc(8 * 8 * 4);
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    pixels[offset] = seed[offset % seed.length];
+    pixels[offset + 1] = seed[(offset + 1) % seed.length];
+    pixels[offset + 2] = seed[(offset + 2) % seed.length];
+    pixels[offset + 3] = 255;
+  }
+  const original = new Uint8Array(await sharp(pixels, {
+    raw: { width: 8, height: 8, channels: 4 },
+  }).png().toBuffer());
+  const thumbnail = new Uint8Array(await sharp(original)
+    .resize(4, 4, { fit: "cover" })
+    .webp()
+    .toBuffer());
+  if (original.byteLength > MAX_OBJECT_BYTES || thumbnail.byteLength > MAX_OBJECT_BYTES) {
+    throw new ProductionSmokeOperationError("generated smoke media exceeds the bounded object size");
+  }
+  return { identity, generation: input.generation, payloadSha256, original, thumbnail };
 }
 
 function exactRow(row: CanaryRow, input: ReleaseSmokeOperationInput) {
@@ -174,7 +201,7 @@ export class ProductionSmokeCanaryAdapter {
   ): Promise<ReleaseSmokeOperationResult> {
     const identity = identityFor(input.executionSha);
     const payloadSha256 = calculateProductionSmokePayloadSha256(input.executionSha);
-    const canonicalBytes = canonicalProductionSmokeObjectBytes(input);
+    const canonical = await canonicalProductionSmokeMedia(input);
 
     return this.database.locked(async (session) => {
       switch (input.operation) {
@@ -182,7 +209,7 @@ export class ProductionSmokeCanaryAdapter {
         case "inspect-cleanup": {
           const [row, object] = await Promise.all([
             session.inspect(),
-            this.objects.inspect(canonicalBytes, signal),
+            this.objects.inspect(canonical, signal),
           ]);
           return countsEvent(
             input.operation === "inspect-baseline" ? "baseline" : "cleanup",
@@ -216,16 +243,16 @@ export class ProductionSmokeCanaryAdapter {
           return { kind: "row-written" };
         }
         case "write-object":
-          return this.writeObject(session, input, canonicalBytes, identity, payloadSha256, signal);
+          return this.writeObject(session, input, canonical, identity, payloadSha256, signal);
         case "verify-round-trip": {
           const [row, object] = await Promise.all([
             session.inspect(),
-            this.objects.inspect(canonicalBytes, signal),
+            this.objects.inspect(canonical, signal),
           ]);
           return countsEvent("round-trip", row, object);
         }
         case "cleanup-exact":
-          return this.cleanup(session, input, canonicalBytes, identity, payloadSha256, signal);
+          return this.cleanup(session, input, canonical, identity, payloadSha256, signal);
       }
     });
   }
@@ -233,7 +260,7 @@ export class ProductionSmokeCanaryAdapter {
   private async writeObject(
     session: ProductionSmokeDatabaseSession,
     input: ReleaseSmokeOperationInput,
-    canonicalBytes: Uint8Array,
+    canonical: CanonicalProductionSmokeMedia,
     identity: string,
     payloadSha256: string,
     signal: AbortSignal,
@@ -262,8 +289,8 @@ export class ProductionSmokeCanaryAdapter {
       throw new ProductionSmokeOperationError("canary write action does not match persisted state");
     }
     if (row.phase === "object_written") {
-      const existing = await this.objects.inspect(canonicalBytes, signal);
-      if (existing.count === 1 && existing.canonical) return { kind: "object-written" };
+      const existing = await this.objects.inspect(canonical, signal);
+      if (existing.count === 2 && existing.canonical) return { kind: "object-written" };
       throw new ProductionSmokeOperationError("persisted object write does not match Storage");
     }
     if (row.phase !== "object_write_pending") {
@@ -271,9 +298,9 @@ export class ProductionSmokeCanaryAdapter {
     }
 
     try {
-      await this.objects.upload(canonicalBytes, signal);
-      const stored = await this.objects.inspect(canonicalBytes, signal);
-      if (stored.count !== 1 || !stored.canonical) {
+      await this.objects.upload(canonical, signal);
+      const stored = await this.objects.inspect(canonical, signal);
+      if (stored.count !== 2 || !stored.canonical) {
         throw new ProductionSmokeOperationUncertainError("Storage write could not be verified exactly");
       }
       const moved = await session.transition({
@@ -294,8 +321,8 @@ export class ProductionSmokeCanaryAdapter {
           : "cleanup_pending";
       if (nextPhase === "cleanup_pending") {
         try {
-          const observed = await this.objects.inspect(canonicalBytes, signal);
-          if (observed.count === 1 && observed.canonical) {
+          const observed = await this.objects.inspect(canonical, signal);
+          if (observed.count === 2 && observed.canonical) {
             const moved = await session.transition({
               generation: input.generation,
               identity,
@@ -308,7 +335,22 @@ export class ProductionSmokeCanaryAdapter {
             if (!moved) throw new ProductionSmokeOperationUncertainError("recovered Storage write lost its DB fence");
             return { kind: "object-written" };
           }
-          if (observed.count === 1) nextPhase = "object_write_uncertain";
+          if (observed.count === 1 && observed.canonical) {
+            try {
+              await this.objects.remove(signal);
+              const afterDelete = await this.objects.inspect(canonical, signal);
+              if (afterDelete.count !== 0) {
+                throw new ProductionSmokeOperationUncertainError(
+                  "partial Storage write cleanup could not be verified",
+                );
+              }
+            } catch {
+              nextPhase = "object_write_uncertain";
+            }
+          }
+          if (observed.count > 0 && !observed.canonical) {
+            nextPhase = "object_write_uncertain";
+          }
         } catch {
           nextPhase = "object_write_uncertain";
         }
@@ -332,14 +374,14 @@ export class ProductionSmokeCanaryAdapter {
   private async cleanup(
     session: ProductionSmokeDatabaseSession,
     input: ReleaseSmokeOperationInput,
-    canonicalBytes: Uint8Array,
+    canonical: CanonicalProductionSmokeMedia,
     identity: string,
     payloadSha256: string,
     signal: AbortSignal,
   ): Promise<ReleaseSmokeOperationResult> {
     let row = await session.inspect();
     if (row.rowCount === 0) {
-      const object = await this.objects.inspect(canonicalBytes, signal);
+      const object = await this.objects.inspect(canonical, signal);
       if (object.count === 0) return { kind: "cleanup-finished" };
       throw new ProductionSmokeOperationUncertainError("Storage object exists without its canary row");
     }
@@ -349,9 +391,14 @@ export class ProductionSmokeCanaryAdapter {
     if (row.actionSequence > input.actionSequence || row.phase.endsWith("_uncertain")) {
       throw new ProductionSmokeOperationUncertainError("canary cleanup state requires manual recovery");
     }
-    const object = await this.objects.inspect(canonicalBytes, signal);
-    if (object.count === 1 && !object.canonical) {
-      throw new ProductionSmokeOperationUncertainError("fixed Storage object is not the active canary");
+    const object = await this.objects.inspect(canonical, signal);
+    if (object.count > 0 && !object.canonical) {
+      throw new ProductionSmokeOperationUncertainError("fixed Storage media objects are incomplete or not the active canary");
+    }
+    if (object.count === 1) {
+      throw new ProductionSmokeOperationUncertainError(
+        "partial Storage media from an interrupted cleanup requires manual recovery",
+      );
     }
 
     if (row.phase === "object_written" || row.phase === "object_write_pending") {
@@ -377,9 +424,13 @@ export class ProductionSmokeCanaryAdapter {
     if (cleanupActionSequence === undefined) {
       throw new ProductionSmokeOperationError("canary cleanup sequence is missing");
     }
-    if (object.count === 1) {
+    if (object.count > 0) {
       try {
         await this.objects.remove(signal);
+        const afterDelete = await this.objects.inspect(canonical, signal);
+        if (afterDelete.count !== 0) {
+          throw new ProductionSmokeOperationUncertainError("Storage cleanup could not be verified");
+        }
       } catch {
         await session.transition({
           generation: input.generation,
@@ -391,19 +442,6 @@ export class ProductionSmokeCanaryAdapter {
           nextPhase: "cleanup_uncertain",
         });
         throw new ProductionSmokeOperationUncertainError("Storage cleanup outcome is uncertain");
-      }
-      const afterDelete = await this.objects.inspect(canonicalBytes, signal);
-      if (afterDelete.count !== 0) {
-        await session.transition({
-          generation: input.generation,
-          identity,
-          payloadSha256,
-          expectedActionSequence: cleanupActionSequence,
-          expectedPhase: "cleanup_pending",
-          nextActionSequence: input.actionSequence,
-          nextPhase: "cleanup_uncertain",
-        });
-        throw new ProductionSmokeOperationUncertainError("Storage cleanup could not be verified");
       }
     }
     const removed = await session.cleanup({
@@ -613,47 +651,65 @@ export function createSupabaseProductionSmokeObjectStore(input: Readonly<{
     },
   } as unknown as StorageFiles;
   return {
-    async inspect(expectedCanonicalBytes, parentSignal) {
+    async inspect(expected, parentSignal) {
       try {
-        const { data, error, bytes } = await withStorageDeadline(async (signal) => {
-          const { data, error } = await files.download(PRODUCTION_SMOKE_OBJECT_PATH, signal).asStream();
+        const inspectPath = async (path: string, expectedBytes: Uint8Array) => {
+          const { data, error, bytes } = await withStorageDeadline(async (signal) => {
+            const { data, error } = await files.download(path, signal).asStream();
+            return {
+              data,
+              error,
+              bytes: data ? await readBoundedStream(data, signal) : undefined,
+            };
+          }, parentSignal);
+          if (error) {
+            if (notFound(error)) return { exists: false, canonical: false };
+            throw new ProductionSmokeOperationUncertainError("Storage inspect failed");
+          }
+          if (!data || !bytes) return { exists: true, canonical: false };
           return {
-            data,
-            error,
-            bytes: data ? await readBoundedStream(data, signal) : undefined,
+            exists: true,
+            canonical: bytes.byteLength === expectedBytes.byteLength &&
+              bytes.every((byte, index) => byte === expectedBytes[index]),
           };
-        }, parentSignal);
-        if (error) {
-          if (notFound(error)) return { count: 0, canonical: false };
-          throw new ProductionSmokeOperationUncertainError("Storage inspect failed");
-        }
-        if (!data) return { count: 1, canonical: false };
-        if (!bytes) return { count: 1, canonical: false };
-        const canonical = bytes.byteLength === expectedCanonicalBytes.byteLength &&
-          bytes.every((byte, index) => byte === expectedCanonicalBytes[index]);
-        if (!canonical) return { count: 1, canonical: false };
-        const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as Record<string, unknown>;
+        };
+        const [original, thumbnail] = await Promise.all([
+          inspectPath(PRODUCTION_SMOKE_OBJECT_PATH, expected.original),
+          inspectPath(PRODUCTION_SMOKE_THUMBNAIL_OBJECT_PATH, expected.thumbnail),
+        ]);
+        const count = (Number(original.exists) + Number(thumbnail.exists)) as 0 | 1 | 2;
+        const canonical = count > 0 &&
+          (!original.exists || original.canonical) &&
+          (!thumbnail.exists || thumbnail.canonical);
+        if (!canonical) return { count, canonical: false };
         return {
-          count: 1,
+          count,
           canonical: true,
-          identity: parsed.identity as string,
-          generation: parsed.generation as string,
-          payloadSha256: parsed.payloadSha256 as string,
+          identity: expected.identity,
+          generation: expected.generation,
+          payloadSha256: expected.payloadSha256,
         };
       } catch (error) {
         if (error instanceof ProductionSmokeOperationUncertainError) throw error;
         throw new ProductionSmokeOperationUncertainError("Storage inspect failed");
       }
     },
-    async upload(canonicalBytes, parentSignal) {
+    async upload(canonical, parentSignal) {
       try {
-        const { error } = await withStorageDeadline((signal) => files.upload(
+        const original = await withStorageDeadline((signal) => files.upload(
           PRODUCTION_SMOKE_OBJECT_PATH,
-          canonicalBytes,
-          { contentType: "application/json", upsert: false, cacheControl: "0" },
+          canonical.original,
+          { contentType: "image/png", upsert: false, cacheControl: "0" },
           signal,
         ), parentSignal);
-        if (error) throw new ProductionSmokeOperationError("Storage write failed");
+        if (original.error) throw new ProductionSmokeOperationError("Storage original write failed");
+        const thumbnail = await withStorageDeadline((signal) => files.upload(
+          PRODUCTION_SMOKE_THUMBNAIL_OBJECT_PATH,
+          canonical.thumbnail,
+          { contentType: "image/webp", upsert: false, cacheControl: "0" },
+          signal,
+        ), parentSignal);
+        if (thumbnail.error) throw new ProductionSmokeOperationError("Storage thumbnail write failed");
       } catch (error) {
         if (error instanceof ProductionSmokeOperationError) throw error;
         throw new ProductionSmokeOperationUncertainError("Storage write failed without a response");
@@ -662,7 +718,10 @@ export function createSupabaseProductionSmokeObjectStore(input: Readonly<{
     async remove(parentSignal) {
       try {
         const { error } = await withStorageDeadline(
-          (signal) => files.remove([PRODUCTION_SMOKE_OBJECT_PATH], signal),
+          (signal) => files.remove([
+            PRODUCTION_SMOKE_OBJECT_PATH,
+            PRODUCTION_SMOKE_THUMBNAIL_OBJECT_PATH,
+          ], signal),
           parentSignal,
         );
         if (error && !notFound(error)) throw new ProductionSmokeOperationUncertainError("Storage delete failed");

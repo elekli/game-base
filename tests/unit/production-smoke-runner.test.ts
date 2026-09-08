@@ -28,7 +28,7 @@ function routeEvent(operation: string) {
     case "verify-round-trip": return {
       kind: "round-trip-observed",
       rowCount: 1,
-      objectCount: 1,
+      objectCount: 2,
       rowIdentity: IDENTITY,
       objectIdentity: IDENTITY,
       rowGeneration: GENERATION,
@@ -72,12 +72,15 @@ describe("production smoke runner", () => {
     await expect(runProductionSmokeCanary({ executionSha: SHA, generation: GENERATION }, deps)).resolves.toMatchObject({
       outcome: "passed",
       evidence: {
-        counts: { baseline: { row: 0, object: 0 }, mutation: { row: 1, object: 1 }, cleanup: { row: 0, object: 0 } },
+        counts: { baseline: { row: 0, object: 0 }, mutation: { row: 1, object: 2 }, cleanup: { row: 0, object: 0 } },
         checks: {
           "custom-domain-owner-access": "passed",
           "direct-origin-denied": "passed",
           "authenticated-library-read": "passed",
           "runtime-database-read": "passed",
+          "private-media-original-read": "passed",
+          "media-thumbnail-generated": "passed",
+          "private-media-thumbnail-read": "passed",
           "private-storage-direct-denied": "passed",
         },
       },
@@ -212,7 +215,7 @@ describe("production smoke runner", () => {
       kind: "verify-private-storage-denial",
       generation: GENERATION,
       actionSequence: 6,
-      objectPath: "release-smoke-v1/canary.json",
+      objectPath: "release-smoke-v1/original.png",
     }, SHA, new AbortController().signal)).resolves.toEqual({
       kind: "operation-failed",
       safeDetail: "private Storage public path was not denied",
@@ -289,9 +292,10 @@ describe("production smoke runner", () => {
       expect(JSON.stringify(body)).not.toContain("client-secret");
       expect(JSON.stringify(body)).not.toContain("owner-jwt");
     }
-    expect(requests.map(({ url }) => url)).toContain(
-      "https://project.supabase.co/storage/v1/object/public/game-media/release-smoke-v1/canary.json",
-    );
+    expect(requests.map(({ url }) => url)).toEqual(expect.arrayContaining([
+      "https://project.supabase.co/storage/v1/object/public/game-media/release-smoke-v1/original.png",
+      "https://project.supabase.co/storage/v1/object/public/game-media/release-smoke-v1/thumbnail.webp",
+    ]));
     const storageIndex = requests.findIndex(({ url }) => url.includes("/storage/v1/object/public/"));
     const roundTripIndex = requests.findIndex(({ init }) => String(init.body).includes("verify-round-trip"));
     const cleanupIndex = requests.findIndex(({ init }) => String(init.body).includes("cleanup-exact"));

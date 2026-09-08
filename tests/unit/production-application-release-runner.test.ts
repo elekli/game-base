@@ -118,7 +118,7 @@ function successfulPorts(): ProductionApplicationReleaseRunnerPorts {
                   ...envelope,
                   kind: "round-trip-observed",
                   rowCount: 1,
-                  objectCount: 1,
+                  objectCount: 2,
                   rowIdentity: IDENTITY,
                   objectIdentity: IDENTITY,
                   rowGeneration: GENERATION,

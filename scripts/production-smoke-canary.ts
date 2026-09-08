@@ -4,7 +4,9 @@ export const PRODUCTION_SMOKE_NAMESPACE = "release-smoke-v1" as const;
 export const PRODUCTION_SMOKE_ROW_ID =
   "7355773e-c3b5-4e5d-9f07-55ac0e22f384" as const;
 export const PRODUCTION_SMOKE_OBJECT_PATH =
-  "release-smoke-v1/canary.json" as const;
+  "release-smoke-v1/original.png" as const;
+export const PRODUCTION_SMOKE_THUMBNAIL_OBJECT_PATH =
+  "release-smoke-v1/thumbnail.webp" as const;
 
 export const PRODUCTION_SMOKE_CHECKS = [
   "custom-domain-owner-access",
@@ -14,6 +16,9 @@ export const PRODUCTION_SMOKE_CHECKS = [
   "private-storage-direct-denied",
   "canary-row-round-trip",
   "canary-object-round-trip",
+  "private-media-original-read",
+  "media-thumbnail-generated",
+  "private-media-thumbnail-read",
   "canary-cleanup-counts",
 ] as const;
 
@@ -146,7 +151,7 @@ export type ProductionSmokeCanaryAction = (
       objectPath: string;
       payloadSha256: string;
       maxRowCount: 1;
-      maxObjectCount: 1;
+      maxObjectCount: 2;
     }>
   | Readonly<{
       kind: "verify-private-storage-denial";
@@ -327,9 +332,9 @@ function validateCounts(rowCount: number, objectCount: number): void {
     rowCount < 0 ||
     objectCount < 0 ||
     rowCount > 1 ||
-    objectCount > 1
+    objectCount > 2
   ) {
-    throw new ProductionCanaryBoundsExceededError("canary count exceeded its 1/1 bound");
+    throw new ProductionCanaryBoundsExceededError("canary count exceeded its 1/2 bound");
   }
 }
 
@@ -357,7 +362,10 @@ export function calculateProductionSmokePayloadSha256(executionSha: string): str
         namespace: PRODUCTION_SMOKE_NAMESPACE,
         identity,
         rowId: PRODUCTION_SMOKE_ROW_ID,
-        objectPath: PRODUCTION_SMOKE_OBJECT_PATH,
+        objectPaths: [
+          PRODUCTION_SMOKE_OBJECT_PATH,
+          PRODUCTION_SMOKE_THUMBNAIL_OBJECT_PATH,
+        ],
       }),
     )
     .digest("hex");
@@ -417,7 +425,7 @@ export function isProductionSmokeCanaryEvidence(
     !isRecord(value.counts) ||
     !hasExactKeys(value.counts, ["baseline", "mutation", "cleanup"]) ||
     !isCountPair(value.counts.baseline, { row: 0, object: 0 }) ||
-    !isCountPair(value.counts.mutation, { row: 1, object: 1 }) ||
+    !isCountPair(value.counts.mutation, { row: 1, object: 2 }) ||
     !isCountPair(value.counts.cleanup, { row: 0, object: 0 }) ||
     !hasExactPassedChecks(value.checks, PRODUCTION_SMOKE_CHECKS) ||
     !validRequestIds(value.requestIds, 1)
@@ -502,7 +510,7 @@ export function transitionProductionSmokeCanary(
     if (event.rowCount === 1 && event.objectCount === 0 && event.rowIdentity === canary.identity && event.rowGeneration === canary.generation && event.rowPayloadSha256 === canary.payloadSha256 && event.rowPhase === "row_claimed") {
       return { ...canary, phase: "cleaning-residue", cleanupPurpose: "residue", next: cleanupAction(canary.identity, canary.generation, canary.payloadSha256, residueCleanupActionSequence(canary, event.rowActionSequence), "row_claimed") };
     }
-    if (event.rowCount === 1 && event.objectCount === 1 && event.rowIdentity === canary.identity && event.objectIdentity === canary.identity && event.rowGeneration === canary.generation && event.objectGeneration === canary.generation && event.rowPayloadSha256 === canary.payloadSha256 && event.objectPayloadSha256 === canary.payloadSha256 && event.rowPhase === "object_written") {
+    if (event.rowCount === 1 && event.objectCount === 2 && event.rowIdentity === canary.identity && event.objectIdentity === canary.identity && event.rowGeneration === canary.generation && event.objectGeneration === canary.generation && event.rowPayloadSha256 === canary.payloadSha256 && event.objectPayloadSha256 === canary.payloadSha256 && event.rowPhase === "object_written") {
       return { ...canary, phase: "cleaning-residue", cleanupPurpose: "residue", next: cleanupAction(canary.identity, canary.generation, canary.payloadSha256, residueCleanupActionSequence(canary, event.rowActionSequence)) };
     }
     throw new ProductionCanaryResidueMismatchError("baseline residue is partial or belongs to another execution");
@@ -518,14 +526,14 @@ export function transitionProductionSmokeCanary(
     return { ...canary, phase: "writing-object", next: { kind: "write-canary-object", generation: canary.generation, actionSequence: canary.next.actionSequence + 1, objectPath: canary.objectPath, identity: canary.identity, payloadSha256: canary.payloadSha256 } };
   }
   if (canary.phase === "writing-object" && event.kind === "object-written") {
-    return { ...canary, phase: "verifying-round-trip", next: { kind: "verify-round-trip", generation: canary.generation, actionSequence: canary.next.actionSequence + 1, identity: canary.identity, rowId: canary.rowId, objectPath: canary.objectPath, payloadSha256: canary.payloadSha256, maxRowCount: 1, maxObjectCount: 1 } };
+    return { ...canary, phase: "verifying-round-trip", next: { kind: "verify-round-trip", generation: canary.generation, actionSequence: canary.next.actionSequence + 1, identity: canary.identity, rowId: canary.rowId, objectPath: canary.objectPath, payloadSha256: canary.payloadSha256, maxRowCount: 1, maxObjectCount: 2 } };
   }
   if (canary.phase === "verifying-round-trip" && event.kind === "round-trip-observed") {
     try {
       validateCounts(event.rowCount, event.objectCount);
       if (
         event.rowCount !== 1 ||
-        event.objectCount !== 1 ||
+        event.objectCount !== 2 ||
         event.rowIdentity !== canary.identity ||
         event.objectIdentity !== canary.identity ||
         event.rowGeneration !== canary.generation ||
@@ -546,8 +554,15 @@ export function transitionProductionSmokeCanary(
       return {
         ...canary,
         phase: "verifying-private-storage-denial",
-        mutationCounts: { row: 1, object: 1 },
-        checks: { ...canary.checks, "canary-row-round-trip": "passed", "canary-object-round-trip": "passed" },
+        mutationCounts: { row: 1, object: 2 },
+        checks: {
+          ...canary.checks,
+          "canary-row-round-trip": "passed",
+          "canary-object-round-trip": "passed",
+          "private-media-original-read": "passed",
+          "media-thumbnail-generated": "passed",
+          "private-media-thumbnail-read": "passed",
+        },
         requestIds: appendRequestIds(canary.requestIds, event.requestIds),
         next: {
           kind: "verify-private-storage-denial",
