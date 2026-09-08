@@ -9,64 +9,84 @@ type Failure = Readonly<{ message: string; currentNote?: NoteRecord }>;
 type PendingSave = { fingerprint: string; commandId: string; noteId: string | null; version: number; content: string };
 
 const historyPositionKey = "__puizeruHistoryPosition";
-let historyTrackingInstalled = false;
-let historyPosition = 0;
-let lastHistoryDelta = -1;
-let suppressedHistoryPosition: number | null = null;
-const unsettledEditors = new Map<symbol, boolean>();
+type NavigationGuardState = {
+  installed: boolean;
+  historyPosition: number;
+  lastHistoryDelta: number;
+  suppressedHistoryPosition: number | null;
+  unsettledEditors: Map<symbol, boolean>;
+};
+type GuardedWindow = Window & {
+  navigation?: { addEventListener(type: "navigate", listener: EventListener): void };
+  __disableNavigationApiForTests?: boolean;
+  __puizeruNavigationGuardState?: NavigationGuardState;
+};
+
+function navigationGuardState() {
+  const guardedWindow = window as GuardedWindow;
+  guardedWindow.__puizeruNavigationGuardState ??= {
+    installed: false,
+    historyPosition: 0,
+    lastHistoryDelta: -1,
+    suppressedHistoryPosition: null,
+    unsettledEditors: new Map(),
+  };
+  return guardedWindow.__puizeruNavigationGuardState;
+}
 
 function leaveMessage() {
-  return [...unsettledEditors.values()].some(Boolean)
+  return [...navigationGuardState().unsettledEditors.values()].some(Boolean)
     ? "筆記已清空但尚未確認移除。仍要離開並保留原文嗎？"
     : "筆記仍有未儲存內容。仍要離開嗎？";
 }
 
 export function installHistoryTracking() {
-  if (historyTrackingInstalled) return;
-  historyTrackingInstalled = true;
+  const guard = navigationGuardState();
+  if (guard.installed) return;
+  guard.installed = true;
   const state = (window.history.state ?? {}) as Record<string, unknown>;
-  historyPosition = typeof state[historyPositionKey] === "number" ? state[historyPositionKey] : 0;
-  if (state[historyPositionKey] === undefined) window.history.replaceState({ ...state, [historyPositionKey]: historyPosition }, "");
+  guard.historyPosition = typeof state[historyPositionKey] === "number" ? state[historyPositionKey] : 0;
+  if (state[historyPositionKey] === undefined) window.history.replaceState({ ...state, [historyPositionKey]: guard.historyPosition }, "");
   const originalPushState = window.history.pushState.bind(window.history);
   const originalReplaceState = window.history.replaceState.bind(window.history);
   window.history.pushState = (data, unused, url) => {
-    historyPosition += 1;
-    originalPushState({ ...(data ?? {}), [historyPositionKey]: historyPosition }, unused, url);
+    guard.historyPosition += 1;
+    originalPushState({ ...(data ?? {}), [historyPositionKey]: guard.historyPosition }, unused, url);
   };
   window.history.replaceState = (data, unused, url) => {
-    originalReplaceState({ ...(data ?? {}), [historyPositionKey]: historyPosition }, unused, url);
+    originalReplaceState({ ...(data ?? {}), [historyPositionKey]: guard.historyPosition }, unused, url);
   };
   const beforeHistory = (event: PopStateEvent) => {
     const destination = (event.state ?? {}) as Record<string, unknown>;
     const nextPosition = destination[historyPositionKey];
     if (typeof nextPosition === "number") {
-      lastHistoryDelta = nextPosition - historyPosition || -1;
-      historyPosition = nextPosition;
+      guard.lastHistoryDelta = nextPosition - guard.historyPosition || -1;
+      guard.historyPosition = nextPosition;
     } else {
-      lastHistoryDelta = -1;
+      guard.lastHistoryDelta = -1;
     }
-    if (typeof nextPosition === "number" && suppressedHistoryPosition === nextPosition) {
-      suppressedHistoryPosition = null;
+    if (typeof nextPosition === "number" && guard.suppressedHistoryPosition === nextPosition) {
+      guard.suppressedHistoryPosition = null;
       return;
     }
-    suppressedHistoryPosition = null;
-    if (unsettledEditors.size === 0) return;
-    const compensationDelta = -lastHistoryDelta;
-    const sourcePosition = historyPosition + compensationDelta;
+    guard.suppressedHistoryPosition = null;
+    if (guard.unsettledEditors.size === 0) return;
+    const compensationDelta = -guard.lastHistoryDelta;
+    const sourcePosition = guard.historyPosition + compensationDelta;
     if (!window.confirm(leaveMessage())) {
       event.stopImmediatePropagation();
-      suppressedHistoryPosition = sourcePosition;
+      guard.suppressedHistoryPosition = sourcePosition;
       window.setTimeout(() => window.history.go(compensationDelta), 50);
     }
   };
   const beforeNavigate = (event: Event) => {
     const navigationEvent = event as Event & { navigationType?: string };
-    if (navigationEvent.navigationType === "traverse" && unsettledEditors.size > 0 && !window.confirm(leaveMessage())) event.preventDefault();
+    if (navigationEvent.navigationType === "traverse" && guard.unsettledEditors.size > 0 && !window.confirm(leaveMessage())) event.preventDefault();
   };
   const beforeLink = (event: MouseEvent) => {
     const anchor = (event.target as Element | null)?.closest("a[href]") as HTMLAnchorElement | null;
     if (!anchor || anchor.target === "_blank" || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    if (unsettledEditors.size > 0 && !window.confirm(leaveMessage())) {
+    if (guard.unsettledEditors.size > 0 && !window.confirm(leaveMessage())) {
       event.preventDefault();
       return;
     }
@@ -77,22 +97,18 @@ export function installHistoryTracking() {
       && destinationUrl.search === sourceUrl.search
       && destinationUrl.hash !== sourceUrl.hash;
     if (!isNativeFragment) return;
-    const sourcePosition = historyPosition;
-    window.setTimeout(() => {
-      if (event.defaultPrevented || window.location.href !== destinationUrl.href) return;
-      const currentState = (window.history.state ?? {}) as Record<string, unknown>;
-      if (currentState[historyPositionKey] !== sourcePosition) return;
-      historyPosition = sourcePosition + 1;
-      originalReplaceState({ ...currentState, [historyPositionKey]: historyPosition }, "");
-    }, 0);
+    event.preventDefault();
+    window.history.pushState(window.history.state, "", destinationUrl.href);
+    window.dispatchEvent(new HashChangeEvent("hashchange", { oldURL: sourceUrl.href, newURL: destinationUrl.href }));
+    document.getElementById(decodeURIComponent(destinationUrl.hash.slice(1)))?.scrollIntoView();
   };
-  const controlledWindow = window as Window & { navigation?: { addEventListener(type: "navigate", listener: EventListener): void }; __disableNavigationApiForTests?: boolean };
+  const controlledWindow = window as GuardedWindow;
   const navigation = controlledWindow.__disableNavigationApiForTests ? undefined : controlledWindow.navigation;
   window.addEventListener("beforeunload", (event) => {
-    if (unsettledEditors.size > 0) event.preventDefault();
+    if (guard.unsettledEditors.size > 0) event.preventDefault();
   });
   if (navigation) navigation.addEventListener("navigate", beforeNavigate);
-  else window.addEventListener("popstate", beforeHistory);
+  else window.addEventListener("popstate", beforeHistory, true);
   document.addEventListener("click", beforeLink, true);
 }
 
@@ -165,9 +181,10 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
 
   useEffect(() => {
     const id = guardId.current;
-    if (unsettled) unsettledEditors.set(id, status === "removal_pending");
-    else unsettledEditors.delete(id);
-    return () => { unsettledEditors.delete(id); };
+    const editors = navigationGuardState().unsettledEditors;
+    if (unsettled) editors.set(id, status === "removal_pending");
+    else editors.delete(id);
+    return () => { editors.delete(id); };
   }, [status, unsettled]);
 
   useEffect(() => {

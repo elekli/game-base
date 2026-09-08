@@ -161,13 +161,16 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await editor.fill("取消導覽後仍保留");
   await expect(page.getByText("儲存失敗", { exact: true })).toBeVisible();
 
-  let dialog = page.waitForEvent("dialog");
-  let traversal = page.evaluate(() => window.history.back());
-  let warning = await dialog;
-  await warning.dismiss();
-  await traversal;
+  const nativeDialogMessages: string[] = [];
+  page.on("dialog", async (nativeDialog) => {
+    nativeDialogMessages.push(nativeDialog.message());
+    await nativeDialog.dismiss();
+  });
+  await page.evaluate(() => window.history.back());
   await expect(page).toHaveURL(`${gameUrl}#notes-heading`);
   await expect(editor).toHaveValue("取消導覽後仍保留");
+  await page.waitForTimeout(300);
+  expect(nativeDialogMessages).toEqual(["筆記仍有未儲存內容。仍要離開嗎？"]);
   await page.close();
 
   const historyPage = await browser.newPage();
@@ -202,9 +205,9 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await historyEditor.fill("多步取消後仍保留");
   await expect(historyPage.getByText("儲存失敗", { exact: true })).toBeVisible();
 
-  dialog = historyPage.waitForEvent("dialog");
-  traversal = historyPage.evaluate(() => window.history.go(-2));
-  warning = await dialog;
+  let dialog = historyPage.waitForEvent("dialog");
+  let traversal = historyPage.evaluate(() => window.history.go(-2));
+  let warning = await dialog;
   await warning.dismiss();
   await traversal;
   await expect(historyPage).toHaveURL(`${gameUrl}#history-three`);
