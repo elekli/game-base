@@ -80,6 +80,7 @@ export function installHistoryTracking() {
       event.stopImmediatePropagation();
       if (restoredUrl) {
         window.setTimeout(() => {
+          if (guard.currentUrl !== restoredUrl || window.history.state?.[historyPositionKey] !== nextPosition) return;
           if (window.location.href !== restoredUrl) {
             originalReplaceState(window.history.state, "", restoredUrl);
           }
