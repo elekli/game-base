@@ -38,6 +38,12 @@ const cyclicMediaReferences = [
 ] as const;
 
 let normalizedSchema = schema;
+// drizzle-kit intermittently returns either all or no PostgreSQL check constraints
+// immediately after a local Supabase reset. Migrations and pgTAP remain their
+// canonical representation, so omit these unstable derived declarations.
+normalizedSchema = normalizedSchema
+  .replace(/^\tcheck\([^\n]+\),\n/gm, "")
+  .replace(", check,", ",");
 for (const [before, after] of cyclicMediaReferences) normalizedSchema = normalizedSchema.replace(before, after);
 for (const [column, reference] of [
   ['gameId: uuid("game_id").notNull()', "gamesInAppPrivate.id"],
