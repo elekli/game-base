@@ -95,11 +95,7 @@ export function installHistoryTracking() {
       guard.currentUrl = restoredUrl ?? window.location.href;
       event.stopImmediatePropagation();
       if (restoredUrl && typeof nextPosition === "number") {
-        const correction = { position: nextPosition, url: restoredUrl };
-        guard.pendingUrlCorrection = correction;
-        window.setTimeout(() => {
-          if (guard.pendingUrlCorrection === correction) guard.pendingUrlCorrection = null;
-        }, 300);
+        guard.pendingUrlCorrection = { position: nextPosition, url: restoredUrl };
       }
       return;
     }

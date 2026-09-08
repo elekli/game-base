@@ -169,6 +169,7 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await page.evaluate(() => window.history.back());
   await expect(page).toHaveURL(`${gameUrl}#notes-heading`);
   await expect(editor).toHaveValue("取消導覽後仍保留");
+  await page.waitForTimeout(700);
   await page.evaluate((urlWithoutHash) => {
     window.history.replaceState({ ...window.history.state, __NA: true }, "", urlWithoutHash);
   }, gameUrl);
