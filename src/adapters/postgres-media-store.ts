@@ -336,20 +336,26 @@ export class PostgresMediaStore implements MediaStore {
         returning id
       `) as Row[];
       if (!attempts[0]) throw new MediaFinalizeUnavailableError();
-      await tx.execute(sql`
-        update app_private.media_derivatives
+      const leaseRows = await tx.execute(sql`
+        with lease_clock as (select clock_timestamp() as started_at)
+        update app_private.media_derivatives derivative
         set state = 'processing', attempt_count = ${attemptNumber}, cycle_attempt_count = ${cycleAttemptCount + 1},
           active_attempt_id = ${attemptId}, lease_token = ${lease.token},
-          lease_until = clock_timestamp() + least(greatest(${lease.durationMs ?? 300_000}, 1), 300000) * interval '1 millisecond',
+          lease_until = lease_clock.started_at + least(greatest(${lease.durationMs ?? 300_000}, 1), 300000) * interval '1 millisecond',
           next_attempt_at = null, last_error_code = null
-        where id = ${String(derivative.derivative_id)}
-      `);
+        from lease_clock
+        where derivative.id = ${String(derivative.derivative_id)}
+        returning lease_clock.started_at, derivative.lease_until
+      `) as Row[];
+      if (!leaseRows[0]) throw new MediaFinalizeUnavailableError();
       return {
         status: "claimed" as const,
         derivativeId: String(derivative.derivative_id),
         assetId,
         originalObjectPath: String(derivative.original_object_path),
         attempt: { id: attemptId, number: attemptNumber, objectPath, cycleAttemptCount: cycleAttemptCount + 1 },
+        leaseStartedAt: String(leaseRows[0].started_at),
+        leaseUntil: String(leaseRows[0].lease_until),
       };
     });
   }

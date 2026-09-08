@@ -67,15 +67,15 @@ async function within<Value>(promise: Promise<Value>, milliseconds = 2_000): Pro
   }
 }
 
-async function waitForDatabaseLock(applicationName: string): Promise<void> {
+async function waitForDatabaseLock(applicationName: string): Promise<string> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const rows = await control.unsafe<{ blocked: boolean }[]>(`
-      select exists (
-        select 1 from pg_stat_activity
-        where application_name = $1 and state = 'active' and wait_event_type = 'Lock'
-      ) as blocked
+    const rows = await control.unsafe<{ xact_start: string | null }[]>(`
+      select xact_start::text
+      from pg_stat_activity
+      where application_name = $1 and state = 'active' and wait_event_type = 'Lock'
+      limit 1
     `, [applicationName]);
-    if (rows[0]?.blocked) return;
+    if (rows[0]?.xact_start) return rows[0].xact_start;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`database operation ${applicationName} did not block on the expected lock`);
@@ -533,18 +533,32 @@ describe("MediaService 與真 PostgreSQL", () => {
     const store = new PostgresMediaStore(database.db);
     const first = await store.claimThumbnail(grant.assetId, {
       token: "53000000-0000-4000-8000-000000000301",
-      durationMs: 500,
+      durationMs: 30_000,
     });
     if (first.status !== "claimed") throw new Error("expected short lease claim");
 
     const markName = "thumbnail_mark_clock_after_lock";
     const markDatabase = createDatabase(namedRoleUrl("app_runtime", markName));
+    const markClockDatabase = postgres(directDatabaseUrl, options);
+    let markBlockedAt: string | null = null;
     const locked = deferred();
     const release = deferred();
-    const holder = runtime.begin(async (tx) => {
+    const holder = markClockDatabase.begin(async (tx) => {
       await tx.unsafe("update app_private.media_derivatives set last_error_code = null where asset_id = $1", [grant.assetId]);
       locked.resolve();
       await release.promise;
+      if (!markBlockedAt) throw new Error("missing blocked transaction timestamp");
+      await tx.unsafe("set local session_replication_role = replica");
+      const expiry = await tx.unsafe<{ after_start: boolean; before_release: boolean }[]>(`
+        with fixture_clock as (select clock_timestamp() as release_at)
+        update app_private.media_derivatives derivative
+        set lease_until = $2::timestamptz + (fixture_clock.release_at - $2::timestamptz) / 2
+        from fixture_clock
+        where derivative.asset_id = $1
+        returning derivative.lease_until > $2::timestamptz as after_start,
+          derivative.lease_until < fixture_clock.release_at as before_release
+      `, [grant.assetId, markBlockedAt]);
+      expect(expiry).toEqual([{ after_start: true, before_release: true }]);
     });
     try {
       await locked.promise;
@@ -554,13 +568,13 @@ describe("MediaService 與真 PostgreSQL", () => {
         attemptNumber: first.attempt.number,
         leaseToken: "53000000-0000-4000-8000-000000000301",
       });
-      await waitForDatabaseLock(markName);
-      const beforeExpiry = await runtime.unsafe<{ remaining_ms: number }[]>(`
-        select extract(epoch from lease_until - clock_timestamp()) * 1000 as remaining_ms
+      markBlockedAt = await waitForDatabaseLock(markName);
+      const beforeExpiry = await runtime.unsafe<{ valid_at_start: boolean; valid_now: boolean }[]>(`
+        select lease_until > $2::timestamptz as valid_at_start,
+          lease_until > clock_timestamp() as valid_now
         from app_private.media_derivatives where asset_id = $1
-      `, [grant.assetId]);
-      expect(Number(beforeExpiry[0]?.remaining_ms)).toBeGreaterThan(250);
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      `, [grant.assetId, markBlockedAt]);
+      expect(beforeExpiry).toEqual([{ valid_at_start: true, valid_now: true }]);
       release.resolve();
       await holder;
       await expect(staleMark).rejects.toBeInstanceOf(MediaFinalizeUnavailableError);
@@ -568,16 +582,35 @@ describe("MediaService 與真 PostgreSQL", () => {
       release.resolve();
       await holder.catch(() => undefined);
       await markDatabase.close();
+      await markClockDatabase.end();
     }
 
     const claimName = "thumbnail_claim_clock_after_lock";
     const claimDatabase = createDatabase(namedRoleUrl("app_runtime", claimName));
+    const claimClockDatabase = postgres(directDatabaseUrl, options);
+    await claimClockDatabase.begin(async (tx) => {
+      await tx.unsafe("set local session_replication_role = replica");
+      await tx.unsafe("update app_private.media_derivatives set lease_until = clock_timestamp() + interval '30 seconds' where asset_id = $1", [grant.assetId]);
+    });
     const claimLocked = deferred();
     const releaseClaim = deferred();
-    const claimHolder = runtime.begin(async (tx) => {
+    let claimBlockedAt: string | null = null;
+    const claimHolder = claimClockDatabase.begin(async (tx) => {
       await tx.unsafe("update app_private.media_derivatives set last_error_code = null where asset_id = $1", [grant.assetId]);
       claimLocked.resolve();
       await releaseClaim.promise;
+      if (!claimBlockedAt) throw new Error("missing blocked transaction timestamp");
+      await tx.unsafe("set local session_replication_role = replica");
+      const expiry = await tx.unsafe<{ after_start: boolean; before_release: boolean }[]>(`
+        with fixture_clock as (select clock_timestamp() as release_at)
+        update app_private.media_derivatives derivative
+        set lease_until = $2::timestamptz + (fixture_clock.release_at - $2::timestamptz) / 2
+        from fixture_clock
+        where derivative.asset_id = $1
+        returning derivative.lease_until > $2::timestamptz as after_start,
+          derivative.lease_until < fixture_clock.release_at as before_release
+      `, [grant.assetId, claimBlockedAt]);
+      expect(expiry).toEqual([{ after_start: true, before_release: true }]);
     });
     try {
       await claimLocked.promise;
@@ -585,20 +618,29 @@ describe("MediaService 與真 PostgreSQL", () => {
         token: "53000000-0000-4000-8000-000000000302",
         durationMs: 500,
       });
-      await waitForDatabaseLock(claimName);
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      claimBlockedAt = await waitForDatabaseLock(claimName);
+      const originalLease = await runtime.unsafe<{ valid_at_start: boolean; valid_now: boolean }[]>(`
+        select lease_until > $2::timestamptz as valid_at_start,
+          lease_until > clock_timestamp() as valid_now
+        from app_private.media_derivatives where asset_id = $1
+      `, [grant.assetId, claimBlockedAt]);
+      expect(originalLease).toEqual([{ valid_at_start: true, valid_now: true }]);
       releaseClaim.resolve();
       await claimHolder;
-      await expect(waitedClaim).resolves.toMatchObject({ status: "claimed", attempt: { number: 2 } });
-      const remaining = await runtime.unsafe<{ remaining_ms: number }[]>(`
-        select extract(epoch from lease_until - clock_timestamp()) * 1000 as remaining_ms
-        from app_private.media_derivatives where asset_id = $1
-      `, [grant.assetId]);
-      expect(Number(remaining[0]?.remaining_ms)).toBeGreaterThan(250);
+      const result = await waitedClaim;
+      expect(result).toMatchObject({ status: "claimed", attempt: { number: 2 } });
+      if (result.status !== "claimed") throw new Error("expected waited claim");
+      const leaseEvidence = await runtime.unsafe<{ started_after_block: boolean; exact_ms: number }[]>(`
+        select $2::timestamptz > $1::timestamptz as started_after_block,
+          extract(epoch from $3::timestamptz - $2::timestamptz) * 1000 as exact_ms
+      `, [claimBlockedAt, result.leaseStartedAt, result.leaseUntil]);
+      expect(leaseEvidence[0]?.started_after_block).toBe(true);
+      expect(Number(leaseEvidence[0]?.exact_ms)).toBe(500);
     } finally {
       releaseClaim.resolve();
       await claimHolder.catch(() => undefined);
       await claimDatabase.close();
+      await claimClockDatabase.end();
     }
   });
 
@@ -609,18 +651,32 @@ describe("MediaService 與真 PostgreSQL", () => {
     const store = new PostgresMediaStore(database.db);
     const first = await store.claimThumbnail(firstGrant.assetId, {
       token: "53000000-0000-4000-8000-000000000401",
-      durationMs: 500,
+      durationMs: 30_000,
     });
     if (first.status !== "claimed") throw new Error("expected direct trigger claim");
 
     const transitionName = "thumbnail_attempt_trigger_clock_after_lock";
     const transition = postgres(namedRoleUrl("app_runtime", transitionName), options);
+    const transitionClockDatabase = postgres(directDatabaseUrl, options);
+    let transitionBlockedAt: string | null = null;
     const locked = deferred();
     const release = deferred();
-    const holder = runtime.begin(async (tx) => {
+    const holder = transitionClockDatabase.begin(async (tx) => {
       await tx.unsafe("update app_private.media_derivatives set last_error_code = null where id = $1", [first.derivativeId]);
       locked.resolve();
       await release.promise;
+      if (!transitionBlockedAt) throw new Error("missing blocked transaction timestamp");
+      await tx.unsafe("set local session_replication_role = replica");
+      const expiry = await tx.unsafe<{ after_start: boolean; before_release: boolean }[]>(`
+        with fixture_clock as (select clock_timestamp() as release_at)
+        update app_private.media_derivatives derivative
+        set lease_until = $2::timestamptz + (fixture_clock.release_at - $2::timestamptz) / 2
+        from fixture_clock
+        where derivative.id = $1
+        returning derivative.lease_until > $2::timestamptz as after_start,
+          derivative.lease_until < fixture_clock.release_at as before_release
+      `, [first.derivativeId, transitionBlockedAt]);
+      expect(expiry).toEqual([{ after_start: true, before_release: true }]);
     });
     try {
       await locked.promise;
@@ -631,13 +687,13 @@ describe("MediaService 與真 PostgreSQL", () => {
         () => ({ status: "fulfilled" as const }),
         (reason: unknown) => ({ status: "rejected" as const, reason }),
       );
-      await waitForDatabaseLock(transitionName);
-      const beforeExpiry = await runtime.unsafe<{ remaining_ms: number }[]>(`
-        select extract(epoch from lease_until - clock_timestamp()) * 1000 as remaining_ms
+      transitionBlockedAt = await waitForDatabaseLock(transitionName);
+      const beforeExpiry = await runtime.unsafe<{ valid_at_start: boolean; valid_now: boolean }[]>(`
+        select lease_until > $2::timestamptz as valid_at_start,
+          lease_until > clock_timestamp() as valid_now
         from app_private.media_derivatives where id = $1
-      `, [first.derivativeId]);
-      expect(Number(beforeExpiry[0]?.remaining_ms)).toBeGreaterThan(250);
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      `, [first.derivativeId, transitionBlockedAt]);
+      expect(beforeExpiry).toEqual([{ valid_at_start: true, valid_now: true }]);
       release.resolve();
       await holder;
       const outcome = await upload;
@@ -647,6 +703,7 @@ describe("MediaService 與真 PostgreSQL", () => {
       release.resolve();
       await holder.catch(() => undefined);
       await transition.end();
+      await transitionClockDatabase.end();
     }
 
     const secondKey = crypto.randomUUID();
