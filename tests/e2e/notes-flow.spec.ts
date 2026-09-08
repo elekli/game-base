@@ -169,8 +169,14 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await page.evaluate(() => window.history.back());
   await expect(page).toHaveURL(`${gameUrl}#notes-heading`);
   await expect(editor).toHaveValue("取消導覽後仍保留");
+  await page.evaluate((urlWithoutHash) => {
+    window.history.replaceState({ ...window.history.state, __NA: true }, "", urlWithoutHash);
+  }, gameUrl);
+  await expect(page).toHaveURL(`${gameUrl}#notes-heading`);
+  await page.evaluate(() => window.history.pushState(window.history.state, "", "#after-compensation"));
   await page.waitForTimeout(300);
   expect(nativeDialogMessages).toEqual(["筆記仍有未儲存內容。仍要離開嗎？"]);
+  await expect(page).toHaveURL(`${gameUrl}#after-compensation`);
   await page.close();
 
   const historyPage = await browser.newPage();
@@ -217,6 +223,8 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
   await traversal;
   await expect(historyPage).toHaveURL(`${gameUrl}#history-three`);
   await expect(historyEditor).toHaveValue("多步取消後仍保留");
+  await historyPage.waitForTimeout(300);
+  await expect(historyPage).toHaveURL(`${gameUrl}#history-three`);
 
   dialog = historyPage.waitForEvent("dialog");
   traversal = historyPage.evaluate(() => window.history.go(-2));
