@@ -11,7 +11,16 @@ type PendingSave = { fingerprint: string; commandId: string; noteId: string | nu
 const historyPositionKey = "__puizeruHistoryPosition";
 let historyTrackingInstalled = false;
 let historyPosition = 0;
-let lastHistoryDirection: "back" | "forward" = "back";
+let lastHistoryDelta = -1;
+let suppressedHistoryPosition: number | null = null;
+const unsettledEditors = new Map<symbol, boolean>();
+const historyEntries = new Map<number, { state: unknown; url: string }>();
+
+function leaveMessage() {
+  return [...unsettledEditors.values()].some(Boolean)
+    ? "筆記已清空但尚未確認移除。仍要離開並保留原文嗎？"
+    : "筆記仍有未儲存內容。仍要離開嗎？";
+}
 
 function installHistoryTracking() {
   if (historyTrackingInstalled) return;
@@ -19,25 +28,66 @@ function installHistoryTracking() {
   const state = (window.history.state ?? {}) as Record<string, unknown>;
   historyPosition = typeof state[historyPositionKey] === "number" ? state[historyPositionKey] : 0;
   if (state[historyPositionKey] === undefined) window.history.replaceState({ ...state, [historyPositionKey]: historyPosition }, "");
+  historyEntries.set(historyPosition, { state: window.history.state, url: window.location.href });
   const originalPushState = window.history.pushState.bind(window.history);
   const originalReplaceState = window.history.replaceState.bind(window.history);
   window.history.pushState = (data, unused, url) => {
     historyPosition += 1;
     originalPushState({ ...(data ?? {}), [historyPositionKey]: historyPosition }, unused, url);
+    historyEntries.set(historyPosition, { state: window.history.state, url: window.location.href });
   };
   window.history.replaceState = (data, unused, url) => {
     originalReplaceState({ ...(data ?? {}), [historyPositionKey]: historyPosition }, unused, url);
+    historyEntries.set(historyPosition, { state: window.history.state, url: window.location.href });
   };
-  window.addEventListener("popstate", (event) => {
+  const beforeHistory = (event: PopStateEvent) => {
     const destination = (event.state ?? {}) as Record<string, unknown>;
     const nextPosition = destination[historyPositionKey];
     if (typeof nextPosition === "number") {
-      lastHistoryDirection = nextPosition > historyPosition ? "forward" : "back";
+      lastHistoryDelta = nextPosition - historyPosition;
       historyPosition = nextPosition;
     } else {
-      lastHistoryDirection = "back";
+      lastHistoryDelta = -1;
     }
+    if (typeof nextPosition === "number" && suppressedHistoryPosition === nextPosition) {
+      suppressedHistoryPosition = null;
+      return;
+    }
+    suppressedHistoryPosition = null;
+    if (unsettledEditors.size === 0) return;
+    const compensationDelta = -lastHistoryDelta;
+    const sourcePosition = historyPosition + compensationDelta;
+    if (!window.confirm(leaveMessage())) {
+      suppressedHistoryPosition = sourcePosition;
+      const sourceEntry = historyEntries.get(sourcePosition);
+      if (sourceEntry) {
+        originalReplaceState(sourceEntry.state, "", sourceEntry.url);
+        historyPosition = sourcePosition;
+      }
+      window.setTimeout(() => {
+        if (compensationDelta === -1) window.history.back();
+        else if (compensationDelta === 1) window.history.forward();
+        else window.history.go(compensationDelta);
+      }, 50);
+    }
+  };
+  const beforeNavigate = (event: Event) => {
+    const navigationEvent = event as Event & { navigationType?: string };
+    if (navigationEvent.navigationType === "traverse" && unsettledEditors.size > 0 && !window.confirm(leaveMessage())) event.preventDefault();
+  };
+  const beforeLink = (event: MouseEvent) => {
+    if (unsettledEditors.size === 0) return;
+    const anchor = (event.target as Element | null)?.closest("a[href]") as HTMLAnchorElement | null;
+    if (anchor && anchor.target !== "_blank" && !window.confirm(leaveMessage())) event.preventDefault();
+  };
+  const controlledWindow = window as Window & { navigation?: { addEventListener(type: "navigate", listener: EventListener): void }; __disableNavigationApiForTests?: boolean };
+  const navigation = controlledWindow.__disableNavigationApiForTests ? undefined : controlledWindow.navigation;
+  window.addEventListener("beforeunload", (event) => {
+    if (unsettledEditors.size > 0) event.preventDefault();
   });
+  if (navigation) navigation.addEventListener("navigate", beforeNavigate);
+  else window.addEventListener("popstate", beforeHistory);
+  document.addEventListener("click", beforeLink, true);
 }
 
 function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId: string; initial?: NoteRecord; onCreated?: (note: NoteRecord) => void; onDiscard?: () => void }>) {
@@ -52,11 +102,13 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
   const pendingCommand = useRef<PendingSave | null>(null);
   const lifecycleCommand = useRef<{ fingerprint: string; commandId: string } | null>(null);
   const saveOutcomeUncertain = useRef(false);
+  const restoreFollowupBaseline = useRef<string | null>(null);
+  const guardId = useRef(Symbol("note-editor-guard"));
 
   const unsettled = status === "pending" || status === "saving" || status === "failed" || status === "conflict" || status === "removal_pending";
 
   const save = useCallback(async (forceVersion?: number) => {
-    if (!content.trim() || status === "saving" || status === "removed") return;
+    if ((!content.trim() && !saveOutcomeUncertain.current) || status === "saving" || status === "removed") return;
     const creating = noteId === null;
     const fingerprint = JSON.stringify({ noteId, version: forceVersion ?? version, content });
     if (!saveOutcomeUncertain.current && pendingCommand.current?.fingerprint !== fingerprint) {
@@ -96,7 +148,7 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
     saveOutcomeUncertain.current = false;
     setFailureAction(null);
     setCreateOutcomeUncertain(false);
-    setStatus(content === command.content ? "saved" : "pending");
+    setStatus(content === command.content ? "saved" : content.trim() ? "pending" : "removal_pending");
     if (creating && onCreated) {
       const now = new Date().toISOString();
       onCreated({ id: result.resourceId, gameId, content: command.content, version: result.version, state: "active", createdAt: now, updatedAt: now });
@@ -108,41 +160,17 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
   }, []);
 
   useEffect(() => {
-    if (status !== "pending" || !content.trim()) return;
+    const id = guardId.current;
+    if (unsettled) unsettledEditors.set(id, status === "removal_pending");
+    else unsettledEditors.delete(id);
+    return () => { unsettledEditors.delete(id); };
+  }, [status, unsettled]);
+
+  useEffect(() => {
+    if (status !== "pending" || (!content.trim() && !saveOutcomeUncertain.current)) return;
     const timer = window.setTimeout(() => void save(), 600);
     return () => window.clearTimeout(timer);
   }, [content, save, status]);
-
-  useEffect(() => {
-    if (!unsettled) return;
-    const beforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
-    const beforeLink = (event: MouseEvent) => {
-      const anchor = (event.target as Element | null)?.closest("a[href]") as HTMLAnchorElement | null;
-      if (!anchor || anchor.target === "_blank") return;
-      if (!window.confirm(status === "removal_pending" ? "筆記已清空但尚未確認移除。仍要離開並保留原文嗎？" : "筆記仍有未儲存內容。仍要離開嗎？")) event.preventDefault();
-    };
-    const beforeHistory = () => {
-      const message = status === "removal_pending" ? "筆記已清空但尚未確認移除。仍要離開並保留原文嗎？" : "筆記仍有未儲存內容。仍要離開嗎？";
-      if (!window.confirm(message)) window.setTimeout(() => window.history.go(lastHistoryDirection === "forward" ? -1 : 1), 0);
-    };
-    const beforeNavigate = (event: Event) => {
-      const navigationEvent = event as Event & { navigationType?: string };
-      if (navigationEvent.navigationType !== "traverse") return;
-      const message = status === "removal_pending" ? "筆記已清空但尚未確認移除。仍要離開並保留原文嗎？" : "筆記仍有未儲存內容。仍要離開嗎？";
-      if (!window.confirm(message)) event.preventDefault();
-    };
-    const navigation = (window as Window & { navigation?: { addEventListener(type: "navigate", listener: EventListener): void; removeEventListener(type: "navigate", listener: EventListener): void } }).navigation;
-    window.addEventListener("beforeunload", beforeUnload);
-    if (navigation) navigation.addEventListener("navigate", beforeNavigate);
-    else window.addEventListener("popstate", beforeHistory);
-    document.addEventListener("click", beforeLink, true);
-    return () => {
-      window.removeEventListener("beforeunload", beforeUnload);
-      if (navigation) navigation.removeEventListener("navigate", beforeNavigate);
-      else window.removeEventListener("popstate", beforeHistory);
-      document.removeEventListener("click", beforeLink, true);
-    };
-  }, [status, unsettled]);
 
   function changeText(value: string) {
     if (createOutcomeUncertain) return;
@@ -150,8 +178,11 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
     setFailure(null);
     setFailureAction(null);
     if (!value.trim()) {
-      pendingCommand.current = null;
-      setStatus(noteId ? "removal_pending" : "idle");
+      if (saveOutcomeUncertain.current) setStatus("pending");
+      else {
+        pendingCommand.current = null;
+        setStatus(noteId ? "removal_pending" : "idle");
+      }
     } else {
       setStatus(!saveOutcomeUncertain.current && value === savedContent ? "idle" : "pending");
     }
@@ -178,6 +209,7 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
 
   async function restore(forceVersion?: number, restoredServerContent?: string) {
     if (!noteId) return;
+    if (restoredServerContent !== undefined) restoreFollowupBaseline.current = restoredServerContent;
     const expectedVersion = forceVersion ?? version;
     const fingerprint = `restore:${noteId}:${expectedVersion}`;
     if (lifecycleCommand.current?.fingerprint !== fingerprint) lifecycleCommand.current = { fingerprint, commandId: crypto.randomUUID() };
@@ -190,8 +222,10 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
     if (!result.ok) { setFailure({ message: result.message, currentNote: result.currentNote }); setFailureAction("restore"); setStatus(result.code === "command_version_conflict" && result.currentNote ? "conflict" : "failed"); return; }
     setVersion(result.version);
     lifecycleCommand.current = null;
-    if (restoredServerContent !== undefined) setSavedContent(restoredServerContent);
-    setStatus(restoredServerContent !== undefined && content !== restoredServerContent ? "pending" : "saved");
+    const followupBaseline = restoreFollowupBaseline.current;
+    restoreFollowupBaseline.current = null;
+    if (followupBaseline !== null) setSavedContent(followupBaseline);
+    setStatus(followupBaseline !== null && content !== followupBaseline ? "pending" : "saved");
   }
 
   function retryFailure() {
@@ -209,6 +243,7 @@ function NoteEditor({ gameId, initial, onCreated, onDiscard }: Readonly<{ gameId
     lifecycleCommand.current = null;
     pendingCommand.current = null;
     saveOutcomeUncertain.current = false;
+    restoreFollowupBaseline.current = null;
     setStatus(current.state === "removed" ? "removed" : "idle");
   }
 
