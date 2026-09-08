@@ -67,6 +67,7 @@ export function installHistoryTracking() {
     }
     if (typeof nextPosition === "number" && guard.suppressedHistoryPosition === nextPosition) {
       guard.suppressedHistoryPosition = null;
+      event.stopImmediatePropagation();
       return;
     }
     guard.suppressedHistoryPosition = null;
