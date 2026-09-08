@@ -13,6 +13,17 @@
       "withCheck": "true"
     },
     {
+      "table": "command_receipts",
+      "name": "runtime_command_receipts",
+      "validFrom": "0016",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
       "table": "contributors",
       "name": "runtime_contributors",
       "validFrom": "0004",

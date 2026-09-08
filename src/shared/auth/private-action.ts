@@ -8,6 +8,12 @@ import { getRequestId } from "@/shared/observability/request-id";
 import { serializeBootstrapLogEvent } from "@/shared/observability/structured-log";
 import { SourceIdentityConflictError, SourceOperationError } from "@/modules/games";
 import { LibraryConflictError } from "@/modules/library";
+import {
+  CommandIdempotencyConflictError,
+  CommandTargetNotFoundError,
+  CommandVersionConflictError,
+  type CommandResourceState,
+} from "@/modules/commands";
 
 type PrivateActionDependencies = Readonly<{
   verifyAccessToken: AccessTokenVerifier;
@@ -15,7 +21,7 @@ type PrivateActionDependencies = Readonly<{
   onUnhandledFailure: (context: Readonly<{ errorCode: string; requestId: string }>) => void | Promise<void>;
 }>;
 
-type PrivateActionFailureCode = "access_denied" | "invalid_input" | "library_conflict" | "source_operation" | "operation_failed";
+type PrivateActionFailureCode = "access_denied" | "invalid_input" | "library_conflict" | "source_operation" | "command_version_conflict" | "command_idempotency_conflict" | "command_target_not_found" | "operation_failed";
 
 export type PrivateActionResult<Success extends object = Record<never, never>> =
   | (Readonly<{ ok: true }> & Success)
@@ -27,6 +33,8 @@ export type PrivateActionResult<Success extends object = Record<never, never>> =
     existingGameId?: string;
     existingIsTrashed?: boolean;
     retryAfterSeconds?: number;
+    currentVersion?: number;
+    currentState?: CommandResourceState;
   }>;
 
 type PrivateActionOptions<Input, Success extends object> = PrivateActionDependencies & Readonly<{
@@ -71,6 +79,12 @@ export async function handlePrivateAction<Input, Success extends object>(
     }
     return { ok: true, ...(await options.operation(owner, parsed.data)) };
   } catch (error) {
+    if (error instanceof CommandVersionConflictError) {
+      return { ok: false, code: "command_version_conflict", message: error.message, requestId, currentVersion: error.currentVersion, currentState: error.currentState };
+    }
+    if (error instanceof CommandIdempotencyConflictError || error instanceof CommandTargetNotFoundError) {
+      return { ok: false, code: error instanceof CommandIdempotencyConflictError ? "command_idempotency_conflict" : "command_target_not_found", message: error.message, requestId };
+    }
     if (error instanceof LibraryConflictError) {
       return { ok: false, code: "library_conflict", message: error.message, requestId };
     }

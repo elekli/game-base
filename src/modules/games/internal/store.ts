@@ -3,6 +3,15 @@ import { SourceGameUnavailableError, SourceIdentityConflictError, SourceMediumMi
 import { LibraryConflictError } from "@/modules/library/internal/errors";
 import type { ContributionRole, ExternalGameRef, GameContribution, GameRecord, LibraryGameQuery, Medium, SourceCategory, SourceSnapshot } from "./types";
 import { filterAndSortLibraryGames, sourceCategoryFacets } from "./library-query";
+import {
+  CommandIdempotencyConflictError,
+  CommandTargetNotFoundError,
+  CommandVersionConflictError,
+  commandPayloadSha256,
+  normalizeGameEditPayload,
+  type GameEditCommand,
+  type VersionedCommandResult,
+} from "@/modules/commands";
 
 export type GameEditInput = Readonly<{
   displayName?: string | null;
@@ -63,6 +72,8 @@ export type GameStore = {
   linkFromSource(gameId: string, ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<GameRecord>;
   refreshSource(gameId: string, snapshot: SourceSnapshot, operationId: string): Promise<GameRecord>;
   edit(gameId: string, input: GameEditInput): Promise<GameRecord>;
+  editWithCommand(command: GameEditCommand): Promise<VersionedCommandResult>;
+  cleanupExpiredCommandReceipts(limit: number): Promise<number>;
   findContributorMatches(gameId: string, name: string): Promise<readonly ContributorMatch[]>;
   addManualContribution(input: ManualContributionInput | LegacyManualContributionInput): Promise<ManualContributionResult>;
   removeManualContribution(gameId: string, contributionId: string): Promise<GameRecord>;
@@ -112,6 +123,27 @@ export class InMemoryGameStore implements GameStore {
   private readonly sourceContributors = new Map<string, string>();
   private readonly customPlatforms = new Map<string, string>();
   private readonly customTags = new Map<string, string>();
+  private readonly commandReceipts = new Map<string, Readonly<{
+    ownerId: string;
+    gameId: string;
+    expectedVersion: number;
+    payloadSha256: string;
+    result: Omit<VersionedCommandResult, "replayed">;
+    expiresAt: number;
+  }>>();
+
+  private async withLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.locks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const lock = previous.then(() => new Promise<void>((resolve) => { release = resolve; }));
+    this.locks.set(key, lock);
+    await previous;
+    try { return await operation(); }
+    finally {
+      release();
+      if (this.locks.get(key) === lock) this.locks.delete(key);
+    }
+  }
 
   private sourceContributionsFor(snapshot: SourceSnapshot): readonly GameContribution[] {
     return snapshot.contributors.map((contributor) => {
@@ -183,7 +215,7 @@ export class InMemoryGameStore implements GameStore {
   async createManual(displayName: string, medium: Medium): Promise<GameRecord> {
     const title = displayName.trim();
     if (!title) throw new Error("手動遊戲名稱不可為空。");
-    const game: GameRecord = { id: randomUUID(), medium, displayName: title, customDisplayName: title, sourceNames: [], aliases: [], actualPlatforms: [], tags: [], contributors: [], playerCountNote: null, coverIngestState: null, trashedAt: null, externalIdentityId: null, snapshot: null, createdAt: new Date().toISOString() };
+    const game: GameRecord = { id: randomUUID(), version: 1, medium, displayName: title, customDisplayName: title, sourceNames: [], aliases: [], actualPlatforms: [], tags: [], contributors: [], playerCountNote: null, coverIngestState: null, trashedAt: null, externalIdentityId: null, snapshot: null, createdAt: new Date().toISOString() };
     this.games.set(game.id, game);
     return game;
   }
@@ -201,7 +233,7 @@ export class InMemoryGameStore implements GameStore {
         const existing = this.games.get(existingId);
         if (existing) throw new SourceIdentityConflictError(existing.id, existing.trashedAt !== null);
       }
-      const game: GameRecord = { id: randomUUID(), medium: ref.medium, displayName: snapshot.title, customDisplayName: null, sourceNames: sourceNames(snapshot), aliases: snapshot.aliases, actualPlatforms: [], tags: [], contributors: this.sourceContributionsFor(snapshot), playerCountNote: null, coverIngestState: null, trashedAt: null, externalIdentityId: randomUUID(), snapshot, createdAt: new Date().toISOString() };
+      const game: GameRecord = { id: randomUUID(), version: 1, medium: ref.medium, displayName: snapshot.title, customDisplayName: null, sourceNames: sourceNames(snapshot), aliases: snapshot.aliases, actualPlatforms: [], tags: [], contributors: this.sourceContributionsFor(snapshot), playerCountNote: null, coverIngestState: null, trashedAt: null, externalIdentityId: randomUUID(), snapshot, createdAt: new Date().toISOString() };
       this.games.set(game.id, game);
       this.identities.set(key, game.id);
       return { game, created: true };
@@ -263,6 +295,39 @@ export class InMemoryGameStore implements GameStore {
     const updated = { ...game, customDisplayName, displayName: customDisplayName ?? game.snapshot?.title ?? game.sourceNames[0] ?? game.displayName, actualPlatforms, tags, playerCountNote: input.playerCountNote === undefined ? game.playerCountNote : input.playerCountNote?.trim() || null };
     this.games.set(gameId, updated);
     return updated;
+  }
+
+  async editWithCommand(command: GameEditCommand): Promise<VersionedCommandResult> {
+    return this.withLock(`command:${command.commandId}`, async () => this.withLock(`game:${command.gameId}`, async () => {
+      const payload = normalizeGameEditPayload(command.payload);
+      const payloadSha256 = commandPayloadSha256(payload);
+      const existing = this.commandReceipts.get(command.commandId);
+      if (existing) {
+        if (existing.ownerId !== command.ownerId || existing.gameId !== command.gameId || existing.expectedVersion !== command.expectedVersion || existing.payloadSha256 !== payloadSha256) {
+          throw new CommandIdempotencyConflictError();
+        }
+        return { ...existing.result, replayed: true };
+      }
+      const game = this.games.get(command.gameId);
+      if (!game) throw new CommandTargetNotFoundError();
+      const state = game.trashedAt === null ? "active" as const : "trashed" as const;
+      if (game.version !== command.expectedVersion) throw new CommandVersionConflictError(game.version, state);
+      const updated = await this.edit(command.gameId, payload);
+      const result = { resourceId: updated.id, version: updated.version + 1, state: updated.trashedAt === null ? "active" as const : "trashed" as const };
+      this.games.set(command.gameId, { ...updated, version: result.version });
+      this.commandReceipts.set(command.commandId, { ownerId: command.ownerId, gameId: command.gameId, expectedVersion: command.expectedVersion, payloadSha256, result, expiresAt: Date.now() + 90 * 24 * 60 * 60 * 1_000 });
+      return { ...result, replayed: false };
+    }));
+  }
+
+  async cleanupExpiredCommandReceipts(limit: number): Promise<number> {
+    const boundedLimit = Math.max(0, Math.min(Math.trunc(limit), 500));
+    const expired = [...this.commandReceipts.entries()]
+      .filter(([, receipt]) => receipt.expiresAt <= Date.now())
+      .sort((left, right) => left[1].expiresAt - right[1].expiresAt || left[0].localeCompare(right[0]))
+      .slice(0, boundedLimit);
+    for (const [commandId] of expired) this.commandReceipts.delete(commandId);
+    return expired.length;
   }
 
   async findContributorMatches(gameId: string, name: string): Promise<readonly ContributorMatch[]> {
@@ -359,6 +424,8 @@ export class UnavailableGameStore implements GameStore {
   async linkFromSource(): Promise<GameRecord> { return this.fail(); }
   async refreshSource(): Promise<GameRecord> { return this.fail(); }
   async edit(): Promise<GameRecord> { return this.fail(); }
+  async editWithCommand(): Promise<VersionedCommandResult> { return this.fail(); }
+  async cleanupExpiredCommandReceipts(): Promise<number> { return this.fail(); }
   async findContributorMatches(): Promise<readonly ContributorMatch[]> { return this.fail(); }
   async addManualContribution(): Promise<ManualContributionResult> { return this.fail(); }
   async removeManualContribution(): Promise<GameRecord> { return this.fail(); }

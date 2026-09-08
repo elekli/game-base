@@ -4,15 +4,17 @@ import type { ContributorMatch, GameRecord, GamesService, ManualContributionResu
 import type { LibraryService } from "@/modules/library";
 import { createPrivateMutationAdapter } from "@/app/private-mutation-adapter";
 import type { PrivateActionDependencies } from "@/shared/auth/private-action";
+import { CommandIdempotencyConflictError, CommandVersionConflictError } from "@/modules/commands";
 
 const gameId = "11111111-1111-4111-8111-111111111111";
 const contributionId = "22222222-2222-4222-8222-222222222222";
 const existingGameId = "33333333-3333-4333-8333-333333333333";
 const requestId = "44444444-4444-4444-8444-444444444444";
 const operationId = "55555555-5555-4555-8555-555555555555";
+const commandId = "66666666-6666-4666-8666-666666666666";
 const emptyGame = {} as GameRecord;
 
-type TestLibraryService = Pick<LibraryService, "addManualContribution" | "removeManualContribution" | "editGame" | "deletePlatform" | "deleteTag">;
+type TestLibraryService = Pick<LibraryService, "addManualContribution" | "removeManualContribution" | "editGameCommand" | "deletePlatform" | "deleteTag">;
 type TestGamesService = Pick<GamesService, "linkExternalSource" | "refreshExternalMetadata">;
 
 function makeSetup() {
@@ -20,7 +22,7 @@ function makeSetup() {
   const libraryService: TestLibraryService = {
     addManualContribution,
     removeManualContribution: vi.fn(async () => emptyGame),
-    editGame: vi.fn(async () => emptyGame),
+    editGameCommand: vi.fn(async () => ({ resourceId: gameId, version: 2, state: "active" as const, replayed: false })),
     deletePlatform: vi.fn(async () => undefined),
     deleteTag: vi.fn(async () => undefined),
   };
@@ -52,7 +54,7 @@ describe("private mutation adapter", () => {
     const result = await adapter.editGame({ gameId: "not-a-uuid" });
 
     expect(result).toEqual({ ok: false, code: "invalid_input", message: "遊戲資料參數無效。", requestId });
-    expect(libraryService.editGame).not.toHaveBeenCalled();
+    expect(libraryService.editGameCommand).not.toHaveBeenCalled();
   });
 
   it("confirmation_required 只回傳候選 matches，不宣稱已建立且不帶 game", async () => {
@@ -121,12 +123,31 @@ describe("private mutation adapter", () => {
 
   it("edits a game without returning the updated game", async () => {
     const { adapter, libraryService } = makeSetup();
-    const input = { gameId, displayName: "新名稱", actualPlatforms: ["Steam"], tags: ["合作"], playerCountNote: "備註" };
+    const input = { commandId, expectedVersion: 1, gameId, displayName: "新名稱", actualPlatforms: ["Steam"], tags: ["合作"], playerCountNote: "備註" };
 
     const result = await adapter.editGame(input);
 
     expect(result).toEqual({ ok: true });
-    expect(libraryService.editGame).toHaveBeenCalledWith(gameId, { displayName: "新名稱", actualPlatforms: ["Steam"], tags: ["合作"], playerCountNote: "備註" });
+    expect(libraryService.editGameCommand).toHaveBeenCalledWith({ ownerId: "owner-subject", commandId, expectedVersion: 1, gameId, payload: { displayName: "新名稱", actualPlatforms: ["Steam"], tags: ["合作"], playerCountNote: "備註" } });
+  });
+
+  it("returns a safe named version conflict without observing it as an unknown failure", async () => {
+    const { adapter, libraryService } = makeSetup();
+    vi.mocked(libraryService.editGameCommand).mockRejectedValueOnce(new CommandVersionConflictError(7, "trashed"));
+
+    const result = await adapter.editGame({ commandId, expectedVersion: 1, gameId, displayName: "新名稱" });
+
+    expect(result).toEqual({ ok: false, code: "command_version_conflict", message: "資料已在其他操作中更新，請先載入最新版本。", requestId, currentVersion: 7, currentState: "trashed" });
+  });
+
+  it("rejects reused command ids without exposing payload or database details", async () => {
+    const { adapter, libraryService } = makeSetup();
+    vi.mocked(libraryService.editGameCommand).mockRejectedValueOnce(new CommandIdempotencyConflictError());
+
+    const result = await adapter.editGame({ commandId, expectedVersion: 1, gameId, displayName: "機密內容" });
+
+    expect(result).toEqual({ ok: false, code: "command_idempotency_conflict", message: "這次操作的識別碼已用於不同內容，請重新操作。", requestId });
+    expect(JSON.stringify(result)).not.toContain("機密內容");
   });
 
   it("links a source and preserves source conflicts without returning a game", async () => {

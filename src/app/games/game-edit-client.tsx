@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { ContributorMatch, ExternalGameRef, GameRecord, NormalizedSearchCandidate, Provider } from "@/modules/games";
 import { addManualContribution, editGame, linkExternalSource, refreshExternalMetadata, removeManualContribution } from "@/app/private-mutation-actions";
 import type { PrivateActionResult } from "@/shared/auth/private-action";
+import { commandIdentityForPayload, type PendingCommandIdentity } from "@/modules/commands";
 
 type Props = Readonly<{ game: GameRecord }>;
 type SearchGroup = Readonly<{ provider: Provider; items: readonly NormalizedSearchCandidate[]; errorCode: string | null }>;
@@ -55,6 +56,7 @@ export function GameEditClient({ game }: Props) {
   const linkingRef = useRef(false);
   const addingContributionRef = useRef(false);
   const refreshingRef = useRef(false);
+  const editCommandRef = useRef<PendingCommandIdentity | null>(null);
   const refreshOperationIdRef = useRef<string | null>(null);
   const manualContributions = game.contributors.filter((item) => item.origin === "manual");
   const sourceContributions = game.contributors.filter((item) => item.origin === "source");
@@ -64,13 +66,16 @@ export function GameEditClient({ game }: Props) {
   async function edit(form: FormData) {
     try {
       setMessage("儲存中……");
-      unwrapPrivateAction(await editGame({
+      const payload = {
         gameId: game.id,
         displayName: form.get("displayName"),
         actualPlatforms: [...form.getAll("actualPlatforms").filter((value): value is string => typeof value === "string"), ...String(form.get("customPlatform") ?? "").split(",")],
         tags: String(form.get("tags") ?? "").split(","),
         playerCountNote: form.get("playerCountNote"),
-      }));
+      };
+      const payloadFingerprint = JSON.stringify(payload);
+      editCommandRef.current = commandIdentityForPayload(editCommandRef.current, payloadFingerprint, () => crypto.randomUUID());
+      unwrapPrivateAction(await editGame({ ...payload, commandId: editCommandRef.current.commandId, expectedVersion: game.version }));
       window.location.reload();
     } catch (error) { setMessage(error instanceof Error ? error.message : "儲存失敗，請重試。"); }
   }

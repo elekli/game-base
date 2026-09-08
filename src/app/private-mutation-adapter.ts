@@ -2,6 +2,7 @@ import { z } from "zod";
 import { assertReference, type ContributorMatch, type GamesService } from "@/modules/games";
 import type { LibraryService } from "@/modules/library";
 import { handlePrivateAction, type PrivateActionDependencies, type PrivateActionResult } from "@/shared/auth/private-action";
+import type { OwnerIdentity } from "@/shared/auth/verify-access-token";
 
 const addContributionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("new"), gameId: z.uuid(), name: z.string().trim().min(1).max(200), entityKind: z.enum(["person", "company"]), role: z.enum(["design", "art", "publisher"]), allowDuplicate: z.boolean() }),
@@ -12,7 +13,7 @@ type AddManualContributionSuccess = Readonly<
   | { status: "confirmation_required"; matches: readonly ContributorMatch[] }
 >;
 const removeContributionSchema = z.object({ gameId: z.uuid(), contributionId: z.uuid() });
-const editGameSchema = z.object({ gameId: z.uuid(), displayName: z.string().trim().max(200).nullable().optional(), actualPlatforms: z.array(z.string().trim().max(100)).max(20).optional(), tags: z.array(z.string().trim().max(100)).max(50).optional(), playerCountNote: z.string().trim().max(500).nullable().optional() });
+const editGameSchema = z.object({ commandId: z.uuid(), expectedVersion: z.number().int().positive(), gameId: z.uuid(), displayName: z.string().trim().max(200).nullable().optional(), actualPlatforms: z.array(z.string().trim().max(100)).max(20).optional(), tags: z.array(z.string().trim().max(100)).max(50).optional(), playerCountNote: z.string().trim().max(500).nullable().optional() });
 const linkExternalSourceSchema = z.object({ gameId: z.uuid(), provider: z.enum(["bgg", "igdb"]), sourceId: z.string(), confirmationFingerprint: z.string().min(1) });
 const refreshExternalMetadataSchema = z.object({ gameId: z.uuid(), operationId: z.uuid() });
 const sharedNameSchema = z.object({ name: z.string().trim().min(1).max(100) });
@@ -21,7 +22,7 @@ type AdapterDependencies = Readonly<{
   getHeaders: () => Promise<Headers>;
   getPrivateDependencies: () => PrivateActionDependencies;
   gamesService: Pick<GamesService, "linkExternalSource" | "refreshExternalMetadata">;
-  libraryService: Pick<LibraryService, "addManualContribution" | "removeManualContribution" | "editGame" | "deletePlatform" | "deleteTag">;
+  libraryService: Pick<LibraryService, "addManualContribution" | "removeManualContribution" | "editGameCommand" | "deletePlatform" | "deleteTag">;
 }>;
 
 export type PrivateMutationAdapter = Readonly<{
@@ -35,13 +36,13 @@ export type PrivateMutationAdapter = Readonly<{
 }>;
 
 export function createPrivateMutationAdapter({ getHeaders, getPrivateDependencies, gamesService, libraryService }: AdapterDependencies): PrivateMutationAdapter {
-  function boundary<Input, Success extends object>(options: { input: unknown; schema: z.ZodType<Input>; inputErrorMessage: string; operation: (input: Input) => Promise<Success> }) {
+  function boundary<Input, Success extends object>(options: { input: unknown; schema: z.ZodType<Input>; inputErrorMessage: string; operation: (input: Input, owner: OwnerIdentity) => Promise<Success> }) {
     return getHeaders().then((headers) => handlePrivateAction(headers, {
       ...getPrivateDependencies(),
       input: options.input,
       schema: options.schema,
       inputErrorMessage: options.inputErrorMessage,
-      operation: async (_owner, parsed) => options.operation(parsed),
+      operation: async (owner, parsed) => options.operation(parsed, owner),
     }));
   }
 
@@ -61,8 +62,8 @@ export function createPrivateMutationAdapter({ getHeaders, getPrivateDependencie
       } });
     },
     editGame(input) {
-      return boundary({ input, schema: editGameSchema, inputErrorMessage: "遊戲資料參數無效。", operation: async ({ gameId, ...gameInput }) => {
-        await libraryService.editGame(gameId, gameInput);
+      return boundary({ input, schema: editGameSchema, inputErrorMessage: "遊戲資料參數無效。", operation: async ({ commandId, expectedVersion, gameId, ...payload }, owner) => {
+        await libraryService.editGameCommand({ ownerId: owner.sub, commandId, expectedVersion, gameId, payload });
         return {};
       } });
     },

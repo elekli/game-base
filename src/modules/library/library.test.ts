@@ -8,6 +8,7 @@ import { InMemoryGameStore } from "@/modules/games";
 function game(overrides: Partial<GameRecord> = {}): GameRecord {
   return {
     id: "game",
+    version: 1,
     medium: "board_game",
     displayName: "預設名稱",
     customDisplayName: null,
