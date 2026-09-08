@@ -17,6 +17,7 @@ import type { GameRecord } from "@/modules/games";
 function sourceGame(contributorId: string | null): GameRecord {
   return {
     id: "11111111-1111-4111-8111-111111111111",
+    version: 1,
     medium: "board_game",
     displayName: "Legacy game",
     customDisplayName: null,

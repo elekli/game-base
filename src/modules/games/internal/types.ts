@@ -92,6 +92,7 @@ export type SourceCatalogPort = Readonly<{
 
 export type GameRecord = Readonly<{
   id: string;
+  version: number;
   medium: Medium;
   displayName: string;
   customDisplayName: string | null;

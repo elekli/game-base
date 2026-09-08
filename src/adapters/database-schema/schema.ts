@@ -1,4 +1,4 @@
-import { pgTable, type AnyPgColumn, pgSchema, index, foreignKey, pgPolicy, uuid, numeric, integer, timestamp, uniqueIndex, text, jsonb, bigint, date, boolean } from "drizzle-orm/pg-core"
+import { pgTable, type AnyPgColumn, pgSchema, index, foreignKey, pgPolicy, uuid, numeric, integer, timestamp, text, bigint, uniqueIndex, jsonb, date, boolean } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 export const appPrivate = pgSchema("app_private");
@@ -18,6 +18,25 @@ export const bggCurrentMetricsInAppPrivate = appPrivate.table("bgg_current_metri
 			name: "bgg_current_metrics_identity_id_fkey"
 		}).onDelete("cascade"),
 	pgPolicy("runtime_bgg_current_metrics", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
+export const commandReceiptsInAppPrivate = appPrivate.table("command_receipts", {
+	commandId: uuid("command_id").notNull(),
+	ownerId: text("owner_id").notNull(),
+	commandKind: text("command_kind").notNull(),
+	targetKind: text("target_kind").notNull(),
+	targetId: uuid("target_id").notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	expectedVersion: bigint("expected_version", { mode: "number" }).notNull(),
+	payloadSha256: text("payload_sha256").notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	resultVersion: bigint("result_version", { mode: "number" }),
+	resultState: text("result_state"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).default(sql`(now() + '90 days'::interval)`).notNull(),
+}, (table) => [
+	index("command_receipts_expiry_idx").using("btree", table.expiresAt.asc().nullsLast().op("timestamptz_ops"), table.commandId.asc().nullsLast().op("timestamptz_ops")),
+	pgPolicy("runtime_command_receipts", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
 export const contributorsInAppPrivate = appPrivate.table("contributors", {
@@ -151,6 +170,8 @@ export const gamesInAppPrivate = appPrivate.table("games", {
 	playerCountNote: text("player_count_note"),
 	manualCoverAssetId: uuid("manual_cover_asset_id"),
 	manualCoverSelectedAt: timestamp("manual_cover_selected_at", { withTimezone: true, mode: 'string' }).default(sql`'-infinity'`),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	version: bigint({ mode: "number" }).default(1),
 }, (table) => [
 	index("games_display_name_idx").using("btree", table.displayName.asc().nullsLast().op("text_ops")).where(sql`(trashed_at IS NULL)`),
 	foreignKey({

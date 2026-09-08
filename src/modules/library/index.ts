@@ -1,12 +1,14 @@
 import { clearIncompatibleSourceCategories, type LibraryFilters } from "./internal/filters";
 import type { ContributorFacet, ContributorMatch, GameRecord, Medium, SourceCategory } from "@/modules/games";
 import type { GameEditInput, GameStore, LegacyManualContributionInput, ManualContributionInput, ManualContributionResult, SharedLibraryItem } from "@/modules/games";
+import type { GameEditCommand, VersionedCommandResult } from "@/modules/commands";
 
 export type LibraryService = Readonly<{
   listGames(filters?: LibraryFilters): Promise<readonly GameRecord[]>;
   listSourceCategoryFacets(media: readonly Medium[]): Promise<readonly SourceCategory[]>;
   listContributorFacets(): Promise<readonly ContributorFacet[]>;
   editGame(gameId: string, input: GameEditInput): Promise<GameRecord>;
+  editGameCommand(command: GameEditCommand): Promise<VersionedCommandResult>;
   findContributorMatches(gameId: string, name: string): Promise<readonly ContributorMatch[]>;
   addManualContribution(input: ManualContributionInput | LegacyManualContributionInput): Promise<ManualContributionResult>;
   removeManualContribution(gameId: string, contributionId: string): Promise<GameRecord>;
@@ -39,6 +41,7 @@ export function createLibraryService(store: GameStore): LibraryService {
     },
     listContributorFacets() { return store.listContributorFacets(); },
     editGame(gameId, input) { return store.edit(gameId, input); },
+    editGameCommand(command) { return store.editWithCommand(command); },
     findContributorMatches(gameId, name) { return store.findContributorMatches(gameId, name); },
     addManualContribution(input) { return store.addManualContribution(input); },
     removeManualContribution(gameId, contributionId) { return store.removeManualContribution(gameId, contributionId); },

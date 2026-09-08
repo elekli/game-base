@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { ContributorMatch, ExternalGameRef, GameRecord, NormalizedSearchCandidate, Provider } from "@/modules/games";
 import { addManualContribution, editGame, linkExternalSource, refreshExternalMetadata, removeManualContribution } from "@/app/private-mutation-actions";
 import type { PrivateActionResult } from "@/shared/auth/private-action";
+import { commandIdentityForPayload, type PendingCommandIdentity } from "@/modules/commands/client";
 
 type Props = Readonly<{ game: GameRecord }>;
 type SearchGroup = Readonly<{ provider: Provider; items: readonly NormalizedSearchCandidate[]; errorCode: string | null }>;
@@ -55,6 +56,7 @@ export function GameEditClient({ game }: Props) {
   const linkingRef = useRef(false);
   const addingContributionRef = useRef(false);
   const refreshingRef = useRef(false);
+  const editCommandRef = useRef<PendingCommandIdentity | null>(null);
   const refreshOperationIdRef = useRef<string | null>(null);
   const manualContributions = game.contributors.filter((item) => item.origin === "manual");
   const sourceContributions = game.contributors.filter((item) => item.origin === "source");
@@ -64,13 +66,16 @@ export function GameEditClient({ game }: Props) {
   async function edit(form: FormData) {
     try {
       setMessage("儲存中……");
-      unwrapPrivateAction(await editGame({
+      const payload = {
         gameId: game.id,
         displayName: form.get("displayName"),
         actualPlatforms: [...form.getAll("actualPlatforms").filter((value): value is string => typeof value === "string"), ...String(form.get("customPlatform") ?? "").split(",")],
         tags: String(form.get("tags") ?? "").split(","),
         playerCountNote: form.get("playerCountNote"),
-      }));
+      };
+      const payloadFingerprint = JSON.stringify(payload);
+      editCommandRef.current = commandIdentityForPayload(editCommandRef.current, payloadFingerprint, () => crypto.randomUUID());
+      unwrapPrivateAction(await editGame({ ...payload, commandId: editCommandRef.current.commandId, expectedVersion: game.version }));
       window.location.reload();
     } catch (error) { setMessage(error instanceof Error ? error.message : "儲存失敗，請重試。"); }
   }
@@ -304,7 +309,7 @@ export function GameEditClient({ game }: Props) {
     <p role="status" className="text-sm text-slate-600">{message}</p>
     <details>
       <summary className="cursor-pointer font-semibold">編輯擁有者資料</summary>
-      <form action={edit} className="mt-4 space-y-3">
+      <form onSubmit={(event) => { event.preventDefault(); void edit(new FormData(event.currentTarget)); }} className="mt-4 space-y-3">
         <label className="block text-sm">自訂顯示名稱<input name="displayName" defaultValue={game.customDisplayName ?? ""} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="留白則使用來源名稱" /></label>
         {game.medium === "video_game" && <fieldset><legend className="text-sm">實際平台</legend><div className="mt-2 flex flex-wrap gap-3">{platformOptions.map((platform) => <label className="flex items-center gap-2 text-sm" key={platform}><input type="checkbox" name="actualPlatforms" value={platform} defaultChecked={game.actualPlatforms.some((value) => value.toLocaleLowerCase() === platform.toLocaleLowerCase())} />{platform}</label>)}</div>{customPlatforms.length > 0 && <p className="mt-2 text-xs text-slate-600">自訂平台請取消勾選後儲存；共享項目只能在收藏庫管理區刪除。</p>}<input name="customPlatform" className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3" placeholder="新增自訂平台（以逗號分隔）" /></fieldset>}
         <label className="block text-sm">自由標籤（以逗號分隔）<input name="tags" defaultValue={game.tags.join(", ")} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3" /></label>
