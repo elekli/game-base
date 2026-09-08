@@ -450,13 +450,15 @@ export class PostgresGameStore implements GameStore {
   }
 
   async editWithCommand(command: GameEditCommand): Promise<VersionedCommandResult> {
+    const commandId = command.commandId.toLowerCase();
+    const gameId = command.gameId.toLowerCase();
     const payload = normalizeGameEditPayload(command.payload);
     const payloadSha256 = commandPayloadSha256(payload);
     return this.db.transaction(async (tx) => {
       let receiptRows = await tx.execute(sql`
         select owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256, result_version, result_state
         from app_private.command_receipts
-        where command_id = ${command.commandId}
+        where command_id = ${commandId}
         for update
       `) as Row[];
       let receipt = receiptRows[0];
@@ -466,7 +468,7 @@ export class PostgresGameStore implements GameStore {
           insert into app_private.command_receipts
             (command_id, owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256)
           values
-            (${command.commandId}, ${command.ownerId}, 'game.edit', 'game', ${command.gameId}, ${command.expectedVersion}, ${payloadSha256})
+            (${commandId}, ${command.ownerId}, 'game.edit', 'game', ${gameId}, ${command.expectedVersion}, ${payloadSha256})
           on conflict (command_id) do nothing
           returning owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256, result_version, result_state
         `) as Row[];
@@ -476,7 +478,7 @@ export class PostgresGameStore implements GameStore {
           receiptRows = await tx.execute(sql`
             select owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256, result_version, result_state
             from app_private.command_receipts
-            where command_id = ${command.commandId}
+            where command_id = ${commandId}
             for update
           `) as Row[];
           receipt = receiptRows[0];
@@ -487,15 +489,15 @@ export class PostgresGameStore implements GameStore {
         const expiryRows = await tx.execute(sql`
           select expires_at <= clock_timestamp() as expired
           from app_private.command_receipts
-          where command_id = ${command.commandId}
+          where command_id = ${commandId}
         `) as Row[];
         if (expiryRows[0]?.expired === true) {
-          await tx.execute(sql`delete from app_private.command_receipts where command_id = ${command.commandId}`);
+          await tx.execute(sql`delete from app_private.command_receipts where command_id = ${commandId}`);
           receiptRows = await tx.execute(sql`
             insert into app_private.command_receipts
               (command_id, owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256)
             values
-              (${command.commandId}, ${command.ownerId}, 'game.edit', 'game', ${command.gameId}, ${command.expectedVersion}, ${payloadSha256})
+              (${commandId}, ${command.ownerId}, 'game.edit', 'game', ${gameId}, ${command.expectedVersion}, ${payloadSha256})
             returning owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256, result_version, result_state
           `) as Row[];
           claimed = true;
@@ -507,14 +509,14 @@ export class PostgresGameStore implements GameStore {
         String(receipt.owner_id) !== command.ownerId
         || receipt.command_kind !== "game.edit"
         || receipt.target_kind !== "game"
-        || String(receipt.target_id) !== command.gameId
+        || String(receipt.target_id) !== gameId
         || Number(receipt.expected_version) !== command.expectedVersion
         || receipt.payload_sha256 !== payloadSha256
       ) throw new CommandIdempotencyConflictError();
       await this.deleteExpiredCommandReceipts(tx, 100);
       if (!claimed && receipt.result_version !== null && receipt.result_state !== null) {
         return {
-          resourceId: command.gameId,
+          resourceId: gameId,
           version: Number(receipt.result_version),
           state: receipt.result_state as VersionedCommandResult["state"],
           replayed: true,
@@ -524,7 +526,7 @@ export class PostgresGameStore implements GameStore {
       const gameRows = await tx.execute(sql`
         select id, version, medium, trashed_at
         from app_private.games
-        where id = ${command.gameId}
+        where id = ${gameId}
         for update
       `) as Row[];
       const game = gameRows[0];
@@ -535,38 +537,38 @@ export class PostgresGameStore implements GameStore {
       const actualPlatforms = payload.actualPlatforms ?? undefined;
       if (actualPlatforms !== undefined) assertVideoGamePlatforms(game.medium as Medium, actualPlatforms);
       if (payload.displayName !== undefined) {
-        if (payload.displayName === null) await tx.execute(sql`delete from app_private.game_names where game_id = ${command.gameId} and name_kind = 'custom'`);
-        else await tx.execute(sql`insert into app_private.game_names (game_id, name, name_kind) values (${command.gameId}, ${payload.displayName}, 'custom') on conflict (game_id, name_kind) where name_kind = 'custom' do update set name = excluded.name`);
+        if (payload.displayName === null) await tx.execute(sql`delete from app_private.game_names where game_id = ${gameId} and name_kind = 'custom'`);
+        else await tx.execute(sql`insert into app_private.game_names (game_id, name, name_kind) values (${gameId}, ${payload.displayName}, 'custom') on conflict (game_id, name_kind) where name_kind = 'custom' do update set name = excluded.name`);
       }
       if (actualPlatforms !== undefined) {
-        await tx.execute(sql`delete from app_private.game_platforms where game_id = ${command.gameId}`);
+        await tx.execute(sql`delete from app_private.game_platforms where game_id = ${gameId}`);
         for (const name of actualPlatforms) {
           const platformRows = await tx.execute(sql`insert into app_private.platforms (name, normalized_name, is_system) values (${name}, ${normalized(name)}, false) on conflict (normalized_name) do update set name = app_private.platforms.name returning id`) as Row[];
-          await tx.execute(sql`insert into app_private.game_platforms (game_id, platform_id) values (${command.gameId}, ${String(platformRows[0].id)}) on conflict do nothing`);
+          await tx.execute(sql`insert into app_private.game_platforms (game_id, platform_id) values (${gameId}, ${String(platformRows[0].id)}) on conflict do nothing`);
         }
       }
       if (payload.tags !== undefined) {
-        await tx.execute(sql`delete from app_private.game_tags where game_id = ${command.gameId}`);
+        await tx.execute(sql`delete from app_private.game_tags where game_id = ${gameId}`);
         for (const name of payload.tags) {
           const tagRows = await tx.execute(sql`insert into app_private.tags (name, normalized_name) values (${name}, ${normalized(name)}) on conflict (normalized_name) do update set name = app_private.tags.name returning id`) as Row[];
-          await tx.execute(sql`insert into app_private.game_tags (game_id, tag_id) values (${command.gameId}, ${String(tagRows[0].id)}) on conflict do nothing`);
+          await tx.execute(sql`insert into app_private.game_tags (game_id, tag_id) values (${gameId}, ${String(tagRows[0].id)}) on conflict do nothing`);
         }
       }
       if (payload.playerCountNote !== undefined) {
-        await tx.execute(sql`update app_private.games set player_count_note = ${payload.playerCountNote} where id = ${command.gameId}`);
+        await tx.execute(sql`update app_private.games set player_count_note = ${payload.playerCountNote} where id = ${gameId}`);
       }
       if (payload.displayName !== undefined) {
         if (payload.displayName === null) {
-          await tx.execute(sql`update app_private.games set display_name = coalesce((select name from app_private.game_names where game_id = ${command.gameId} and name_kind = 'source' order by id limit 1), display_name) where id = ${command.gameId}`);
+          await tx.execute(sql`update app_private.games set display_name = coalesce((select name from app_private.game_names where game_id = ${gameId} and name_kind = 'source' order by id limit 1), display_name) where id = ${gameId}`);
         } else {
-          await tx.execute(sql`update app_private.games set display_name = ${payload.displayName} where id = ${command.gameId}`);
+          await tx.execute(sql`update app_private.games set display_name = ${payload.displayName} where id = ${gameId}`);
         }
       }
-      const updatedRows = await tx.execute(sql`update app_private.games set version = version + 1 where id = ${command.gameId} returning version, trashed_at`) as Row[];
+      const updatedRows = await tx.execute(sql`update app_private.games set version = version + 1 where id = ${gameId} returning version, trashed_at`) as Row[];
       const updated = updatedRows[0];
       if (!updated) throw new SourcePersistenceFailedError();
       const result = {
-        resourceId: command.gameId,
+        resourceId: gameId,
         version: Number(updated.version),
         state: updated.trashed_at === null ? "active" as const : "trashed" as const,
         replayed: false,
@@ -574,7 +576,7 @@ export class PostgresGameStore implements GameStore {
       await tx.execute(sql`
         update app_private.command_receipts
         set result_version = ${result.version}, result_state = ${result.state}
-        where command_id = ${command.commandId}
+        where command_id = ${commandId}
       `);
       return result;
     });

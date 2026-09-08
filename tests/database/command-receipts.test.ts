@@ -63,6 +63,14 @@ afterAll(async () => {
 });
 
 describe("Postgres command receipts", () => {
+  it("canonicalizes uppercase UUIDs and replays their lowercase form", async () => {
+    const game = await store.createManual("命令收據測試：UUID 正規化", "board_game");
+    const uppercaseCommand = { ownerId, commandId: "DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD", expectedVersion: 1, gameId: game.id.toUpperCase(), payload: { displayName: "命令收據測試：UUID 已正規化" } } as const;
+
+    await expect(store.editWithCommand(uppercaseCommand)).resolves.toEqual({ resourceId: game.id, version: 2, state: "active", replayed: false });
+    await expect(store.editWithCommand({ ...uppercaseCommand, commandId: uppercaseCommand.commandId.toLowerCase(), gameId: game.id })).resolves.toEqual({ resourceId: game.id, version: 2, state: "active", replayed: true });
+  });
+
   it("applies once, replays the persisted result, and rejects mismatched reuse", async () => {
     const game = await store.createManual("命令收據測試：重播", "board_game");
     const command = { ownerId, commandId: "11111111-1111-4111-8111-111111111111", expectedVersion: 1, gameId: game.id, payload: { displayName: "命令收據測試：已更新", tags: [" 合作 ", "合作"] } } as const;

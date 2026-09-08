@@ -298,28 +298,30 @@ export class InMemoryGameStore implements GameStore {
   }
 
   async editWithCommand(command: GameEditCommand): Promise<VersionedCommandResult> {
-    return this.withLock(`command:${command.commandId}`, async () => this.withLock(`game:${command.gameId}`, async () => {
+    const commandId = command.commandId.toLowerCase();
+    const gameId = command.gameId.toLowerCase();
+    return this.withLock(`command:${commandId}`, async () => this.withLock(`game:${gameId}`, async () => {
       const payload = normalizeGameEditPayload(command.payload);
       const payloadSha256 = commandPayloadSha256(payload);
-      let existing = this.commandReceipts.get(command.commandId);
+      let existing = this.commandReceipts.get(commandId);
       if (existing && existing.expiresAt <= Date.now()) {
-        this.commandReceipts.delete(command.commandId);
+        this.commandReceipts.delete(commandId);
         existing = undefined;
       }
       if (existing) {
-        if (existing.ownerId !== command.ownerId || existing.gameId !== command.gameId || existing.expectedVersion !== command.expectedVersion || existing.payloadSha256 !== payloadSha256) {
+        if (existing.ownerId !== command.ownerId || existing.gameId !== gameId || existing.expectedVersion !== command.expectedVersion || existing.payloadSha256 !== payloadSha256) {
           throw new CommandIdempotencyConflictError();
         }
         return { ...existing.result, replayed: true };
       }
-      const game = this.games.get(command.gameId);
+      const game = this.games.get(gameId);
       if (!game) throw new CommandTargetNotFoundError();
       const state = game.trashedAt === null ? "active" as const : "trashed" as const;
       if (game.version !== command.expectedVersion) throw new CommandVersionConflictError(game.version, state);
-      const updated = await this.edit(command.gameId, payload);
+      const updated = await this.edit(gameId, payload);
       const result = { resourceId: updated.id, version: updated.version + 1, state: updated.trashedAt === null ? "active" as const : "trashed" as const };
-      this.games.set(command.gameId, { ...updated, version: result.version });
-      this.commandReceipts.set(command.commandId, { ownerId: command.ownerId, gameId: command.gameId, expectedVersion: command.expectedVersion, payloadSha256, result, expiresAt: Date.now() + 90 * 24 * 60 * 60 * 1_000 });
+      this.games.set(gameId, { ...updated, version: result.version });
+      this.commandReceipts.set(commandId, { ownerId: command.ownerId, gameId, expectedVersion: command.expectedVersion, payloadSha256, result, expiresAt: Date.now() + 90 * 24 * 60 * 60 * 1_000 });
       return { ...result, replayed: false };
     }));
   }

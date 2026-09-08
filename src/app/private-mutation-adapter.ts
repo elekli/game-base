@@ -13,7 +13,8 @@ type AddManualContributionSuccess = Readonly<
   | { status: "confirmation_required"; matches: readonly ContributorMatch[] }
 >;
 const removeContributionSchema = z.object({ gameId: z.uuid(), contributionId: z.uuid() });
-const editGameSchema = z.object({ commandId: z.uuid(), expectedVersion: z.number().int().positive(), gameId: z.uuid(), displayName: z.string().trim().max(200).nullable().optional(), actualPlatforms: z.array(z.string().trim().max(100)).max(20).optional(), tags: z.array(z.string().trim().max(100)).max(50).optional(), playerCountNote: z.string().trim().max(500).nullable().optional() });
+const canonicalUuidSchema = z.uuid().transform((value) => value.toLowerCase());
+const editGameSchema = z.object({ commandId: canonicalUuidSchema, expectedVersion: z.number().int().positive(), gameId: canonicalUuidSchema, displayName: z.string().trim().max(200).nullable().optional(), actualPlatforms: z.array(z.string().trim().max(100)).max(20).optional(), tags: z.array(z.string().trim().max(100)).max(50).optional(), playerCountNote: z.string().trim().max(500).nullable().optional() });
 const linkExternalSourceSchema = z.object({ gameId: z.uuid(), provider: z.enum(["bgg", "igdb"]), sourceId: z.string(), confirmationFingerprint: z.string().min(1) });
 const refreshExternalMetadataSchema = z.object({ gameId: z.uuid(), operationId: z.uuid() });
 const sharedNameSchema = z.object({ name: z.string().trim().min(1).max(100) });

@@ -131,6 +131,19 @@ describe("private mutation adapter", () => {
     expect(libraryService.editGameCommand).toHaveBeenCalledWith({ ownerId: "owner-subject", commandId, expectedVersion: 1, gameId, payload: { displayName: "新名稱", actualPlatforms: ["Steam"], tags: ["合作"], playerCountNote: "備註" } });
   });
 
+  it("canonicalizes command and target UUIDs before entering the domain", async () => {
+    const { adapter, libraryService } = makeSetup();
+    const uppercaseCommandId = "ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF";
+    const uppercaseGameId = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA";
+
+    await adapter.editGame({ commandId: uppercaseCommandId, expectedVersion: 1, gameId: uppercaseGameId, displayName: "新名稱" });
+
+    expect(libraryService.editGameCommand).toHaveBeenCalledWith(expect.objectContaining({
+      commandId: uppercaseCommandId.toLowerCase(),
+      gameId: uppercaseGameId.toLowerCase(),
+    }));
+  });
+
   it("returns a safe named version conflict without observing it as an unknown failure", async () => {
     const { adapter, libraryService } = makeSetup();
     vi.mocked(libraryService.editGameCommand).mockRejectedValueOnce(new CommandVersionConflictError(7, "trashed"));
