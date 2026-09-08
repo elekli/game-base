@@ -454,6 +454,12 @@ export class PostgresGameStore implements GameStore {
     const payloadSha256 = commandPayloadSha256(payload);
     return this.db.transaction(async (tx) => {
       await this.deleteExpiredCommandReceipts(tx, 100);
+      await tx.execute(sql`
+        delete from app_private.command_receipts
+        where command_id = ${command.commandId}
+          and expires_at <= now()
+          and result_version is not null
+      `);
       const claimed = await tx.execute(sql`
         insert into app_private.command_receipts
           (command_id, owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256)

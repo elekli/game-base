@@ -140,16 +140,27 @@ describe("Postgres command receipts", () => {
     await expect(store.get(game.id)).resolves.toMatchObject({ playerCountNote: "保留內容", version: 2 });
   });
 
-  it("stops replay at the 90-day boundary and opportunistically cleans expired receipts", async () => {
+  it("stops replay at the 90-day boundary even behind a full cleanup backlog", async () => {
     const game = await store.createManual("命令收據測試：到期邊界", "board_game");
     const expiredCommand = { ownerId, commandId: "99999999-9999-4999-8999-999999999999", expectedVersion: 1, gameId: game.id, payload: { displayName: "命令收據測試：已到期" } } as const;
     await store.editWithCommand(expiredCommand);
     await runtimeDatabase.unsafe("update app_private.command_receipts set created_at = now() - interval '90 days', expires_at = now() where command_id = $1", [expiredCommand.commandId]);
+    await runtimeDatabase.unsafe(`
+      insert into app_private.command_receipts
+        (command_id, owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256, result_version, result_state, created_at, expires_at)
+      select
+        (lpad(to_hex(sequence), 8, '0') || '-0000-4000-8000-' || lpad(to_hex(sequence), 12, '0'))::uuid,
+        $1, 'game.edit', 'game', $2, 1, repeat('a', 64), 2, 'active',
+        now() - interval '91 days' - sequence * interval '1 second',
+        now() - interval '1 day' - sequence * interval '1 second'
+      from generate_series(1, 100) as sequence
+    `, [ownerId, game.id]);
 
     await expect(store.editWithCommand(expiredCommand)).rejects.toBeInstanceOf(CommandVersionConflictError);
 
     const next = { ownerId, commandId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", expectedVersion: 2, gameId: game.id, payload: { displayName: "命令收據測試：清理後" } } as const;
     await expect(store.editWithCommand(next)).resolves.toMatchObject({ version: 3, replayed: false });
+    await expect(store.cleanupExpiredCommandReceipts(500)).resolves.toBe(1);
     await expect(runtimeDatabase.unsafe("select count(*)::int as count from app_private.command_receipts where command_id = $1", [expiredCommand.commandId])).resolves.toEqual([{ count: 0 }]);
   });
 });

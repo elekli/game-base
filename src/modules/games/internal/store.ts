@@ -301,7 +301,11 @@ export class InMemoryGameStore implements GameStore {
     return this.withLock(`command:${command.commandId}`, async () => this.withLock(`game:${command.gameId}`, async () => {
       const payload = normalizeGameEditPayload(command.payload);
       const payloadSha256 = commandPayloadSha256(payload);
-      const existing = this.commandReceipts.get(command.commandId);
+      let existing = this.commandReceipts.get(command.commandId);
+      if (existing && existing.expiresAt <= Date.now()) {
+        this.commandReceipts.delete(command.commandId);
+        existing = undefined;
+      }
       if (existing) {
         if (existing.ownerId !== command.ownerId || existing.gameId !== command.gameId || existing.expectedVersion !== command.expectedVersion || existing.payloadSha256 !== payloadSha256) {
           throw new CommandIdempotencyConflictError();
