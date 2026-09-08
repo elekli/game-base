@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "repository": "elekli/game-base",
+  "workflow": ".github/workflows/production-release.yml",
+  "releaseIdentity": "34233710936-1-27eae92291ce09651f1b587f8b69fe2c33846364-b3c0525f29baacfb579aeebd8a68b499293c8f7351199b206f0b675eaf0961cc",
+  "commit": "27eae92291ce09651f1b587f8b69fe2c33846364",
+  "migrations": [
+    {
+      "version": "0016",
+      "name": "command_receipts_and_game_version",
+      "filename": "0016_command_receipts_and_game_version.sql",
+      "sha256": "0b7d5261e61decaf8adfe24185e56a9be3099420c8259d8a86929823e63804a6"
+    }
+  ],
+  "pendingSetSha256": "b3c0525f29baacfb579aeebd8a68b499293c8f7351199b206f0b675eaf0961cc",
+  "sourceReleaseRun": {
+    "id": "34233710936",
+    "attempt": 1
+  },
+  "successBasis": "strict-exact-target",
+  "actor": "elekli",
+  "utcTime": "2026-09-08T13:45:01.829Z",
+  "result": "success",
+  "recoveryAction": {
+    "missingLedgerAfterSuccess": "ledger-recovery",
+    "incompatibleDatabase": "forward-fix",
+    "destructiveRollback": "never-reset"
+  },
+  "evidenceSha256": "356cfadc682d250bd337824e271a7bfe045a550d3f2dbdbf3ba884d5f566b1ff"
+}
