@@ -35,8 +35,9 @@ export const deploymentBindings: Readonly<
     projectRef: "wbtyuvufhrhybquzwfip",
     publishableKeySha256:
       "4462e410b46df06f21744e9cafcfc75e7eb8975cab8629ce6360be06d08fe557",
-    releaseSmokeCommonNameSha256: null,
-    releaseSmokeMaxTokenLifetimeSeconds: null,
+    releaseSmokeCommonNameSha256:
+      "2cf7b6cc4252a67e02f67bff493cf60aeac98e6436876aff29d74280b874c6b2",
+    releaseSmokeMaxTokenLifetimeSeconds: 86_400,
     secretKeySha256:
       "d44eabeca41cb395b0d615673cc6ba17d762beb16d55380aecf539a551ed93b2",
     supavisorHost: "aws-0-ap-south-1.pooler.supabase.com",

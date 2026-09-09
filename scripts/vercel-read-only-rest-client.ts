@@ -35,10 +35,16 @@ type VercelEnvironmentListResponse = Readonly<{
 type VercelEnvironmentValue = Readonly<{ value: string }>;
 
 type VercelProject = Readonly<{
+  autoAssignCustomDomains?: boolean;
   gitRepository?: object | null;
   id: string;
   link?: object | null;
   name: string;
+}>;
+
+type VercelProjectDomain = Readonly<{
+  name: string;
+  verified: boolean;
 }>;
 
 export type VercelReadOnlyRestClient = Readonly<{
@@ -50,6 +56,7 @@ export type VercelReadOnlyRestClient = Readonly<{
   listProjectEnvironmentVariables(
     projectId: string,
   ): Promise<VercelEnvironmentVariable[]>;
+  listProjectDomains(projectId: string): Promise<VercelProjectDomain[]>;
 }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -101,17 +108,38 @@ function parseProject(value: unknown): VercelProject {
     !isRecord(value) ||
     typeof value.id !== "string" ||
     typeof value.name !== "string" ||
+    ("autoAssignCustomDomains" in value &&
+      typeof value.autoAssignCustomDomains !== "boolean") ||
     ("gitRepository" in value && !isObjectOrNull(value.gitRepository)) ||
     ("link" in value && !isObjectOrNull(value.link))
   ) {
     throw new VercelRestUnexpectedResponseError();
   }
   return {
+    autoAssignCustomDomains: value.autoAssignCustomDomains as
+      | boolean
+      | undefined,
     gitRepository: value.gitRepository as object | null | undefined,
     id: value.id,
     link: value.link as object | null | undefined,
     name: value.name,
   };
+}
+
+function parseProjectDomains(value: unknown): VercelProjectDomain[] {
+  if (!isRecord(value) || !Array.isArray(value.domains)) {
+    throw new VercelRestUnexpectedResponseError();
+  }
+  return value.domains.map((domain) => {
+    if (
+      !isRecord(domain) ||
+      typeof domain.name !== "string" ||
+      typeof domain.verified !== "boolean"
+    ) {
+      throw new VercelRestUnexpectedResponseError();
+    }
+    return { name: domain.name, verified: domain.verified };
+  });
 }
 
 export function createVercelReadOnlyRestClient({
@@ -157,6 +185,13 @@ export function createVercelReadOnlyRestClient({
         ),
       );
       return response.envs;
+    },
+    async listProjectDomains(projectId: string) {
+      return parseProjectDomains(
+        await transport.getJson(
+          `/v9/projects/${encodeURIComponent(projectId)}/domains`,
+        ),
+      );
     },
   };
 }

@@ -11,7 +11,7 @@ import {
 } from "../../scripts/check-production-release-contract";
 
 describe("production release contract", () => {
-  it("pins the disabled application deployment writer and evidence boundary", async () => {
+  it("pins the enabled application deployment writer and evidence boundary", async () => {
     const contract = JSON.parse(
       await readFile(".github/production-release-contract.json", "utf8"),
     ) as Record<string, unknown>;
@@ -115,12 +115,11 @@ describe("production release contract", () => {
       productionDeploymentModel: "scripts/production-deployment-release.ts",
       productionDeploymentModelSha256:
         "e491156ff423e03872d95175236f86f3cde936b3254fe81d706e53776a96d093",
-      productionDeploymentStatus:
-        "ready-fail-closed-pending-external-prerequisites",
+      productionDeploymentStatus: "ready-protected-rest-release",
       vercelDeploymentAdapter: "scripts/vercel-deployment-rest-adapter.ts",
       vercelDeploymentAdapterStatus:
         "live-rest-contract-gated",
-      stagedProductionSafetyStatus: "auto-assign-disablement-unverified",
+      stagedProductionSafetyStatus: "verified-auto-assign-disabled",
       vercelRestTransport: "scripts/vercel-rest-transport.ts",
       vercelRestTransportSha256:
         "92569dcc9e85de5efe083da1ddf7951326ae3793ccfe535fda7024aedde139d4",
@@ -146,7 +145,7 @@ describe("production release contract", () => {
       releaseSmokeDeploymentBindings:
         "src/shared/config/deployment-bindings.ts",
       releaseSmokeDeploymentBindingsSha256:
-        "dd9041ce7ef885a4aab4cd555c418b84f9c1867dfc5849fd2510ae2398891948",
+        "cf273ce015681fb1c9e92d2a322c0b93fdc9552e28b93b56553adf045938402c",
       productionSmokeModel: "scripts/production-smoke-canary.ts",
       productionSmokePersistenceMigration:
         "supabase/migrations/0015_production_smoke_canary.sql",
@@ -156,8 +155,7 @@ describe("production release contract", () => {
         "supabase/tests/0015_production_smoke_canary.pgtap.sql",
       productionSmokePersistencePgtapSha256:
         "f1cc8366f5dafa9b9aa28fa7334c9a2e4ffa555e6e62b7e0f09d7d31eb8998e3",
-      productionSmokeRunnerStatus:
-        "ready-fail-closed-pending-production-principal-and-live-credentials",
+      productionSmokeRunnerStatus: "ready-protected-live-production",
       productionSmokeAdapter:
         "src/adapters/production-smoke-canary-adapter.ts",
       productionSmokeAdapterSha256:
@@ -174,9 +172,9 @@ describe("production release contract", () => {
       productionRestoreStatus: "ready-protected-manual",
       productionRestoreEvidenceSchema:
         ".github/production-restore-drill-evidence.schema.json",
-      productionSmokePrincipalStatus: "unresolved",
-      productionCustomDomain: null,
-      productionDeploymentEnabled: false,
+      productionSmokePrincipalStatus: "verified",
+      productionCustomDomain: "gamebase.elek.li",
+      productionDeploymentEnabled: true,
       productionDeploymentRequiredSecrets: [
         "VERCEL_TOKEN",
         "PRODUCTION_MIGRATION_DATABASE_URL",

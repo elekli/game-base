@@ -132,6 +132,7 @@ describe("Vercel read-only REST client", () => {
         expect(url.searchParams.get("teamId")).toBe("team-id");
         expect(init?.method).toBe("GET");
         return Response.json({
+          autoAssignCustomDomains: false,
           gitRepository: null,
           id: "project-id",
           link: null,
@@ -147,6 +148,7 @@ describe("Vercel read-only REST client", () => {
     });
 
     await expect(client.getProject("project-id")).resolves.toEqual({
+      autoAssignCustomDomains: false,
       gitRepository: null,
       id: "project-id",
       link: null,
@@ -164,11 +166,38 @@ describe("Vercel read-only REST client", () => {
     });
 
     await expect(client.getProject("project-id")).resolves.toEqual({
+      autoAssignCustomDomains: undefined,
       gitRepository: undefined,
       id: "project-id",
       link: undefined,
       name: "game-base",
     });
+  });
+
+  it("lists verified project domains through the fixed team-scoped endpoint", async () => {
+    const fetchImpl = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/v9/projects/project-id/domains");
+        expect(url.searchParams.get("teamId")).toBe("team-id");
+        expect(init?.method).toBe("GET");
+        return Response.json({
+          domains: [
+            { name: "gamebase.elek.li", verified: true },
+          ],
+        });
+      },
+    );
+    const client = createVercelReadOnlyRestClient({
+      fetchImpl,
+      teamId: "team-id",
+      timeoutMs: 100,
+      token: "fixture-token",
+    });
+
+    await expect(client.listProjectDomains("project-id")).resolves.toEqual([
+      { name: "gamebase.elek.li", verified: true },
+    ]);
   });
 
   it("fails closed on a non-success response without exposing its body", async () => {

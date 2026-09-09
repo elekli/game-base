@@ -10,25 +10,25 @@ feature branch → PR → required CI／verify → main
                                              │
                                   migration release state machine
                                              │
-                                      不執行 app deploy
+                              application release state machine
                                              │
-                         T03 REST request contract〔live mutation 停用〕
+                          bounded smoke／rollback／sanitized evidence
 ```
 
 - `main` 只接受 PR 合併；`verify` 是 required check，管理員不得略過 branch protection。
 - Vercel project `game-base` 不接受 Git 自動 deployment。`vercel.json` 也將 `git.deploymentEnabled` 固定為 `false`，避免重新連接 Git 後靜默恢復。
-- `.github/workflows/production-release.yml` 是 repository 支援的唯一 production 發布入口。它要求完整 commit SHA、確認該 commit 屬於 `main`，且 `.github/workflows/ci.yml` 對同一 SHA 的 `main` push run 成功，並進入受保護的 `Production` Environment。
+- `.github/workflows/production-release.yml` 是唯一 schema writer；`.github/workflows/production-application-release.yml` 是唯一 application deployment writer。兩者都要求完整 commit SHA、確認該 commit 屬於 `main`，且 `.github/workflows/ci.yml` 對同一 SHA 的 `main` push run 成功，並進入受保護的 `Production` Environment。
 - Production schema 的唯一支援寫入者是 `.github/workflows/production-release.yml`。Supabase GitHub integration 的 production branch mapping 已從 `main` 停用為 sentinel `production-deploy-disabled-use-github-actions`，禁止建立這個 branch；integration 不得再因合併 `main` 自動套用 migration。
 - Production job 必須先 checkout trusted `main` workflow 版本，再驗證指定 SHA 存在、屬於 `origin/main` 且 exact CI run 成功；只有全部成立後才可 `git checkout --detach` 該 SHA，之後才能執行其 `package.json`／repository scripts。不可把 candidate checkout 提前，否則未合併 commit 會在未來具 secrets 的 Production Environment 取得不必要執行面。
 - GitHub `Production` Environment 使用 custom deployment branch policy，server-side allowlist 唯一項目是 `main`；job 的 `github.ref == 'refs/heads/main'` 只是縱深防禦，不能取代 Environment policy。這確保未來即使新增其他 protected branch，其修改過的 workflow 也不能進入 Production Environment。
-- T02A 唯讀 preflight 與 T02B migration apply／strict／ledger gate 已接入受保護的 `Production` Environment；T03 app deployment 尚未完成，因此此 workflow 只管理 migration，不呼叫 Vercel deploy。`PRODUCTION_MIGRATION_DATABASE_URL` 必須使用 `sslmode=verify-full`，並搭配 Supabase Dashboard 下載的 `PRODUCTION_MIGRATION_CA_CERT`；任一缺失都 fail closed。不得以手動 Dashboard deployment 繞過停發狀態。
+- T02A 唯讀 preflight、T02B migration apply／strict／ledger gate 與 T03 application deployment 均已接入受保護的 `Production` Environment。`PRODUCTION_MIGRATION_DATABASE_URL` 必須使用 `sslmode=verify-full`，並搭配 Supabase Dashboard 下載的 `PRODUCTION_MIGRATION_CA_CERT`；任一缺失都 fail closed。不得以手動 Dashboard deployment 繞過受保護流程。
 - Production credentials 只可存在 GitHub `Production` Environment secrets 或 Vercel Production scope。Vercel Preview／Development、repository variables、workflow log 與 artifact 都不得包含這些值。
 
 ## T03 application deployment 模型
 
-此切片不完成 #58 acceptance：live deployment、production smoke 與 restore drill 仍停在外部前提與隔離 target 的安全裁決前。
+T03 repository 路徑與外部前提已就緒；每次 application release 仍須對精確 `main` commit 取得 Production Environment 核准並通過完整 smoke，才能宣稱該次發布完成。
 
-`scripts/production-deployment-release.ts` 是 T03 的純狀態轉換模型；`.github/workflows/production-application-release.yml` 是唯一 application deployment writer，先以無秘密的 candidate job 驗 exact `main` 與成功 CI，再由 `Production` Environment 保護 mutation job。`.github/production-release-contract.json` 目前仍以 `productionDeploymentEnabled: false` 與 `ready-fail-closed-pending-external-prerequisites` 停發；外部條件未核定前，執行入口會在建立 transport 與任何 mutation 之前拒絕。現有 `.github/workflows/production-release.yml` 仍只管理 migration，禁止加入 Vercel deploy。
+`scripts/production-deployment-release.ts` 是 T03 的純狀態轉換模型；`.github/workflows/production-application-release.yml` 是唯一 application deployment writer，先以無秘密的 candidate job 驗 exact `main` 與成功 CI，再由 `Production` Environment 保護 mutation job。`.github/production-release-contract.json` 以 `productionDeploymentEnabled: true`、固定自訂網域與已驗證 principal 啟用此入口；任何欄位、外部繫結或執行時 prerequisite 不符，仍會在建立 transport 或 mutation 前拒絕。現有 `.github/workflows/production-release.yml` 仍只管理 migration，禁止加入 Vercel deploy。
 
 ```text
 exact main CI
@@ -40,7 +40,7 @@ exact main CI
                                       ▼
                            snapshot current deployment D0
                                       │
-                 build D1 REST request（不送出）
+                         build／send D1 REST request
                                       │
                        bounded wait: READY＋exact commit SHA
                                       │
@@ -69,28 +69,28 @@ exact main CI
                        sanitized evidence
 ```
 
-Promotion 前的任何失敗都讓 D0 繼續接收流量。Promotion 結果不明時只依重新查得的 current deployment 決策：D1 進 smoke、D0 最多再嘗試一次 promotion、第三個 deployment 立即停止。Smoke 失敗後也只有再次證明 D1 仍是 current 才可 rollback；current 為 D0 或第三個 deployment 時不得送出 rollback。Promotion 與 rollback 各最多 2 次，所有查詢、等待、smoke 與 evidence 寫入都帶固定 timeout。重跑使用 `production:<exact SHA>` 作為穩定 release identity，並以 source manifest SHA-256 與 exact commit metadata 尋找既有 staged D1。REST create 沒有 `--skip-domain` 等價參數；在 staging safety 獲得人工證據前，流程只能產生相同 metadata 的純 request object，不得送出請求。
+Promotion 前的任何失敗都讓 D0 繼續接收流量。Promotion 結果不明時只依重新查得的 current deployment 決策：D1 進 smoke、D0 最多再嘗試一次 promotion、第三個 deployment 立即停止。Smoke 失敗後也只有再次證明 D1 仍是 current 才可 rollback；current 為 D0 或第三個 deployment 時不得送出 rollback。Promotion 與 rollback 各最多 2 次，所有查詢、等待、smoke 與 evidence 寫入都帶固定 timeout。重跑使用 `production:<exact SHA>` 作為穩定 release identity，並以 source manifest SHA-256 與 exact commit metadata 尋找既有 staged D1。Vercel project 的自動 Custom Production Domain assignment 已於 2026-09-10 關閉並由 REST read-back 核對，因此 staged D1 不會在 promotion 前取得 `gamebase.elek.li`。
 
 資料庫 schema 永不隨 application rollback 回滾。Migration-bearing release 必須先完成既有 migration strict verification 與 commit-bound ledger；code-only release 也由受保護 job 執行 strict-current-schema。若 additive migration 後的 application smoke 失敗，只回復 D0 程式並保留相容 schema；不相容資料變更仍須預先規劃 expand／migrate／contract 與 forward-fix。
 
 公開 artifact 只能符合 `.github/production-deployment-evidence.schema.json`。該 schema 採欄位 allowlist 與 `additionalProperties: false`，只容許 commit、migration tail、deployment identity、domain、時間、結果、bounded attempt count、具名 smoke check 與 request ID；不得包含 token、authorization header、連線字串、request／response payload 或私有資料。
 
-啟用 live deployment 前仍須具備並核對：Production 自訂網域與 Cloudflare Access application；GitHub `Production` Environment secrets `VERCEL_TOKEN`、migration database／CA、Cloudflare service-token pair，以及每次發布前才更新、發布後立即移除的短效 `PRODUCTION_SMOKE_OWNER_ACCESS_JWT`；variables `VERCEL_ORG_ID`、`VERCEL_PROJECT_ID`、`PRODUCTION_CUSTOM_DOMAIN`、`PRODUCTION_SMOKE_SUPABASE_URL` 與 publishable key；以及只服務 release-smoke route 的最小權限身分裁決。還必須由操作者在 Vercel 專案設定中證明「自動指派 Custom Production Domains」已關閉；目前沒有可靠的 repository-owned REST 唯讀檢查可替代這項人工證據。未滿足這些前提時不得把 `productionDeploymentEnabled` 改為 `true`。
+2026-09-10 已核對 `gamebase.elek.li` 的 Vercel domain、Cloudflare Access application、owner policy 與 release-smoke Service Auth policy；DNS 為 proxied CNAME。GitHub `Production` Environment 已具備 `VERCEL_TOKEN`、migration database／CA、Cloudflare service-token pair 與短效 `PRODUCTION_SMOKE_OWNER_ACCESS_JWT`，以及既定五項 variables。Vercel Production scope 的 Supabase、BGG、IGDB、runtime database 與 Cloudflare owner bindings 亦已核對；Preview／Development 未取得 Production credentials。短效 owner JWT 每次發布前更新，發布後立即移除。
 
 ### Release-smoke route 的目前邊界
 
 `/api/internal/release-smoke` 已建立 production-only 前置閘與獨立 service-principal verifier。它只接受 Cloudflare 注入的 `Cf-Access-Jwt-Assertion`，並核對 RS256、`kid`、issuer、audience、`type: "app"`、空 `sub`、時間界線、repository pin 的最大 lifetime，以及 `common_name` SHA-256 fingerprint。Client ID／Secret headers 與 request body 都不能自報授權。
 
-Production binding 的 fingerprint 與最大 lifetime 目前刻意維持 `null`。因此 route 在讀 body、建立 canary adapter 或呼叫 DB／Storage／library 前固定回具名 503。DB／private Storage adapter 與封閉 request dispatch 已接線；未具備這兩個 repository pin 時仍無法執行。回應與 log 只含有界 state-machine event、具名錯誤與 request ID，不含 assertion、service-token headers、連線資料或 request body。
+Production binding 已固定專用 service token `common_name` 的 SHA-256 fingerprint 與 86,400 秒最大 application-token lifetime。DB／private Storage adapter 與封閉 request dispatch 已接線；fingerprint、issuer、audience、token lifetime 或 production environment 任一不符時，route 仍會在讀 body 或呼叫 adapter 前具名拒絕。回應與 log 只含有界 state-machine event、具名錯誤與 request ID，不含 assertion、service-token headers、連線資料或 request body。
 
-`scripts/production-smoke-runner.ts` 不會建立或繞過 `requireOwner`。runner transport 已能驅動固定 canary，並從外部核對自訂網域、direct-origin denial 與兩個 public Storage path 的 denial；direct-origin 探針固定讀公開的 `/security-error`，只接受導向 Vercel 登入網域的 redirect，不把 application 401／403 當作 Deployment Protection 證據。private Storage denial 則排在 route 已確認固定原圖與縮圖為 exact `1/2` 之後、cleanup 之前，避免不存在物件造成假陽性。設定缺漏、網域重疊或格式錯誤時會在零 HTTP request 前拋出 `ProductionSmokePrerequisiteError`。正式執行仍受以下外部前提阻擋：
+`scripts/production-smoke-runner.ts` 不會建立或繞過 `requireOwner`。runner transport 驅動固定 canary，並從外部核對自訂網域、direct-origin denial 與兩個 public Storage path 的 denial；direct-origin 探針固定讀公開的 `/security-error`，只接受導向 Vercel 登入網域的 redirect，不把 application 401／403 當作 Deployment Protection 證據。private Storage denial 排在 route 已確認固定原圖與縮圖為 exact `1/2` 之後、cleanup 之前，避免不存在物件造成假陽性。設定缺漏、網域重疊或格式錯誤時會在零 HTTP request 前拋出 `ProductionSmokePrerequisiteError`。
 
-1. 專用 `/api/internal/release-smoke` route 的 repository-owned Production fingerprint 與最大 lifetime pin 已核准並從 `null` 換成受審值；一般 owner 與此 service principal 仍維持雙向隔離。
+1. 專用 `/api/internal/release-smoke` route 的 repository-owned Production fingerprint 與最大 lifetime pin 已固定；一般 owner 與此 service principal 仍維持雙向隔離。
 2. route 的唯一可變資料為固定 UUID 的 `app_private.production_smoke_canaries` row，以及固定的 private Storage PNG 原圖與 WebP 縮圖 path；row／objects 皆必須以 exact execution identity 清除，不能接受任意 table、game、object 或 owner input。
 3. route 可在同一受限 principal 下完成固定 library read 與 runtime DB read；private Storage 的公開路徑拒絕由外部 runner 核對，其餘 app 功能不授權給該 principal。
-4. `custom-domain-owner-access` 需要當次執行取得的短效 owner `CF_Authorization` session；它不是可長期保存的 GitHub secret。正式 workflow 接線前必須另行裁決安全的取得與交付方式，不能把過期 session 寫死為 repository prerequisite。
+4. `custom-domain-owner-access` 使用當次執行前取得的短效 owner `CF_Authorization` session；它不得成為長期 prerequisite，發布完成後立即從 GitHub Environment 移除。
 
-此決策完成、migration 與 route 有獨立審查、外部 settings 證據到位前，`productionDeploymentEnabled` 一律保持 `false`。
+上述繫結已到位，`productionDeploymentEnabled` 設為 `true`；任何 runtime prerequisite 消失時，runner 仍必須 fail closed。
 
 ### REST adapter、安全閘與 Free 方案限制
 
@@ -103,24 +103,24 @@ PR＋verify＋main
        ▼
 純 REST request builders／response parser
        │
-       ├─ 自動指派網域尚未證明關閉 ──► 停發
-       └─ prerequisites 未齊 ─────────► 停發
+       ├─ 自動指派網域未保持關閉 ─────► 停發
+       └─ prerequisites 不符 ─────────► 停發
        │
        ▼
-repository contract 未啟用 ─────────► 零 mutation 停止
+repository contract 精確啟用 ──────► protected live release
 ```
 
 Vercel REST 的 `POST /v13/deployments` 沒有 CLI `--skip-domain` 的等價參數，因此不能在尚未證明自動網域指派已關閉時送出 staged Production deployment。Production target 必須使用 Production variables；不得改用 Preview target 或 Preview variables 取代。Supabase 與 Vercel 的 Preview／Development credentials sync 維持關閉，避免分支建置在隔離 credentials 尚未完成前碰到 Production。Supabase Free 方案最多只能維持現有兩個 project，本流程不假設第三個 preview 專用 project，也不使用含已知 critical／high 漏洞的 Vercel CLI。
 
-Repository 已固定 source manifest schema／builder、REST transport／adapter、八項 canary smoke contract／狀態模型、application runner、protected workflow，以及 logical restore drill／證據 schema 的路徑與 SHA-256。入口只有在 repository contract、hosted bindings 與全部 Production prerequisites 精確相符時才會建立 transport；目前 contract 未啟用，因此 workflow 即使被誤 dispatch 也會在零 Vercel mutation 前停止。Restore drill 只證明 PostgreSQL logical data 可在隔離的本機目標還原，不包含 Supabase Storage binaries。Production migration 連線禁止 port 6543 transaction pooler；port 5432 direct endpoint 或 session pooler 仍待使用者明確選定並完成 `verify-full` 綁定。
+Repository 已固定 source manifest schema／builder、REST transport／adapter、八項 canary smoke contract／狀態模型、application runner、protected workflow，以及 logical restore drill／證據 schema 的路徑與 SHA-256。入口只有在 repository contract、hosted bindings 與全部 Production prerequisites 精確相符時才會建立 transport；contract 已啟用，但誤 dispatch 或任一漂移仍會在零 Vercel mutation 前停止。Restore drill 已證明 PostgreSQL logical data 可在隔離的本機目標還原，不包含 Supabase Storage binaries。Production migration 連線禁止 port 6543 transaction pooler，只使用已固定 `verify-full` 的受保護 migration connection。
 
 Canary contract v4 為每次完整嘗試建立一次 UUIDv4 generation，並由 generation 產生可重現、大小有界的 8×8 PNG 原圖，再以 Sharp 實際轉成 4×4 WebP 縮圖；兩者上傳後都須私有讀回並逐 byte 核對。資料列、Storage 物件與證據都帶同一代別；每個動作另帶單調遞增的 action sequence，回傳事件必須精確匹配目前動作，避免同一 generation 內的晚到事件被重播。runner 對 transport loss 最多原樣重送一次，identity、generation、action sequence 與 operation 都不得改變；exact cleanup 的 `0/0` 可視為冪等成功。匿名 private Storage denial 檢查失敗時，runner 先透過狀態機完成 exact cleanup 與 `0/0` 驗證，再回報 `failed-cleanup-complete`。同 generation 的 `1/0 row_claimed` 與完整 `1/2 object_written` 殘留可自動清理；明確上傳失敗所留下、且已逐 byte 證明歸屬本代的 `1/1` 部分媒體，必須在原本的寫入鎖內立即刪除並確認 `0`，不能把刪除資格帶進一般 cleanup。任何已持久化的 `1/1`、`0/1-2`、不同 generation／identity／payload hash，或 Storage／cleanup 結果不確定時一律停止並要求人工復原；刪除後回讀失敗也必須將資料列標成 `cleanup_uncertain`。整次 runner、單次 request、response body、route operation、Postgres connection／statement 與 Storage 呼叫都有有界期限。正式 smoke DB 將已驗證的 Supavisor transaction-pooler URL 固定切換到 port `5432` session pooler，拒絕在 port `6543` 持有跨交易 session lock；contract 與狀態模型本身仍是純函式，不讀 credentials 或送出網路請求。
 
-Migration `0015_production_smoke_canary.sql` 已加入固定 UUID 的 DB claim：table 強制 RLS，runtime 與 API roles 沒有直接 CRUD，只能呼叫固定 `search_path` 的 inspect／claim／phase CAS／exact cleanup functions。DB／private Storage adapter、route 接線、read probes、組合 runner 與 Production application workflow 已完成程式實作；Production principal、短效 owner session 交付、Cloudflare／網域 live credentials 與 staged-domain safety evidence 仍未完成，因此 release contract 繼續 fail closed。
+Migration `0015_production_smoke_canary.sql` 已加入固定 UUID 的 DB claim：table 強制 RLS，runtime 與 API roles 沒有直接 CRUD，只能呼叫固定 `search_path` 的 inspect／claim／phase CAS／exact cleanup functions。DB／private Storage adapter、route 接線、read probes、組合 runner 與 Production application workflow 已完成程式實作；Production principal、短效 owner session、Cloudflare／網域 live credentials 與 staged-domain safety evidence 亦已在 2026-09-10 到位。Release contract 已啟用，但 runner 對任何缺漏或漂移仍維持 fail closed。
 
-Vercel CLI `59.11.7` 的 registry metadata 宣告 Node.js `>= 18`，且已確認具有 `deploy --prod --skip-domain`、`promote` 與 `rollback`；但 2026-09-07 以本 repository 的 `pnpm audit --audit-level high` 檢查其完整 dependency graph 時，新增 1 項 critical 與 18 項 high vulnerabilities。抽查仍可取得的 `55.0.0`、`56.5.0`、`57.0.0`、`58.11.0` 與 `59.11.7` 都未達零 critical／high；其中 `undici` 修補需要跨 major override，不能假設相容。因此 `.github/vercel-deployment-adapter-evaluation.json` 將 `59.11.7` 只記為 deployment candidate，不把它加入 dependency，也不建立任何 Vercel CLI package script 或 workflow。`release:settings:check` 的 Vercel 唯讀查詢已改由 repository-owned `scripts/vercel-read-only-rest-client.ts` 使用 Node 原生 `fetch` 呼叫官方 REST API，不再從 `PATH` 執行 global Vercel CLI。Deployment 則由 repository-owned REST transport／adapter 執行，並受 pinned contract、受保護 workflow、精確 release identity 與 staged safety 證據共同守門；目前 contract 未啟用，仍不得建立、promote 或 rollback deployment。
+Vercel CLI `59.11.7` 的 registry metadata 宣告 Node.js `>= 18`，且已確認具有 `deploy --prod --skip-domain`、`promote` 與 `rollback`；但 2026-09-07 以本 repository 的 `pnpm audit --audit-level high` 檢查其完整 dependency graph 時，新增 1 項 critical 與 18 項 high vulnerabilities。抽查仍可取得的 `55.0.0`、`56.5.0`、`57.0.0`、`58.11.0` 與 `59.11.7` 都未達零 critical／high；其中 `undici` 修補需要跨 major override，不能假設相容。因此 `.github/vercel-deployment-adapter-evaluation.json` 將 `59.11.7` 只記為 deployment candidate，不把它加入 dependency，也不建立任何 Vercel CLI package script 或 workflow。`release:settings:check` 的 Vercel 唯讀查詢已改由 repository-owned `scripts/vercel-read-only-rest-client.ts` 使用 Node 原生 `fetch` 呼叫官方 REST API，不再從 `PATH` 執行 global Vercel CLI。Deployment 則由 repository-owned REST transport／adapter 執行，並受 pinned contract、受保護 workflow、精確 release identity 與 staged safety 證據共同守門；contract 只在這些受審值完整固定時允許建立、promote 或 rollback deployment。
 
-唯讀 adapter 固定使用 `https://api.vercel.com`、`Authorization: Bearer <VERCEL_TOKEN>`、`teamId` query 與 10 秒 timeout，且只開放官方文件列出的三個 `GET` endpoint：`/v10/projects/{id}/env`、`/v1/projects/{id}/env/{var-id}`、`/v9/projects/{id}`。non-2xx、timeout、network failure、malformed JSON 與 response shape 漂移都以具名錯誤停止，不記錄 Authorization、response body 或 environment value。流程如下：
+唯讀 adapter 固定使用 `https://api.vercel.com`、`Authorization: Bearer <VERCEL_TOKEN>`、`teamId` query 與 10 秒 timeout，且只開放官方文件列出的四個 `GET` endpoint：`/v10/projects/{id}/env`、`/v1/projects/{id}/env/{var-id}`、`/v9/projects/{id}`、`/v9/projects/{id}/domains`。最後兩者同時證明自動 Custom Production Domain assignment 已關閉，且 `gamebase.elek.li` 已驗證。non-2xx、timeout、network failure、malformed JSON 與 response shape 漂移都以具名錯誤停止，不記錄 Authorization、response body 或 environment value。流程如下：
 
 ```text
 release:settings:check
