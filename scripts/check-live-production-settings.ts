@@ -41,11 +41,13 @@ export type LiveProductionSettings = Readonly<{
     valueSha256?: string;
   }>;
   vercelProject: {
+    autoAssignCustomDomains?: boolean;
     gitRepository?: object | null;
     id?: string;
     link?: object | null;
     name?: string;
   };
+  vercelProjectDomains: Array<{ name?: string; verified?: boolean }>;
 }>;
 
 function assertSetting(condition: unknown, message: string): asserts condition {
@@ -96,6 +98,17 @@ export function checkLiveProductionSettings(settings: LiveProductionSettings) {
   assertSetting(vercelProject.id === "prj_iTlWeDkcKItHTKYIayoNjQQ0vHec", "unexpected Vercel project ID");
   assertSetting(vercelProject.name === "game-base", "unexpected Vercel project name");
   assertSetting(vercelProject.gitRepository == null && vercelProject.link == null, "Vercel Git integration must be disconnected");
+  assertSetting(
+    vercelProject.autoAssignCustomDomains === false,
+    "Vercel automatic Custom Production Domain assignment must be disabled",
+  );
+  assertSetting(
+    settings.vercelProjectDomains.some(
+      (domain) =>
+        domain.name === "gamebase.elek.li" && domain.verified === true,
+    ),
+    "gamebase.elek.li must be a verified Vercel project domain",
+  );
   assertSetting(vercelEnvironmentVariables.length > 0, "Vercel Production variables are missing");
   assertSetting(
     vercelEnvironmentVariables.every(
@@ -186,6 +199,7 @@ export function checkLiveProductionSettings(settings: LiveProductionSettings) {
     githubEnvironment: githubEnvironment.name,
     productionMigrationTlsSecretsPresent: true,
     productionSourceCredentialsPresent: true,
+    productionCustomDomain: "gamebase.elek.li",
     requiredCheck: "verify",
     vercelEnvironmentVariableCount: vercelEnvironmentVariables.length,
     vercelGitConnected: false,
@@ -318,6 +332,8 @@ export async function readLiveSettings({
       commandRunner,
     ),
     vercelProject: await vercelClient.getProject(VERCEL_PROJECT_ID),
+    vercelProjectDomains:
+      await vercelClient.listProjectDomains(VERCEL_PROJECT_ID),
     vercelEnvironmentVariables: vercelEnvironmentVariables.map(({ key, target, type }) => ({
       key,
       target,

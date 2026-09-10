@@ -347,7 +347,11 @@ export async function checkProductionReleaseContract(root: string) {
     candidateNodeEngine?: unknown;
     candidateVersion?: unknown;
     decision?: unknown;
+    liveMutationEnabled?: unknown;
     nextAdapter?: unknown;
+    restCreateSkipDomainEquivalent?: unknown;
+    restRequestContractStatus?: unknown;
+    stagedProductionSafetyStatus?: unknown;
     audit?: { critical?: unknown; high?: unknown };
   };
   const deploymentEvidenceSchemaText = await readFile(
@@ -438,7 +442,13 @@ export async function checkProductionReleaseContract(root: string) {
       deploymentAdapterEvaluation.decision ===
         "blocked-no-executable-deployment-cli" &&
       deploymentAdapterEvaluation.nextAdapter ===
-        "official-rest-api-or-security-cleared-exact-cli",
+        "official-rest-api-or-security-cleared-exact-cli" &&
+      deploymentAdapterEvaluation.restRequestContractStatus ===
+        "request-contract-ready-protected-live-mutations" &&
+      deploymentAdapterEvaluation.stagedProductionSafetyStatus ===
+        "verified-auto-assign-disabled" &&
+      deploymentAdapterEvaluation.restCreateSkipDomainEquivalent === false &&
+      deploymentAdapterEvaluation.liveMutationEnabled === true,
     "Vercel deployment CLI candidate must remain security-blocked with its audit evidence",
   );
   assertContract(
@@ -465,6 +475,9 @@ export async function checkProductionReleaseContract(root: string) {
       vercelSettingsReadAdapter.includes(
         '`/v9/projects/${encodeURIComponent(projectId)}`',
       ) &&
+      vercelSettingsReadAdapter.includes(
+        '`/v9/projects/${encodeURIComponent(projectId)}/domains`',
+      ) &&
       !/method:\s*"(?:POST|PUT|PATCH|DELETE)"|\/deployments|\/promote|\/rollback/.test(
         vercelSettingsReadAdapter,
       ) &&
@@ -487,7 +500,10 @@ export async function checkProductionReleaseContract(root: string) {
   await assertPinnedArtifact(root, contract.productionSmokePersistencePgtap, "supabase/tests/0015_production_smoke_canary.pgtap.sql", contract.productionSmokePersistencePgtapSha256, "smoke persistence pgTAP");
   await assertPinnedArtifact(root, contract.productionSmokeRunner, "scripts/production-smoke-runner.ts", contract.productionSmokeRunnerSha256, "smoke runner");
   await assertPinnedArtifact(root, contract.productionSmokeAdapter, "src/adapters/production-smoke-canary-adapter.ts", contract.productionSmokeAdapterSha256, "smoke adapter");
-  assertContract(contract.productionSmokeRunnerStatus === "ready-fail-closed-pending-production-principal-and-live-credentials", "smoke runner status must enumerate every unresolved live dependency");
+  assertContract(
+    contract.productionSmokeRunnerStatus === "ready-protected-live-production",
+    "smoke runner must be enabled only behind the protected Production workflow",
+  );
   await assertReleaseSmokeAuthArtifactsPinned(root, contract);
   await assertPinnedArtifact(root, contract.productionRestoreModel, "scripts/production-restore-drill.ts", contract.productionRestoreModelSha256, "restore model");
   await assertPinnedArtifact(root, contract.productionRestoreExecutor, "scripts/production-restore-executor.ts", contract.productionRestoreExecutorSha256, "restore executor");
@@ -546,7 +562,7 @@ export async function checkProductionReleaseContract(root: string) {
       "bd090591c481088c9202b089ad5af2a4a8ce71b8282104fc4b3dd9329202ed98",
       "185701f85c21333153a6b8655df22dfd10545061ccd27e771033fe1196c8b767",
       "2a1463331e350d5284f75ae7eb51ebbf7da74e0951b826a4e21130f2b4648b76",
-      "dd9041ce7ef885a4aab4cd555c418b84f9c1867dfc5849fd2510ae2398891948",
+      "cf273ce015681fb1c9e92d2a322c0b93fdc9552e28b93b56553adf045938402c",
       "96604eb799d32eefff62297efafe8e18cca595cc6d4505083f60ead85402f028",
       "bdeb49c6fa4f0d67e9b2135454c85e44b658729484e815db43e38fe4fbed53d5",
       "60a12f3fa541ff0dbbc14ee0c954893648d4a6b01d1a3a67bd23faafa9b6ee28",
@@ -657,12 +673,12 @@ export async function checkProductionReleaseContract(root: string) {
   );
   assertContract(
     contract.vercelDeploymentAdapterStatus === "live-rest-contract-gated" &&
-      contract.stagedProductionSafetyStatus === "auto-assign-disablement-unverified" &&
+      contract.stagedProductionSafetyStatus === "verified-auto-assign-disabled" &&
       typeof adapterModule.buildCreateVercelDeploymentRequest === "function" &&
       typeof adapterModule.buildPromoteVercelDeploymentRequest === "function" &&
       typeof adapterModule.buildRollbackVercelDeploymentRequest === "function" &&
       typeof adapterModule.parseReadyVercelProductionDeployment === "function",
-    "Vercel REST request contract must remain explicit and closed",
+    "Vercel REST request contract must remain explicit and protected",
   );
   let mutationDisabled = false;
   try {
@@ -704,12 +720,11 @@ export async function checkProductionReleaseContract(root: string) {
     "Production deployment model must remain pure and must not expose schema rollback or live credentials",
   );
   assertContract(
-    contract.productionDeploymentStatus ===
-      "ready-fail-closed-pending-external-prerequisites" &&
-      contract.productionSmokePrincipalStatus === "unresolved" &&
-      contract.productionCustomDomain === null &&
-      contract.productionDeploymentEnabled === false,
-    "Production application deployment must fail closed until its external prerequisites exist",
+    contract.productionDeploymentStatus === "ready-protected-rest-release" &&
+      contract.productionSmokePrincipalStatus === "verified" &&
+      contract.productionCustomDomain === "gamebase.elek.li" &&
+      contract.productionDeploymentEnabled === true,
+    "Production application deployment must pin every verified external prerequisite",
   );
   assertContract(
     JSON.stringify(contract.productionDeploymentRequiredSecrets) ===
@@ -848,12 +863,12 @@ export async function checkProductionReleaseContract(root: string) {
     "Production release documentation must preserve the Supabase Git sentinel and external-state boundary",
   );
   assertContract(
-    productionReleaseDoc.includes("productionDeploymentEnabled: false") &&
+    productionReleaseDoc.includes("productionDeploymentEnabled: true") &&
       productionReleaseDoc.includes(contract.productionDeploymentWriter) &&
       productionReleaseDoc.includes(contract.productionDeploymentEvidenceSchema) &&
       productionReleaseDoc.includes("資料庫 schema 永不隨 application rollback 回滾") &&
       productionReleaseDoc.includes("Promotion 與 rollback 各最多 2 次"),
-    "Production release documentation must preserve the disabled bounded deployment model",
+    "Production release documentation must preserve the enabled bounded deployment model",
   );
   assertContract(contract.hostedPreview === false, "Hosted Preview must remain disabled");
   assertContract(contract.vercelGitDeployment === false, "Vercel Git deployment must remain disabled");

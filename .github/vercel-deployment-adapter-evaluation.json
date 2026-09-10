@@ -14,8 +14,8 @@
   "decision": "blocked-no-executable-deployment-cli",
   "nextAdapter": "official-rest-api-or-security-cleared-exact-cli",
   "restRequestContract": "scripts/vercel-deployment-rest-adapter.ts",
-  "restRequestContractStatus": "request-contract-ready-live-mutations-disabled",
-  "stagedProductionSafetyStatus": "auto-assign-disablement-unverified",
+  "restRequestContractStatus": "request-contract-ready-protected-live-mutations",
+  "stagedProductionSafetyStatus": "verified-auto-assign-disabled",
   "restCreateSkipDomainEquivalent": false,
-  "liveMutationEnabled": false
+  "liveMutationEnabled": true
 }

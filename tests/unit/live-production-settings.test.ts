@@ -86,11 +86,16 @@ const validSettings = {
     },
   ],
   vercelProject: {
+    autoAssignCustomDomains: false,
     gitRepository: null,
     id: "prj_iTlWeDkcKItHTKYIayoNjQQ0vHec",
     link: null,
     name: "game-base",
   },
+  vercelProjectDomains: [
+    { name: "gamebase.elek.li", verified: true },
+    { name: "game-base-delta.vercel.app", verified: true },
+  ],
 };
 
 describe("live production settings", () => {
@@ -99,10 +104,36 @@ describe("live production settings", () => {
       githubEnvironment: "Production",
       productionMigrationTlsSecretsPresent: true,
       productionSourceCredentialsPresent: true,
+      productionCustomDomain: "gamebase.elek.li",
       requiredCheck: "verify",
       vercelEnvironmentVariableCount: 15,
       vercelGitConnected: false,
     });
+  });
+
+  it("rejects automatic Production domain assignment", () => {
+    expect(() =>
+      checkLiveProductionSettings({
+        ...validSettings,
+        vercelProject: {
+          ...validSettings.vercelProject,
+          autoAssignCustomDomains: true,
+        },
+      }),
+    ).toThrow(
+      "Vercel automatic Custom Production Domain assignment must be disabled",
+    );
+  });
+
+  it("rejects an unverified Production custom domain", () => {
+    expect(() =>
+      checkLiveProductionSettings({
+        ...validSettings,
+        vercelProjectDomains: [
+          { name: "gamebase.elek.li", verified: false },
+        ],
+      }),
+    ).toThrow("gamebase.elek.li must be a verified Vercel project domain");
   });
 
   it.each(["BGG_TOKEN", "IGDB_CLIENT_ID", "IGDB_CLIENT_SECRET"])(
@@ -298,6 +329,7 @@ describe("live production settings", () => {
     }));
     const vercelClient = {
       getProject: vi.fn(async () => ({
+        autoAssignCustomDomains: false,
         gitRepository: null,
         id: "project-id",
         link: null,
@@ -314,6 +346,9 @@ describe("live production settings", () => {
         }),
       ),
       listProjectEnvironmentVariables: vi.fn(async () => environmentVariables),
+      listProjectDomains: vi.fn(async () => [
+        { name: "gamebase.elek.li", verified: true },
+      ]),
     };
 
     const settings = await readLiveSettings({ commandRunner, vercelClient });
@@ -326,6 +361,7 @@ describe("live production settings", () => {
     expect(vercelClient.listProjectEnvironmentVariables).toHaveBeenCalledOnce();
     expect(vercelClient.getProjectEnvironmentVariable).toHaveBeenCalledTimes(11);
     expect(vercelClient.getProject).toHaveBeenCalledOnce();
+    expect(vercelClient.listProjectDomains).toHaveBeenCalledOnce();
     expect(settings.vercelEnvironmentVariables).toContainEqual({
       key: "SUPABASE_PUBLISHABLE_KEY",
       target: ["production"],
