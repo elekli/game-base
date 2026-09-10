@@ -111,7 +111,7 @@ describe("production release contract", () => {
       productionDeploymentEvidenceWriterSha256:
         "749bcc8f8bc3a494b8b526c005d28ce5169da312b8e9a17e35694ef30f2155f4",
       productionDeploymentWriterSha256:
-        "e7524b3fe9c020c2e7970301d90a849a08a6ec0ae81538d3ac2755e5c7d77746",
+        "88c6fd74b905237ca03c72402aa222d78243e45d988b09fed11f5b7364be61a4",
       productionDeploymentModel: "scripts/production-deployment-release.ts",
       productionDeploymentModelSha256:
         "e491156ff423e03872d95175236f86f3cde936b3254fe81d706e53776a96d093",
@@ -565,6 +565,9 @@ describe("production release contract", () => {
       'test "$(git rev-parse origin/main)" = "$EXECUTION_SHA"',
     );
     expect(workflow).toContain("pnpm release:migration:verify");
+    expect(workflow).toMatch(
+      /- name: Strictly verify current Production schema[\s\S]*?env:\s*\n\s*PRODUCTION_MIGRATION_CA_CERT: \$\{\{ secrets\.PRODUCTION_MIGRATION_CA_CERT \}\}[\s\S]*?PRODUCTION_MIGRATION_DATABASE_URL: \$\{\{ secrets\.PRODUCTION_MIGRATION_DATABASE_URL \}\}[\s\S]*?run: pnpm release:migration:verify/,
+    );
     expect(workflow).toContain("pnpm release:application:run");
     expect(workflow).toContain("production-application-evidence-");
     expect(workflow).toContain("retention-days: 90");

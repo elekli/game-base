@@ -143,6 +143,7 @@ jobs:
           echo "PGSSLROOTCERT=$cert" >> "$GITHUB_ENV"
       - name: Strictly verify current Production schema
         env:
+          PRODUCTION_MIGRATION_CA_CERT: ${{ secrets.PRODUCTION_MIGRATION_CA_CERT }}
           PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
         run: pnpm release:migration:verify
       - name: Deploy, smoke, and recover application
