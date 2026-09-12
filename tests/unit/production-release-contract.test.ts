@@ -114,7 +114,7 @@ describe("production release contract", () => {
         "88c6fd74b905237ca03c72402aa222d78243e45d988b09fed11f5b7364be61a4",
       productionDeploymentModel: "scripts/production-deployment-release.ts",
       productionDeploymentModelSha256:
-        "e491156ff423e03872d95175236f86f3cde936b3254fe81d706e53776a96d093",
+        "8210007fac5a3519923668f746719613f206025b48cd5b83f8bd9c009b4f0600",
       productionDeploymentStatus: "ready-protected-rest-release",
       vercelDeploymentAdapter: "scripts/vercel-deployment-rest-adapter.ts",
       vercelDeploymentAdapterStatus:
