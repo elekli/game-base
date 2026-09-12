@@ -21,7 +21,7 @@
   "productionDeploymentEvidenceWriter": "scripts/production-deployment-evidence.ts",
   "productionDeploymentEvidenceWriterSha256": "749bcc8f8bc3a494b8b526c005d28ce5169da312b8e9a17e35694ef30f2155f4",
   "productionDeploymentModel": "scripts/production-deployment-release.ts",
-  "productionDeploymentModelSha256": "e491156ff423e03872d95175236f86f3cde936b3254fe81d706e53776a96d093",
+  "productionDeploymentModelSha256": "8210007fac5a3519923668f746719613f206025b48cd5b83f8bd9c009b4f0600",
   "productionDeploymentStatus": "ready-protected-rest-release",
   "vercelDeploymentAdapter": "scripts/vercel-deployment-rest-adapter.ts",
   "vercelDeploymentAdapterSha256": "fcea0fd520df434b1c549e0d7b848530c60b43b87711814dae6f6ff3ffa464c3",

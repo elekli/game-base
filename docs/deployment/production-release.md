@@ -44,17 +44,23 @@ exact main CI
                                       │
                        bounded wait: READY＋exact commit SHA
                                       │
-                           recheck main SHA＋current = D0
-                                      │
-                                  promote D1
-                                      │
-                          inspect current deployment
+                           recheck main SHA＋current
                          ┌────────────┼──────────────┐
                          │            │              │
-                    current D1   current D0     other current
-                         │       bounded retry       │
-                         ▼            │              ▼
-                   bounded smoke ─────┘        stop／人工診斷
+                    current D0   current D1     other current
+                         │       Vercel 已指派       │
+                    promote D1        │              ▼
+                         │            │        stop／人工診斷
+                    inspect current   │
+                    ┌────┼─────┐      │
+                    │    │     │      │
+                   D1   D0   other    │
+                    │  retry    │      │
+                    │    │      ▼      │
+                    │    └─ stop／人工診斷
+                    └───────────┬──────┘
+                                ▼
+                          bounded smoke
                     │          │
                   pass       failure
                     │          │
@@ -69,13 +75,15 @@ exact main CI
                        sanitized evidence
 ```
 
-Promotion 前的任何失敗都讓 D0 繼續接收流量。Promotion 結果不明時只依重新查得的 current deployment 決策：D1 進 smoke、D0 最多再嘗試一次 promotion、第三個 deployment 立即停止。Smoke 失敗後也只有再次證明 D1 仍是 current 才可 rollback；current 為 D0 或第三個 deployment 時不得送出 rollback。Promotion 與 rollback 各最多 2 次，所有查詢、等待、smoke 與 evidence 寫入都帶固定 timeout。重跑使用 `production:<exact SHA>` 作為穩定 release identity，並以 source manifest SHA-256 與 exact commit metadata 尋找既有 staged D1。Vercel project 的自動 Custom Production Domain assignment 已於 2026-09-10 關閉並由 REST read-back 核對，因此 staged D1 不會在 promotion 前取得 `gamebase.elek.li`。
+Promotion guard 重新核對 `main` SHA 後，只接受 current deployment 為 D0 或已通過 READY 與 exact identity 驗證的 D1。若仍為 D0，流程明確 promotion；若 Vercel 已把自訂網域指向 D1，流程保留 D0 作為回滾目標並直接進 smoke；任何第三個 deployment 都立即停止。Promotion 結果不明時同樣只依重新查得的 current deployment 決策：D1 進 smoke、D0 最多再嘗試一次 promotion。Smoke 失敗後也只有再次證明 D1 仍是 current 才可 rollback；current 為 D0 或第三個 deployment 時不得送出 rollback。Promotion 與 rollback 各最多 2 次，所有查詢、等待、smoke 與 evidence 寫入都帶固定 timeout。重跑使用 `production:<exact SHA>` 作為穩定 release identity，並以 source manifest SHA-256 與 exact commit metadata 尋找既有 staged D1。Vercel project 的 `autoAssignCustomDomains` 已於 2026-09-10 設為 `false` 並由 REST read-back 核對；2026-09-12 的真實發布證明，透過 Production REST API 建立 deployment 時，自訂網域仍可能在明確 promotion 前移到 D1，因此狀態機不得把該設定視為唯一安全邊界。
 
 資料庫 schema 永不隨 application rollback 回滾。Migration-bearing release 必須先完成既有 migration strict verification 與 commit-bound ledger；code-only release 也由受保護 job 執行 strict-current-schema。若 additive migration 後的 application smoke 失敗，只回復 D0 程式並保留相容 schema；不相容資料變更仍須預先規劃 expand／migrate／contract 與 forward-fix。
 
 公開 artifact 只能符合 `.github/production-deployment-evidence.schema.json`。該 schema 採欄位 allowlist 與 `additionalProperties: false`，只容許 commit、migration tail、deployment identity、domain、時間、結果、bounded attempt count、具名 smoke check 與 request ID；不得包含 token、authorization header、連線字串、request／response payload 或私有資料。
 
-2026-09-10 已核對 `gamebase.elek.li` 的 Vercel domain、Cloudflare Access application、owner policy 與 release-smoke Service Auth policy；DNS 為 proxied CNAME。GitHub `Production` Environment 已具備 `VERCEL_TOKEN`、migration database／CA、Cloudflare service-token pair 與短效 `PRODUCTION_SMOKE_OWNER_ACCESS_JWT`，以及既定五項 variables。Vercel Production scope 的 Supabase、BGG、IGDB、runtime database 與 Cloudflare owner bindings 亦已核對；Preview／Development 未取得 Production credentials。短效 owner JWT 每次發布前更新，發布後立即移除。
+2026-09-10 已核對 `gamebase.elek.li` 的 Vercel domain、Cloudflare Access application、owner policy 與 release-smoke Service Auth policy；DNS 為 proxied CNAME。2026-09-12 首次真實 deployment 後，Vercel domain config 在代理模式下回報 `misconfigured: true`，Cloudflare 對 Vercel origin 回傳 525。修復時必須將該 CNAME 切為僅 DNS，等公共 resolver 已回傳 Vercel target 後明確執行 `vercel certs issue gamebase.elek.li`，再以 `gamebase.elek.li` 作為 SNI 直連 Vercel target，確認 TLS 驗證與應用程式 HTTP 回應連續成功；只有這項 origin probe 轉綠後才能恢復 Cloudflare 代理。未登入請求的 Cloudflare Access 302 在 origin 前便會產生，不能作為 Vercel 憑證成功的證據。若日後重建 domain 或更換 CNAME target，必須以相同順序完成 origin 憑證配置；525 不能視為應用程式 smoke 失敗。
+
+GitHub `Production` Environment 已具備 `VERCEL_TOKEN`、migration database／CA、Cloudflare service-token pair 與短效 `PRODUCTION_SMOKE_OWNER_ACCESS_JWT`，以及既定五項 variables。Vercel Production scope 的 Supabase、BGG、IGDB、runtime database 與 Cloudflare owner bindings 亦已核對；Preview／Development 未取得 Production credentials。短效 owner JWT 每次發布前更新，發布後立即移除。
 
 ### Release-smoke route 的目前邊界
 

@@ -56,7 +56,7 @@ function failedCleanupEvidence() {
   };
 }
 
-function reachPromotionAttempt() {
+function reachPromotionGuard() {
   let release = createProductionDeploymentRelease({
     executionSha: SHA,
     releaseKind: "migration-bearing",
@@ -88,6 +88,11 @@ function reachPromotionAttempt() {
     releaseIdentity: `production:${SHA}`,
     sourceManifestSha256: MANIFEST_SHA256,
   });
+  return release;
+}
+
+function reachPromotionAttempt() {
+  let release = reachPromotionGuard();
   release = transitionProductionDeploymentRelease(release, {
     kind: "promotion-guard-observed",
     currentDeploymentId: "dpl_D0",
@@ -437,6 +442,23 @@ describe("production deployment release model", () => {
     expect(release.phase).toBe("failed");
     expect(release.failure).toBe("promotion-attempts-exhausted");
     expect(release.next).toEqual({ kind: "stop" });
+  });
+
+  it("starts smoke when Vercel has already assigned the custom domain to D1", () => {
+    const release = transitionProductionDeploymentRelease(
+      reachPromotionGuard(),
+      {
+        kind: "promotion-guard-observed",
+        currentDeploymentId: "dpl_D1",
+        mainSha: SHA,
+      },
+    );
+
+    expect(release.phase).toBe("running-smoke");
+    expect(release.baselineDeploymentId).toBe("dpl_D0");
+    expect(release.stagedDeploymentId).toBe("dpl_D1");
+    expect(release.promotionAttempts).toBe(0);
+    expect(release.next).toMatchObject({ kind: "run-production-smoke" });
   });
 
   it("stops when main advances before a second promotion attempt", () => {

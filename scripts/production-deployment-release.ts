@@ -253,6 +253,21 @@ function runProductionSmoke(
   };
 }
 
+function startProductionSmoke(
+  release: ProductionDeploymentRelease,
+): ProductionDeploymentRelease {
+  const smokeCanary = createProductionSmokeCanary({
+    executionSha: release.executionSha,
+    generation: release.smokeGeneration,
+  });
+  return {
+    ...release,
+    phase: "running-smoke",
+    smokeCanary,
+    next: runProductionSmoke(release, smokeCanary),
+  };
+}
+
 function recordRolledBackEvidence(
   release: ProductionDeploymentRelease,
 ): ProductionDeploymentRelease {
@@ -449,10 +464,13 @@ export function transitionProductionDeploymentRelease(
     }
     case "rechecking-promotion-guard": {
       if (event.kind !== "promotion-guard-observed") break;
-      if (
-        event.mainSha !== release.executionSha ||
-        event.currentDeploymentId !== release.baselineDeploymentId
-      ) {
+      if (event.mainSha !== release.executionSha) {
+        return failed(release, "promotion-guard-rejected");
+      }
+      if (event.currentDeploymentId === release.stagedDeploymentId) {
+        return startProductionSmoke(release);
+      }
+      if (event.currentDeploymentId !== release.baselineDeploymentId) {
         return failed(release, "promotion-guard-rejected");
       }
       const attempt = release.promotionAttempts + 1;
@@ -483,16 +501,7 @@ export function transitionProductionDeploymentRelease(
     case "verifying-promotion": {
       if (event.kind !== "current-deployment-observed") break;
       if (event.deploymentId === release.stagedDeploymentId) {
-        const smokeCanary = createProductionSmokeCanary({
-          executionSha: release.executionSha,
-          generation: release.smokeGeneration,
-        });
-        return {
-          ...release,
-          phase: "running-smoke",
-          smokeCanary,
-          next: runProductionSmoke(release, smokeCanary),
-        };
+        return startProductionSmoke(release);
       }
       if (event.deploymentId === release.baselineDeploymentId) {
         if (release.promotionAttempts >= 2) {
