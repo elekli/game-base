@@ -10,6 +10,7 @@ import type {
   ProductionSmokeCanaryAction,
   ProductionSmokeCanaryEventPayload,
 } from "./production-smoke-canary";
+import { smokeInterruptionDiagnostic } from "./production-release-failure-diagnostics";
 import type { VercelDeploymentRestAdapter } from "./vercel-deployment-rest-adapter";
 
 const MAX_RELEASE_ACTIONS = 64;
@@ -174,12 +175,16 @@ export async function runProductionApplicationRelease(
         ports.execute(action, controller.signal, release),
         deadline,
       ]);
-    } catch {
+    } catch (error) {
       event =
         action.kind === "run-production-smoke"
           ? {
               kind: "smoke-run-interrupted",
               reason: timedOut ? "timeout" : "crash",
+              diagnostic: smokeInterruptionDiagnostic(
+                error,
+                timedOut ? "smoke-execution-timeout" : "smoke-execution-crash",
+              ),
             }
           : { kind: "operation-failed" };
     } finally {

@@ -31,16 +31,16 @@
     },
     "startedAt": { "type": "string", "format": "date-time" },
     "completedAt": { "type": "string", "format": "date-time" },
-    "outcome": { "enum": ["passed", "rolled-back"] },
-    "promotionAttempts": { "type": "integer", "minimum": 1, "maximum": 2 },
-    "rollbackOutcome": { "enum": ["not-required", "baseline-restored"] },
+    "outcome": { "enum": ["passed", "rolled-back", "manual-recovery-required"] },
+    "promotionAttempts": { "type": "integer", "minimum": 0, "maximum": 2 },
+    "rollbackOutcome": { "enum": ["not-required", "baseline-restored", "not-attempted"] },
     "rollbackAttempts": { "type": "integer", "minimum": 0, "maximum": 2 },
     "smoke": {
       "type": "object",
       "additionalProperties": false,
       "required": ["outcome", "generation", "requestIds"],
       "properties": {
-        "outcome": { "enum": ["passed", "failed"] },
+        "outcome": { "enum": ["passed", "failed", "interrupted"] },
         "generation": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
         "requestIds": {
           "type": "array", "maxItems": 16, "uniqueItems": true,
@@ -66,6 +66,27 @@
             "canary-object-round-trip": { "enum": ["passed", "failed"] },
             "canary-cleanup-counts": { "enum": ["passed", "failed"] }
           }
+        }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actionKind", "failureCode", "errorCode"],
+      "properties": {
+        "actionKind": { "const": "run-production-smoke" },
+        "failureCode": { "enum": ["smoke-execution-crash", "smoke-execution-timeout"] },
+        "errorCode": {
+          "enum": [
+            "boundary-origin-denied", "boundary-owner-auth-denied",
+            "network-or-timeout", "release-route-http-failure",
+            "release-route-reply-invalid", "runner-action-timeout", "unknown-error"
+          ]
+        },
+        "httpStatus": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
         }
       }
     }
@@ -152,6 +173,22 @@
                   "canary-cleanup-counts": { "const": "passed" }
                 }
               }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "manual-recovery-required" } }, "required": ["outcome"] },
+      "then": {
+        "required": ["failure"],
+        "properties": {
+          "rollbackOutcome": { "const": "not-attempted" },
+          "rollbackAttempts": { "const": 0 },
+          "smoke": {
+            "properties": {
+              "outcome": { "const": "interrupted" },
+              "requestIds": { "maxItems": 0 }
             }
           }
         }

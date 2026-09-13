@@ -10,6 +10,11 @@ import {
   PRODUCTION_SMOKE_THUMBNAIL_OBJECT_PATH,
   type ProductionSmokePersistedPhase,
 } from "./production-smoke-canary";
+import {
+  ProductionReleaseDiagnosticError,
+  validRequestId,
+  type ProductionReleaseDiagnosticErrorCode,
+} from "./production-release-failure-diagnostics";
 
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_ACTIONS = 16;
@@ -25,9 +30,13 @@ export class ProductionSmokePrerequisiteError extends Error {
   }
 }
 
-export class ProductionSmokeTransportError extends Error {
-  constructor(readonly safeDetail: string) {
-    super(`ProductionSmokeTransportError: ${safeDetail}`);
+export class ProductionSmokeTransportError extends ProductionReleaseDiagnosticError {
+  constructor(
+    readonly safeDetail: string,
+    errorCode: ProductionReleaseDiagnosticErrorCode = "unknown-error",
+    options: Readonly<{ httpStatus?: number; requestId?: string }> = {},
+  ) {
+    super(`ProductionSmokeTransportError: ${safeDetail}`, errorCode, options);
     this.name = "ProductionSmokeTransportError";
   }
 }
@@ -278,15 +287,15 @@ async function boundedFetch(fetchImpl: typeof fetch, input: string, init: Reques
   try {
     return await fetchImpl(input, { ...init, cache: "no-store", redirect: "manual", signal: controller.signal });
   } catch {
-    throw new ProductionSmokeTransportError("production smoke request failed");
+    throw new ProductionSmokeTransportError("production smoke request failed", "network-or-timeout");
   } finally {
     clearTimeout(timer);
     parentSignal.removeEventListener("abort", abort);
   }
 }
 
-async function readBoundedJson(response: Response, signal: AbortSignal) {
-  if (!response.body) throw new ProductionSmokeTransportError("release-smoke route response is empty");
+async function readBoundedJson(response: Response, signal: AbortSignal, timeoutMs = REQUEST_TIMEOUT_MS) {
+  if (!response.body) throw new ProductionSmokeTransportError("release-smoke route response is empty", "release-route-reply-invalid");
   const reader = response.body.getReader();
   const abort = () => { void reader.cancel().catch(() => undefined); };
   signal.addEventListener("abort", abort, { once: true });
@@ -296,8 +305,8 @@ async function readBoundedJson(response: Response, signal: AbortSignal) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(
-      () => reject(new ProductionSmokeTransportError("release-smoke route response deadline exceeded")),
-      REQUEST_TIMEOUT_MS,
+      () => reject(new ProductionSmokeTransportError("release-smoke route response deadline exceeded", "network-or-timeout")),
+      timeoutMs,
     );
   });
   try {
@@ -306,14 +315,14 @@ async function readBoundedJson(response: Response, signal: AbortSignal) {
       if (done) break;
       byteLength += value.byteLength;
       if (byteLength > MAX_RESPONSE_BODY_BYTES) {
-        throw new ProductionSmokeTransportError("release-smoke route response is too large");
+        throw new ProductionSmokeTransportError("release-smoke route response is too large", "release-route-reply-invalid");
       }
       chunks.push(value);
     }
   } catch (error) {
     void reader.cancel().catch(() => undefined);
     if (error instanceof ProductionSmokeTransportError) throw error;
-    throw new ProductionSmokeTransportError("release-smoke route response could not be read");
+    throw new ProductionSmokeTransportError("release-smoke route response could not be read", "release-route-reply-invalid");
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     signal.removeEventListener("abort", abort);
@@ -327,7 +336,7 @@ async function readBoundedJson(response: Response, signal: AbortSignal) {
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
   } catch {
-    throw new ProductionSmokeTransportError("release-smoke route response is not valid JSON");
+    throw new ProductionSmokeTransportError("release-smoke route response is not valid JSON", "release-route-reply-invalid");
   }
 }
 
@@ -370,10 +379,26 @@ function createProductionSmokeRunnerDependencies(
           operation: operationFor(action),
         }),
       }, signal);
-      if (response.status !== 200) throw new ProductionSmokeTransportError("release-smoke route rejected the request");
+      if (response.status !== 200) {
+        let requestId: string | undefined;
+        try {
+          const rejection = await readBoundedJson(response, signal, 1_000);
+          if (isRecord(rejection) && validRequestId(rejection.requestId)) {
+            requestId = rejection.requestId;
+          }
+        } catch {
+          // An unreadable rejection must not replace the original HTTP failure.
+          requestId = undefined;
+        }
+        throw new ProductionSmokeTransportError(
+          "release-smoke route rejected the request",
+          "release-route-http-failure",
+          { httpStatus: response.status, requestId },
+        );
+      }
       const value = await readBoundedJson(response, signal);
       if (!isRecord(value) || !isRecord(value.event) || typeof value.requestId !== "string") {
-        throw new ProductionSmokeTransportError("release-smoke route envelope is invalid");
+        throw new ProductionSmokeTransportError("release-smoke route envelope is invalid", "release-route-reply-invalid");
       }
       return { event: value.event, requestId: value.requestId };
     },
@@ -382,7 +407,11 @@ function createProductionSmokeRunnerDependencies(
         method: "GET",
         headers: { cookie: `CF_Authorization=${config.ownerAccessJwt}` },
       }, signal);
-      if (owner.status !== 200) throw new ProductionSmokeTransportError("custom-domain owner access failed");
+      if (owner.status !== 200) throw new ProductionSmokeTransportError(
+        "custom-domain owner access failed",
+        "boundary-owner-auth-denied",
+        { httpStatus: owner.status },
+      );
       const origin = await boundedFetch(fetchImpl, `${deploymentOrigin}/security-error`, { method: "GET" }, signal);
       const redirectLocation = origin.headers.get("location");
       const vercelLoginRedirect = isVercelLoginRedirect(
@@ -391,7 +420,11 @@ function createProductionSmokeRunnerDependencies(
         deploymentOrigin,
       );
       if (!vercelLoginRedirect) {
-        throw new ProductionSmokeTransportError("direct origin was not denied");
+        throw new ProductionSmokeTransportError(
+          "direct origin was not denied",
+          "boundary-origin-denied",
+          { httpStatus: origin.status },
+        );
       }
       return {
         "custom-domain-owner-access": "passed",

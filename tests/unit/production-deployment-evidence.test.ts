@@ -98,4 +98,45 @@ describe("production deployment evidence", () => {
       }),
     ).toThrow("evidence context is invalid");
   });
+
+  it("projects a manual smoke recovery without arbitrary error detail", () => {
+    const evidence = buildProductionDeploymentEvidence(
+      {
+        ...release(),
+        phase: "manual-recovery-required",
+        next: { kind: "stop" },
+        evidenceOutcome: undefined,
+        smokeEvidence: undefined,
+        promotionAttempts: 0,
+        failure: "smoke-execution-crash",
+        failureDiagnostic: {
+          actionKind: "run-production-smoke",
+          failureCode: "smoke-execution-crash",
+          errorCode: "unknown-error",
+        },
+      },
+      context,
+    );
+
+    expect(evidence).toMatchObject({
+      outcome: "manual-recovery-required",
+      rollbackOutcome: "not-attempted",
+      promotionAttempts: 0,
+      smoke: { outcome: "interrupted", generation: GENERATION, requestIds: [] },
+      failure: {
+        actionKind: "run-production-smoke",
+        failureCode: "smoke-execution-crash",
+        errorCode: "unknown-error",
+      },
+    });
+    expect(JSON.stringify(evidence)).not.toContain("private smoke detail");
+  });
+  it("strips extra runtime diagnostic keys and rejects forged codes", () => {
+    const diagnostic = { actionKind: "run-production-smoke", failureCode: "smoke-execution-crash", errorCode: "unknown-error", message: "SECRET_SENTINEL" };
+    const interrupted = { ...release(), phase: "manual-recovery-required", next: { kind: "stop" }, evidenceOutcome: undefined, smokeEvidence: undefined, failure: "smoke-execution-crash", failureDiagnostic: diagnostic } as ProductionDeploymentRelease;
+    expect(JSON.stringify(buildProductionDeploymentEvidence(interrupted, context))).not.toContain("SECRET_SENTINEL");
+    diagnostic.errorCode = "SECRET_SENTINEL";
+    expect(() => buildProductionDeploymentEvidence(interrupted, context)).toThrow("terminal smoke evidence is incomplete");
+  });
+
 });
