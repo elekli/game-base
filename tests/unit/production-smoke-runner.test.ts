@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { calculateProductionSmokePayloadSha256 } from "../../scripts/production-smoke-canary";
+import { calculateProductionSmokePayloadSha256, createProductionSmokeCanary } from "../../scripts/production-smoke-canary";
 import {
   createProductionSmokeActionRunner,
   createProductionSmokeRunner,
@@ -67,6 +67,46 @@ function dependencies(): ProductionSmokeRunnerDependencies {
 }
 
 describe("production smoke runner", () => {
+  it.each([
+    [JSON.stringify({ requestId: REQUEST_ID, message: "SECRET_SENTINEL" }), REQUEST_ID],
+    [JSON.stringify({ requestId: "SECRET_SENTINEL" }), undefined],
+    ["<html>SECRET_SENTINEL</html>", undefined],
+    ["x".repeat(4_097), undefined],
+  ])("preserves HTTP rejection and only its valid request ID", async (body, requestId) => {
+    const runAction = createProductionSmokeActionRunner({
+      customDomain: "game.example.com",
+      deploymentOrigin: "https://deployment.example.com",
+      supabaseUrl: "https://project.supabase.co",
+      publishableKey: "sb_publishable_public",
+      cfAccessClientId: "client-id",
+      cfAccessClientSecret: "client-secret",
+      ownerAccessJwt: "owner-jwt",
+    }, vi.fn(async () => new Response(body, { status: 401 })) as typeof fetch);
+    const error = await runAction(createProductionSmokeCanary({ executionSha: SHA, generation: GENERATION }).next, SHA, new AbortController().signal).catch(error => error);
+    expect(error).toBeInstanceOf(ProductionSmokeTransportError);
+    expect(error).toMatchObject({ errorCode: "release-route-http-failure", httpStatus: 401 });
+    expect(error.requestId).toBe(requestId);
+    expect(JSON.stringify(error)).not.toContain("SECRET_SENTINEL");
+    expect(error.message).not.toContain("SECRET_SENTINEL");
+  });
+  it("retains HTTP failure when the rejection body never completes", async () => {
+    vi.useFakeTimers();
+    const cancel = vi.fn();
+    try {
+      const runAction = createProductionSmokeActionRunner({
+        customDomain: "game.example.com", deploymentOrigin: "https://deployment.example.com",
+        supabaseUrl: "https://project.supabase.co", publishableKey: "sb_publishable_public",
+        cfAccessClientId: "client-id", cfAccessClientSecret: "client-secret", ownerAccessJwt: "owner-jwt",
+      }, vi.fn(async () => new Response(new ReadableStream({ cancel }), { status: 401 })) as typeof fetch);
+      const pending = runAction(createProductionSmokeCanary({ executionSha: SHA, generation: GENERATION }).next, SHA, new AbortController().signal).catch(error => error);
+      await vi.advanceTimersByTimeAsync(2_100);
+      expect(await pending).toMatchObject({ errorCode: "release-route-http-failure", httpStatus: 401 });
+      expect(cancel).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("drives the bounded canary to a passed terminal with external evidence", async () => {
     const deps = dependencies();
     await expect(runProductionSmokeCanary({ executionSha: SHA, generation: GENERATION }, deps)).resolves.toMatchObject({

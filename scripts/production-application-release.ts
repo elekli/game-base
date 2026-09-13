@@ -1,3 +1,4 @@
+import { isProductionReleaseFailureDiagnostic } from "./production-release-failure-diagnostics";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -23,7 +24,7 @@ const MIGRATION_TAIL = /^[0-9]{4,}$/;
 const MAX_GITHUB_RESPONSE_BYTES = 1024 * 1024;
 
 export class ProductionApplicationReleasePrerequisiteError extends Error {
-  constructor(readonly safeDetail: string) {
+  constructor(readonly safeDetail: string, readonly evidencePersistenceFailed = false) {
     super(`ProductionApplicationReleasePrerequisiteError: ${safeDetail}`);
     this.name = "ProductionApplicationReleasePrerequisiteError";
   }
@@ -203,6 +204,33 @@ async function readContract(
   return contract as EnabledReleaseContract;
 }
 
+// The state machine has already stopped. This projection must never execute
+// another smoke action, cleanup, or rollback; successful evidence is already saved.
+export async function finalizeProductionApplicationRelease(
+  release: Parameters<typeof buildProductionDeploymentEvidence>[0],
+  persistInterruptedEvidence: () => Promise<void>,
+) {
+  let evidencePersistenceFailed = false;
+  if (
+    release.phase === "manual-recovery-required" &&
+    (release.failure === "smoke-execution-crash" || release.failure === "smoke-execution-timeout")
+  ) {
+    try {
+      await persistInterruptedEvidence();
+    } catch {
+      evidencePersistenceFailed = true;
+    }
+  }
+  if (release.phase !== "succeeded") {
+    const errorCode = isProductionReleaseFailureDiagnostic(release.failureDiagnostic)
+      ? release.failureDiagnostic.errorCode : "unknown-error";
+    throw new ProductionApplicationReleasePrerequisiteError(
+      `release stopped in ${release.phase}:${release.failure ?? "unknown"}:${errorCode}`,
+      evidencePersistenceFailed,
+    );
+  }
+}
+
 export async function runProductionApplicationReleaseFromEnvironment(
   repositoryRoot = process.cwd(),
 ) {
@@ -274,6 +302,16 @@ export async function runProductionApplicationReleaseFromEnvironment(
     ownerAccessJwt: requiredEnvironment("PRODUCTION_SMOKE_OWNER_ACCESS_JWT"),
   };
   const startedAt = new Date().toISOString();
+  const buildEvidence = (release: Parameters<typeof buildProductionDeploymentEvidence>[0]) =>
+    buildProductionDeploymentEvidence(release, {
+      repository: "elekli/game-base",
+      workflowRunId,
+      workflowRunAttempt,
+      productionDomain: customDomain,
+      migrationTail,
+      startedAt,
+      completedAt: new Date().toISOString(),
+    });
   const ports = createProductionApplicationReleaseRunnerPorts({
     executionSha,
     customDomain,
@@ -304,16 +342,7 @@ export async function runProductionApplicationReleaseFromEnvironment(
       })(action, sha, signal);
     },
     recordEvidence: async (release) => {
-      const evidence = buildProductionDeploymentEvidence(release, {
-        repository: "elekli/game-base",
-        workflowRunId,
-        workflowRunAttempt,
-        productionDomain: customDomain,
-        migrationTail,
-        startedAt,
-        completedAt: new Date().toISOString(),
-      });
-      await writeProductionDeploymentEvidence(evidencePath, evidence);
+      await writeProductionDeploymentEvidence(evidencePath, buildEvidence(release));
     },
   });
   const release = await runProductionApplicationRelease(
@@ -325,11 +354,9 @@ export async function runProductionApplicationReleaseFromEnvironment(
     },
     ports,
   );
-  if (release.phase !== "succeeded") {
-    throw new ProductionApplicationReleasePrerequisiteError(
-      `release stopped in ${release.phase}:${release.failure ?? "unknown"}`,
-    );
-  }
+  await finalizeProductionApplicationRelease(release, async () => {
+    await writeProductionDeploymentEvidence(evidencePath, buildEvidence(release));
+  });
   console.log(
     JSON.stringify({
       event: "production_application_release_completed",
@@ -347,6 +374,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         ? error.message
         : "ProductionApplicationReleasePrerequisiteError: release failed";
     console.error(message);
+    if (error instanceof ProductionApplicationReleasePrerequisiteError && error.evidencePersistenceFailed) {
+      console.error(JSON.stringify({ event: "production_application_release_evidence_persistence_failed", evidencePersistenceFailed: true }));
+    }
     process.exitCode = 1;
   });
 }

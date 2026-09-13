@@ -2,6 +2,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { ProductionDeploymentRelease } from "./production-deployment-release";
+import { isProductionReleaseFailureDiagnostic, projectProductionReleaseFailureDiagnostic } from "./production-release-failure-diagnostics";
 
 const FULL_SHA = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -36,8 +37,7 @@ export function buildProductionDeploymentEvidence(
   context: ProductionDeploymentEvidenceContext,
 ) {
   if (
-    release.phase !== "recording-evidence" ||
-    !release.evidenceOutcome ||
+    !["recording-evidence", "manual-recovery-required"].includes(release.phase) ||
     !FULL_SHA.test(release.executionSha) ||
     !SHA256.test(release.sourceManifestSha256) ||
     !DEPLOYMENT_ID.test(release.baselineDeploymentId ?? "") ||
@@ -104,6 +104,25 @@ export function buildProductionDeploymentEvidence(
         counts: release.smokeFailureEvidence.counts,
         checks: release.smokeFailureEvidence.checks,
       },
+    };
+  }
+  if (
+    release.phase === "manual-recovery-required" &&
+    (release.failure === "smoke-execution-crash" ||
+      release.failure === "smoke-execution-timeout") &&
+    isProductionReleaseFailureDiagnostic(release.failureDiagnostic) &&
+    release.failureDiagnostic.failureCode === release.failure
+  ) {
+    return {
+      ...common,
+      outcome: "manual-recovery-required" as const,
+      rollbackOutcome: "not-attempted" as const,
+      smoke: {
+        outcome: "interrupted" as const,
+        generation: release.smokeGeneration,
+        requestIds: [],
+      },
+      failure: projectProductionReleaseFailureDiagnostic(release.failureDiagnostic),
     };
   }
   throw new ProductionDeploymentEvidenceError(

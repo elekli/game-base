@@ -8,6 +8,7 @@ import {
   type ProductionSmokeCanaryEvent,
   type ProductionSmokeFailedCleanupEvidence,
 } from "./production-smoke-canary";
+import type { ProductionReleaseFailureDiagnostic } from "./production-release-failure-diagnostics";
 
 export type ProductionReleaseKind = "code-only" | "migration-bearing";
 export type ProductionSchemaGate =
@@ -160,6 +161,7 @@ export type ProductionDeploymentRelease = ReleaseContext &
     promotionAttempts: number;
     rollbackAttempts: number;
     failure?: ProductionDeploymentFailure;
+    failureDiagnostic?: ProductionReleaseFailureDiagnostic;
     evidenceOutcome?: "passed" | "rolled-back";
     requestIds?: ReadonlyArray<string>;
     smokeEvidence?: ProductionSmokeCanaryEvidence;
@@ -206,6 +208,7 @@ export type ProductionDeploymentEvent =
   | Readonly<{
       kind: "smoke-run-interrupted";
       reason: "timeout" | "crash";
+      diagnostic: ProductionReleaseFailureDiagnostic;
     }>
   | Readonly<{
       kind: "rollback-attempt-finished";
@@ -231,11 +234,13 @@ function manualRecovery(
     | "smoke-cleanup-unverified"
     | "smoke-execution-crash"
     | "smoke-execution-timeout",
+  failureDiagnostic?: ProductionReleaseFailureDiagnostic,
 ): ProductionDeploymentRelease {
   return {
     ...release,
     phase: "manual-recovery-required",
     failure,
+    ...(failureDiagnostic === undefined ? {} : { failureDiagnostic }),
     next: { kind: "stop" },
   };
 }
@@ -527,6 +532,7 @@ export function transitionProductionDeploymentRelease(
           event.reason === "timeout"
             ? "smoke-execution-timeout"
             : "smoke-execution-crash",
+          event.diagnostic,
         );
       }
       if (event.kind === "smoke-canary-event") {

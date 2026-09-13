@@ -1,5 +1,6 @@
 import {
   SignJWT,
+  errors,
   createLocalJWKSet,
   exportJWK,
   generateKeyPair,
@@ -133,5 +134,43 @@ describe("release-smoke access token verifier", () => {
     await expect(verifyOwner(await signToken())).rejects.toMatchObject({
       name: "AccessDeniedError",
     });
+  });
+});
+
+describe("closed authorization diagnostics", () => {
+  it.each([
+    [{ audience: "wrong" }, "audience_mismatch"],
+    [{ issuer: "https://wrong.test" }, "issuer_mismatch"],
+    [{ expiresAt: "-10s" }, "jwt_expired"],
+    [{ omitKid: true }, "missing_kid"],
+    [{ type: "org" }, "invalid_type"],
+    [{ subject: "owner-subject" }, "invalid_sub"],
+    [{ includeIssuedAt: false }, "invalid_issued_at"],
+    [{ issuedAt: Math.floor(Date.now() / 1000) + 60 }, "invalid_issued_at"],
+    [{ includeExpiresAt: false }, "invalid_lifetime"],
+    [{ expiresAt: "301s" }, "invalid_lifetime"],
+    [{ commonName: "secret-other-client" }, "invalid_common_name"],
+  ] as const)("classifies %j without changing generic error semantics", async (overrides, denialReason) => {
+    await expect(makeVerifier()(await signToken(overrides))).rejects.toMatchObject({
+      name: "AccessDeniedError", code: "access_denied", message: "無法驗證存取權限。", denialReason,
+    });
+  });
+
+  it.each([
+    [new errors.JWKSTimeout("secret"), "jwks_unavailable"],
+    [new errors.JWSSignatureVerificationFailed("secret"), "signature_invalid"],
+    [new errors.JWTClaimValidationFailed("secret", {}, "secret-claim"), "unknown"],
+    [Object.assign(new Error("secret"), { code: "ERR_JWT_EXPIRED", denialReason: "secret" }), "unknown"],
+  ])("does not trust arbitrary error values", async (error, denialReason) => {
+    const verifier = createReleaseSmokeAccessTokenVerifier({
+      audience, issuer, commonNameSha256, maxLifetimeSeconds: 300,
+      jwks: async () => { throw error; },
+    });
+    try { await verifier(await signToken()); throw new Error("accepted"); }
+    catch (caught) {
+      expect(caught).toMatchObject({ name: "AccessDeniedError", denialReason });
+      expect(JSON.stringify(caught)).not.toContain("secret");
+      expect(caught).not.toHaveProperty("cause");
+    }
   });
 });
