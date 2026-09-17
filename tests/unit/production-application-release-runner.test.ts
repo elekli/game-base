@@ -204,7 +204,7 @@ describe("production application release runner", () => {
 
   it("requires manual recovery when smoke execution crashes", async () => {
     const ports = successfulPorts();
-    const original = ports.execute;
+    const original = vi.spyOn(ports, "execute");
     const crashing: ProductionApplicationReleaseRunnerPorts = {
       execute: async (action, signal, release) => {
         if (action.kind === "run-production-smoke") {
@@ -227,7 +227,17 @@ describe("production application release runner", () => {
     ).resolves.toMatchObject({
       phase: "manual-recovery-required",
       failure: "smoke-execution-crash",
+      failureDiagnostic: {
+        actionKind: "run-production-smoke",
+        failureCode: "smoke-execution-crash",
+        errorCode: "unknown-error",
+      },
     });
+    expect(
+      vi.mocked(ports.execute).mock.calls.some(
+        ([action]) => action.kind === "rollback-baseline",
+      ),
+    ).toBe(false);
   });
 
   it("cleans a failed private Storage check before restoring the baseline", async () => {
@@ -288,4 +298,21 @@ describe("production application release runner", () => {
     expect(smokeActions.at(-1)).toBe("inspect-canary-counts");
     expect(rollbackFinished).toBe(true);
   });
+  it("times out a hanging smoke action without cleanup, rollback or evidence actions", async () => {
+    vi.useFakeTimers();
+    try {
+      const original = successfulPorts().execute;
+      const execute = vi.fn<ProductionApplicationReleaseRunnerPorts["execute"]>(async (action, signal, release) => {
+        if (action.kind === "run-production-smoke") return new Promise(() => undefined);
+        return original(action, signal, release);
+      });
+      const pending = runProductionApplicationRelease({ executionSha: SHA, releaseKind: "code-only", smokeGeneration: GENERATION, sourceManifestSha256: MANIFEST_SHA256 }, { execute });
+      await vi.runAllTimersAsync();
+      const result = await pending;
+      expect(result).toMatchObject({ phase: "manual-recovery-required", next: { kind: "stop" }, rollbackAttempts: 0, failure: "smoke-execution-timeout", failureDiagnostic: { errorCode: "runner-action-timeout" } });
+      expect(execute.mock.calls.filter(([action]) => action.kind === "run-production-smoke")).toHaveLength(1);
+      expect(execute.mock.calls.some(([action]) => action.kind === "rollback-baseline" || action.kind === "record-sanitized-evidence")).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
 });

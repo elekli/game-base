@@ -1,5 +1,13 @@
 # 待辦事項
 
+## 發布流程後續：補齊其餘失敗終態證據
+
+本次修復先處理 `smoke-execution-crash`／`smoke-execution-timeout` 的人工復原紀錄。`smoke-cleanup-unverified` 及建立候選前的失敗仍須獨立收斂，不能假設都有 application-release.json。
+
+- 以明確 variant 表達尚未知悉的 deployment ID／cleanup 狀態，不能編造成功計數或回滾結果。
+- 失敗紀錄寫入不得改變 stop／cleanup／rollback 決策；寫檔失敗仍保留原始原因。
+- 補齊各終態的 schema 驗證與機密哨兵測試，並讓發布手冊列明各路徑能取得的證據。
+
 ## 並行且不阻塞 MVP：Vditor `ir` 行動版原型
 
 保底方案是 Markdown 原始碼編輯器；本原型不得成為其他 MVP 功能開始或完成的前置條件。

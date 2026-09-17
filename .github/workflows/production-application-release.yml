@@ -156,4 +156,4 @@ jobs:
           name: production-application-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/evidence/application-release.json
           retention-days: 90
-          if-no-files-found: error
+          if-no-files-found: warn

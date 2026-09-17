@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ReleaseSmokeAccessTokenVerifier } from "@/shared/auth/verify-release-smoke-access-token";
+import { getReleaseSmokeDenialReason, projectReleaseSmokeDenialReason, type ReleaseSmokeDenialReason, type ReleaseSmokeAccessTokenVerifier } from "@/shared/auth/verify-release-smoke-access-token";
 import { getRequestId } from "@/shared/observability/request-id";
 
 const MAX_REQUEST_BODY_BYTES = 1024;
@@ -69,6 +69,7 @@ type ReleaseSmokeRouteDependencies = Readonly<{
   }>) => ReleaseSmokeAccessTokenVerifier;
   observeFailure: (context: Readonly<{
     errorCode: string;
+    denialReason?: ReleaseSmokeDenialReason;
     requestId: string;
   }>) => void | Promise<void>;
   productionBinding: ProductionBinding;
@@ -160,9 +161,10 @@ async function safelyObserve(
   dependencies: ReleaseSmokeRouteDependencies,
   errorCode: string,
   requestId: string,
+  denialReason?: ReleaseSmokeDenialReason,
 ) {
   try {
-    await dependencies.observeFailure({ errorCode, requestId });
+    await dependencies.observeFailure({ errorCode, requestId, ...(denialReason === undefined ? {} : { denialReason: projectReleaseSmokeDenialReason(denialReason) }) });
   } catch {
     console.error(JSON.stringify({
       event: "failure_observer_failed",
@@ -238,7 +240,7 @@ export function createReleaseSmokeRouteHandler(
 
     const assertion = request.headers.get("Cf-Access-Jwt-Assertion");
     if (!assertion) {
-      await safelyObserve(dependencies, "release_smoke_access_denied", requestId);
+      await safelyObserve(dependencies, "release_smoke_access_denied", requestId, "missing_assertion");
       return response(
         401,
         "無法驗證存取權限。",
@@ -254,8 +256,8 @@ export function createReleaseSmokeRouteHandler(
         maxLifetimeSeconds: config.releaseSmoke.maxTokenLifetimeSeconds,
       });
       await verifyAccessToken(assertion);
-    } catch {
-      await safelyObserve(dependencies, "release_smoke_access_denied", requestId);
+    } catch (error) {
+      await safelyObserve(dependencies, "release_smoke_access_denied", requestId, getReleaseSmokeDenialReason(error));
       return response(
         401,
         "無法驗證存取權限。",

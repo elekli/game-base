@@ -129,6 +129,7 @@ describe("POST /api/internal/release-smoke", () => {
 
     expect(response.status).toBe(401);
     expect(bodyRead).not.toHaveBeenCalled();
+    expect(harness.observeFailure).toHaveBeenCalledWith(expect.objectContaining({ denialReason: "missing_assertion" }));
     expect(harness.verifyAccessToken).not.toHaveBeenCalled();
     expect(harness.createCanaryDependencies).not.toHaveBeenCalled();
   });
@@ -146,6 +147,7 @@ describe("POST /api/internal/release-smoke", () => {
     expect(responseBody).not.toContain("executionSha");
     expect(harness.observeFailure).toHaveBeenCalledWith({
       errorCode: "release_smoke_access_denied",
+      denialReason: "unknown",
       requestId: expect.stringMatching(/[0-9a-f-]{36}/),
     });
     expect(JSON.stringify(harness.observeFailure.mock.calls)).not.toContain(

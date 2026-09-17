@@ -1,3 +1,4 @@
+import { projectReleaseSmokeDenialReason } from "@/shared/auth/verify-release-smoke-access-token";
 import { createReleaseSmokeRouteHandler } from "./handler";
 import { getProductionReleaseSmokeAccessTokenVerifier } from "@/shared/auth/production-release-smoke-access-token-verifier";
 import { deploymentBindings } from "@/shared/config/deployment-bindings";
@@ -28,12 +29,13 @@ export const POST = createReleaseSmokeRouteHandler({
   getRuntimeConfig,
   getVercelEnvironment: () => process.env.VERCEL_ENV,
   getVerifier: getProductionReleaseSmokeAccessTokenVerifier,
-  observeFailure: ({ errorCode, requestId }) => {
+  observeFailure: ({ errorCode, requestId, denialReason }) => {
     console.warn(
       JSON.stringify({
         event: "release_smoke_request_failed",
         errorCode,
         requestId,
+        ...(denialReason === undefined ? {} : { denialReason: projectReleaseSmokeDenialReason(denialReason) }),
       }),
     );
   },

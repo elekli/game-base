@@ -101,20 +101,20 @@ describe("production release contract", () => {
         ".github/workflows/production-application-release.yml",
       productionApplicationRunner: "scripts/production-application-release.ts",
       productionApplicationRunnerSha256:
-        "6cbaa7e9bddcf9db00e5fc364c3625a097fa129a58d422081f90f2b87815add3",
+        "d3b3be5b75a02d92c5be588720584ddf302c805343c50574a7dccb7e0929420d",
       productionApplicationStateRunner:
         "scripts/production-application-release-runner.ts",
       productionApplicationStateRunnerSha256:
-        "c329cc1605f0a9eda2d6df16d55a7c2eae6c698ea56373e7044cf88813589b07",
+        "ac5fa8de9d769033ba3e6d898f5e2f7f732c28b4de56f7873c0fce02163210fd",
       productionDeploymentEvidenceWriter:
         "scripts/production-deployment-evidence.ts",
       productionDeploymentEvidenceWriterSha256:
-        "749bcc8f8bc3a494b8b526c005d28ce5169da312b8e9a17e35694ef30f2155f4",
+        "fb99d5cb0b20fccb71a91671ad19bf023ec54b1fcdebded5797a022cba2bfae4",
       productionDeploymentWriterSha256:
-        "88c6fd74b905237ca03c72402aa222d78243e45d988b09fed11f5b7364be61a4",
+        "f67295d4f5b984bfa9c0a19bf9b9292f6d5d016a8d1a147bcd61649a63ca737a",
       productionDeploymentModel: "scripts/production-deployment-release.ts",
       productionDeploymentModelSha256:
-        "8210007fac5a3519923668f746719613f206025b48cd5b83f8bd9c009b4f0600",
+        "40813fc4081abec7772b481ef341c1ee2605c373aef2696e72e4128ce21c7738",
       productionDeploymentStatus: "ready-protected-rest-release",
       vercelDeploymentAdapter: "scripts/vercel-deployment-rest-adapter.ts",
       vercelDeploymentAdapterStatus:
@@ -130,14 +130,14 @@ describe("production release contract", () => {
       productionSmokeContract: ".github/production-smoke-contract.json",
       releaseSmokeRoute: "src/app/api/internal/release-smoke/route.ts",
       releaseSmokeRouteSha256:
-        "b2e22f7ffb8089ae408c201ef9da20ec5249ca4afc7256b74741bd232457486c",
+        "66d3bdee6562b98b3b65e411403a4f376b24c0c6954a2f5dcbbf35d2c1c1d79d",
       releaseSmokeHandler: "src/app/api/internal/release-smoke/handler.ts",
       releaseSmokeHandlerSha256:
-        "bd090591c481088c9202b089ad5af2a4a8ce71b8282104fc4b3dd9329202ed98",
+        "8a793e07f82b2721b70539e93fd149311cf17a1ca8994163b75e84e731f6fb25",
       releaseSmokeAccessTokenVerifier:
         "src/shared/auth/verify-release-smoke-access-token.ts",
       releaseSmokeAccessTokenVerifierSha256:
-        "185701f85c21333153a6b8655df22dfd10545061ccd27e771033fe1196c8b767",
+        "8326464e6af23dfd1d1a0257055090f86bffb19b9f4ba333560f6ac5d893366b",
       releaseSmokeProductionAccessTokenVerifier:
         "src/shared/auth/production-release-smoke-access-token-verifier.ts",
       releaseSmokeProductionAccessTokenVerifierSha256:
@@ -161,7 +161,7 @@ describe("production release contract", () => {
       productionSmokeAdapterSha256:
         "8d7ce463b3f7050795926b919b4e09edb8ea80720b6fe1de75324c7aa55351d9",
       productionSmokeRunnerSha256:
-        "c7879f56fd6ab185c27e3719edc3bec83ca47b93abc7040f43261fb0d5ccd241",
+        "48d0ee40b61459667ef2db9ed501db434d298eeb2c3325cbe63bffcca75ab540",
       productionRestoreModel: "scripts/production-restore-drill.ts",
       productionRestoreExecutor: "scripts/production-restore-executor.ts",
       productionRestoreIntegrityChecker:
@@ -193,7 +193,7 @@ describe("production release contract", () => {
       productionDeploymentEvidenceSchema:
         ".github/production-deployment-evidence.schema.json",
       productionDeploymentEvidenceSchemaSha256:
-        "850c9a9830611364d82d673ab2408b25fbff5573963cb77569e82bd010c84a1b",
+        "1c2d720c513fad2dda1a726e46ede4435651fb94532c89f5db9be84a492f9904",
       productionDeploymentSourceManifestBuilderSha256:
         "589afce50b16f0d4e6896ad091b9621a96065ad6f2a15c7d9c16d7e95ed1405a",
       productionDeploymentSourceManifestSchemaSha256:
@@ -258,6 +258,17 @@ describe("production release contract", () => {
         type: "string",
         pattern:
           "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      },
+    });
+    expect(evidenceSchema.properties.failure).toMatchObject({
+      additionalProperties: false,
+      required: ["actionKind", "failureCode", "errorCode"],
+      properties: {
+        actionKind: { const: "run-production-smoke" },
+        failureCode: {
+          enum: ["smoke-execution-crash", "smoke-execution-timeout"],
+        },
+        httpStatus: { type: "integer", minimum: 100, maximum: 599 },
       },
     });
     const rolledBackEvidence = evidenceSchema.allOf[1]?.then?.properties;

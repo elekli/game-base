@@ -15,6 +15,8 @@ type ProductionReleaseContract = Readonly<{
   productionBranch: string;
   productionCustomDomain: string | null;
   productionDeploymentEnabled: boolean;
+  productionReleaseFailureDiagnostics: string;
+  productionReleaseFailureDiagnosticsSha256: string;
   productionApplicationRunner: string;
   productionApplicationRunnerSha256: string;
   productionApplicationStateRunner: string;
@@ -372,6 +374,9 @@ export async function checkProductionReleaseContract(root: string) {
     contract.productionDeploymentWriterSha256,
     "Production application workflow",
   );
+  await assertPinnedArtifact(root, contract.productionReleaseFailureDiagnostics,
+    "scripts/production-release-failure-diagnostics.ts", contract.productionReleaseFailureDiagnosticsSha256,
+    "Production release failure diagnostics");
   await assertPinnedArtifact(
     root,
     contract.productionApplicationRunner,
@@ -545,22 +550,22 @@ export async function checkProductionReleaseContract(root: string) {
     ]) === JSON.stringify([
       "589afce50b16f0d4e6896ad091b9621a96065ad6f2a15c7d9c16d7e95ed1405a",
       "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
-      "8210007fac5a3519923668f746719613f206025b48cd5b83f8bd9c009b4f0600",
-      "88c6fd74b905237ca03c72402aa222d78243e45d988b09fed11f5b7364be61a4",
-      "6cbaa7e9bddcf9db00e5fc364c3625a097fa129a58d422081f90f2b87815add3",
-      "c329cc1605f0a9eda2d6df16d55a7c2eae6c698ea56373e7044cf88813589b07",
-      "749bcc8f8bc3a494b8b526c005d28ce5169da312b8e9a17e35694ef30f2155f4",
+      "40813fc4081abec7772b481ef341c1ee2605c373aef2696e72e4128ce21c7738",
+      "f67295d4f5b984bfa9c0a19bf9b9292f6d5d016a8d1a147bcd61649a63ca737a",
+      "d3b3be5b75a02d92c5be588720584ddf302c805343c50574a7dccb7e0929420d",
+      "ac5fa8de9d769033ba3e6d898f5e2f7f732c28b4de56f7873c0fce02163210fd",
+      "fb99d5cb0b20fccb71a91671ad19bf023ec54b1fcdebded5797a022cba2bfae4",
       "fcea0fd520df434b1c549e0d7b848530c60b43b87711814dae6f6ff3ffa464c3",
       "92569dcc9e85de5efe083da1ddf7951326ae3793ccfe535fda7024aedde139d4",
       "aab60949aa19dbec335d9012ce10d751a273bc244b35bab9bdc10861892f83ea",
       "618cf243e1214778e6b0b9b437913f69e56af09bd1d0cd445fa0f2fae33e7ba9",
       "ecc8b4b53f319f877a3e5dc50d9690e1a36d94d5ee123d81d33a4eb1820687f8",
       "f1cc8366f5dafa9b9aa28fa7334c9a2e4ffa555e6e62b7e0f09d7d31eb8998e3",
-      "c7879f56fd6ab185c27e3719edc3bec83ca47b93abc7040f43261fb0d5ccd241",
+      "48d0ee40b61459667ef2db9ed501db434d298eeb2c3325cbe63bffcca75ab540",
       "8d7ce463b3f7050795926b919b4e09edb8ea80720b6fe1de75324c7aa55351d9",
-      "b2e22f7ffb8089ae408c201ef9da20ec5249ca4afc7256b74741bd232457486c",
-      "bd090591c481088c9202b089ad5af2a4a8ce71b8282104fc4b3dd9329202ed98",
-      "185701f85c21333153a6b8655df22dfd10545061ccd27e771033fe1196c8b767",
+      "66d3bdee6562b98b3b65e411403a4f376b24c0c6954a2f5dcbbf35d2c1c1d79d",
+      "8a793e07f82b2721b70539e93fd149311cf17a1ca8994163b75e84e731f6fb25",
+      "8326464e6af23dfd1d1a0257055090f86bffb19b9f4ba333560f6ac5d893366b",
       "2a1463331e350d5284f75ae7eb51ebbf7da74e0951b826a4e21130f2b4648b76",
       "cf273ce015681fb1c9e92d2a322c0b93fdc9552e28b93b56553adf045938402c",
       "96604eb799d32eefff62297efafe8e18cca595cc6d4505083f60ead85402f028",
@@ -753,7 +758,7 @@ export async function checkProductionReleaseContract(root: string) {
   );
   assertContract(
     contract.productionDeploymentEvidenceSchemaSha256 ===
-      "850c9a9830611364d82d673ab2408b25fbff5573963cb77569e82bd010c84a1b" &&
+      "1c2d720c513fad2dda1a726e46ede4435651fb94532c89f5db9be84a492f9904" &&
       createHash("sha256").update(deploymentEvidenceSchemaText).digest("hex") ===
         contract.productionDeploymentEvidenceSchemaSha256,
     "Production deployment evidence schema fingerprint does not match the approved redaction boundary",
@@ -792,20 +797,23 @@ export async function checkProductionReleaseContract(root: string) {
     "rollbackOutcome",
     "rollbackAttempts",
     "smoke",
+    "failure",
   ];
+  const requiredEvidenceFields = evidenceFields.filter((field) => field !== "failure");
   const evidenceRequired = deploymentEvidenceSchema.required;
   const evidenceProperties = deploymentEvidenceSchema.properties;
   assertContract(
     deploymentEvidenceSchema.additionalProperties === false &&
       Array.isArray(evidenceRequired) &&
       JSON.stringify([...evidenceRequired].sort()) ===
-        JSON.stringify([...evidenceFields].sort()) &&
+        JSON.stringify([...requiredEvidenceFields].sort()) &&
       evidenceProperties !== undefined &&
       JSON.stringify(Object.keys(evidenceProperties).sort()) ===
         JSON.stringify([...evidenceFields].sort()),
     "Production deployment evidence must use the exact secret-free field allowlist",
   );
   const smokeSchema = evidenceProperties.smoke as JsonSchema | undefined;
+  const failureSchema = evidenceProperties.failure as JsonSchema | undefined;
   assertContract(
     smokeSchema?.additionalProperties === false &&
       JSON.stringify(Object.keys(smokeSchema.properties ?? {}).sort()) ===
@@ -814,6 +822,24 @@ export async function checkProductionReleaseContract(root: string) {
         JSON.stringify(["outcome", "generation", "requestIds"]) &&
       (evidenceProperties.canaryContractVersion as { const?: unknown } | undefined)?.const === 3,
     "Production smoke evidence must reject payloads and unknown fields",
+  );
+  assertContract(
+    failureSchema?.additionalProperties === false &&
+      JSON.stringify(failureSchema?.required) ===
+        JSON.stringify(["actionKind", "failureCode", "errorCode"]) &&
+      (failureSchema?.properties?.actionKind as { const?: unknown } | undefined)?.const ===
+        "run-production-smoke" &&
+      JSON.stringify((failureSchema?.properties?.failureCode as { enum?: unknown } | undefined)?.enum) ===
+        JSON.stringify(["smoke-execution-crash", "smoke-execution-timeout"]) &&
+      JSON.stringify((failureSchema?.properties?.errorCode as { enum?: unknown } | undefined)?.enum) ===
+        JSON.stringify([
+          "boundary-origin-denied", "boundary-owner-auth-denied",
+          "network-or-timeout", "release-route-http-failure",
+          "release-route-reply-invalid", "runner-action-timeout", "unknown-error",
+        ]) &&
+      (failureSchema?.properties?.httpStatus as { minimum?: unknown; maximum?: unknown } | undefined)?.minimum === 100 &&
+      (failureSchema?.properties?.httpStatus as { minimum?: unknown; maximum?: unknown } | undefined)?.maximum === 599,
+    "Manual recovery evidence must preserve only the approved diagnostic union",
   );
   const smokeGeneration = smokeSchema?.properties?.generation as JsonSchema | undefined;
   assertContract(
