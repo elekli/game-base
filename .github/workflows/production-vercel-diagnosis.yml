@@ -1,0 +1,75 @@
+name: Production Vercel Read-only Diagnosis
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: Production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require current main and successful CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          test "$current" = "$GITHUB_SHA"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&branch=main&event=push&status=success&per_page=100" |
+            jq -e --arg sha "$GITHUB_SHA" 'any(.workflow_runs[]; .head_sha == $sha and .head_branch == "main" and .event == "push" and .conclusion == "success")' >/dev/null
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Inspect production alias without mutation
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          pnpm exec tsx --eval '
+          import { readFileSync } from "node:fs";
+          import { createVercelRestTransport, VercelRestHttpError, VercelRestTimeoutError, VercelRestNetworkError, VercelRestConfigurationError, VercelRestMalformedResponseError } from "./scripts/vercel-rest-transport.ts";
+          import { buildGetVercelProductionAliasRequest, parseVercelProductionAlias, VercelDeploymentMalformedResponseError } from "./scripts/vercel-deployment-rest-adapter.ts";
+          (async () => {
+            try {
+              const contract = JSON.parse(readFileSync(".github/production-release-contract.json", "utf8"));
+              const input = { customDomain: contract.productionCustomDomain, projectId: contract.vercelProjectId };
+              const transport = createVercelRestTransport({
+                token: process.env.VERCEL_TOKEN ?? "",
+                teamId: contract.vercelTeamId,
+                timeoutMs: 40000,
+                fetchImpl: async (url, init) => {
+                  const response = await fetch(url, init);
+                  console.log(JSON.stringify({event: "vercel_alias_http", status: response.status}));
+                  return response;
+                },
+              });
+              const request = buildGetVercelProductionAliasRequest(input);
+              parseVercelProductionAlias(await transport.getJson(request.path, request.query), input);
+              console.log(JSON.stringify({event: "vercel_alias_diagnosis", result: "passed"}));
+            } catch (error) {
+              const code = error instanceof VercelRestHttpError ? "http-failure"
+                : error instanceof VercelRestTimeoutError ? "timeout"
+                : error instanceof VercelRestNetworkError ? "network-failure"
+                : error instanceof VercelRestConfigurationError ? "configuration-invalid"
+                : error instanceof VercelRestMalformedResponseError ? "response-body-invalid"
+                : error instanceof VercelDeploymentMalformedResponseError ? "alias-shape-invalid"
+                : "unknown-error";
+              console.log(JSON.stringify({event: "vercel_alias_diagnosis", result: "failed", code}));
+              process.exitCode = 1;
+            }
+          })();'
