@@ -89,7 +89,7 @@ GitHub `Production` Environment 已具備 `VERCEL_TOKEN`、migration database／
 
 `/api/internal/release-smoke` 已建立 production-only 前置閘與獨立 service-principal verifier。它只接受 Cloudflare 注入的 `Cf-Access-Jwt-Assertion`，並核對 RS256、`kid`、issuer、audience、`type: "app"`、空 `sub`、時間界線、repository pin 的最大 lifetime，以及 `common_name` SHA-256 fingerprint。Client ID／Secret headers 與 request body 都不能自報授權。
 
-Production binding 已固定專用 service token `common_name` 的 SHA-256 fingerprint 與 86,400 秒最大 application-token lifetime。DB／private Storage adapter 與封閉 request dispatch 已接線；fingerprint、issuer、audience、token lifetime 或 production environment 任一不符時，route 仍會在讀 body 或呼叫 adapter 前具名拒絕。回應與 log 只含有界 state-machine event、具名錯誤與 request ID，不含 assertion、service-token headers、連線資料或 request body。
+Production binding 已固定專用 service token `common_name` 的 SHA-256 fingerprint，並將 assertion lifetime 的 repository 安全上限設為一年（31,536,000 秒），與 Cloudflare 服務憑證預設的一年有效期對齊。這是本專案的接受上限，不代表 Cloudflare 每次簽發的 assertion 都恰好有效一年；它也不沿用擁有者 application session 的 24 小時期限。超過一年仍會拒絕。DB／private Storage adapter 與封閉 request dispatch 已接線；fingerprint、issuer、audience、token lifetime 或 production environment 任一不符時，route 仍會在讀 body 或呼叫 adapter 前具名拒絕。回應與 log 只含有界 state-machine event、具名錯誤與 request ID，不含 assertion、service-token headers、連線資料或 request body。
 
 `scripts/production-smoke-runner.ts` 不會建立或繞過 `requireOwner`。runner transport 驅動固定 canary，並從外部核對自訂網域、direct-origin denial 與兩個 public Storage path 的 denial；direct-origin 探針固定讀公開的 `/security-error`，只接受導向 Vercel 登入網域的 redirect，不把 application 401／403 當作 Deployment Protection 證據。private Storage denial 排在 route 已確認固定原圖與縮圖為 exact `1/2` 之後、cleanup 之前，避免不存在物件造成假陽性。設定缺漏、網域重疊或格式錯誤時會在零 HTTP request 前拋出 `ProductionSmokePrerequisiteError`。
 

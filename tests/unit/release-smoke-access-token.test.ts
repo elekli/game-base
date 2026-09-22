@@ -34,7 +34,7 @@ beforeAll(async () => {
 type TokenOverrides = {
   audience?: string;
   commonName?: string;
-  expiresAt?: string;
+  expiresAt?: number | string;
   includeExpiresAt?: boolean;
   includeIssuedAt?: boolean;
   issuedAt?: number;
@@ -82,6 +82,35 @@ describe("release-smoke access token verifier", () => {
   it("accepts the pinned Cloudflare service principal", async () => {
     await expect(makeVerifier()(await signToken())).resolves.toEqual({
       kind: "release-smoke",
+    });
+  });
+
+  it("accepts the exact one-year production service-token lifetime", async () => {
+    const issuedAt = Math.floor(Date.now() / 1000);
+
+    await expect(
+      makeVerifier(31_536_000)(
+        await signToken({
+          issuedAt,
+          expiresAt: issuedAt + 31_536_000,
+        }),
+      ),
+    ).resolves.toEqual({ kind: "release-smoke" });
+  });
+
+  it("rejects a service-token lifetime longer than one year", async () => {
+    const issuedAt = Math.floor(Date.now() / 1000);
+
+    await expect(
+      makeVerifier(31_536_000)(
+        await signToken({
+          issuedAt,
+          expiresAt: issuedAt + 31_536_001,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "AccessDeniedError",
+      denialReason: "invalid_lifetime",
     });
   });
 

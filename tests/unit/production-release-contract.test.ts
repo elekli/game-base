@@ -145,7 +145,7 @@ describe("production release contract", () => {
       releaseSmokeDeploymentBindings:
         "src/shared/config/deployment-bindings.ts",
       releaseSmokeDeploymentBindingsSha256:
-        "cf273ce015681fb1c9e92d2a322c0b93fdc9552e28b93b56553adf045938402c",
+        "e7a6b5b7a4da57c2725981ceb81115db81d1148cd16ea4eebd38feb0d18f6981",
       productionSmokeModel: "scripts/production-smoke-canary.ts",
       productionSmokePersistenceMigration:
         "supabase/migrations/0015_production_smoke_canary.sql",
