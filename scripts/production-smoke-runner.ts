@@ -405,7 +405,7 @@ function createProductionSmokeRunnerDependencies(
     async runBoundaryChecks(signal) {
       const owner = await boundedFetch(fetchImpl, `${customOrigin}/api/private/ping`, {
         method: "GET",
-        headers: { cookie: `CF_Authorization=${config.ownerAccessJwt}` },
+        headers: { "Cf-Access-Token": config.ownerAccessJwt },
       }, signal);
       if (owner.status !== 200) throw new ProductionSmokeTransportError(
         "custom-domain owner access failed",

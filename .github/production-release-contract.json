@@ -52,7 +52,7 @@
   "productionSmokePersistencePgtap": "supabase/tests/0015_production_smoke_canary.pgtap.sql",
   "productionSmokePersistencePgtapSha256": "f1cc8366f5dafa9b9aa28fa7334c9a2e4ffa555e6e62b7e0f09d7d31eb8998e3",
   "productionSmokeRunner": "scripts/production-smoke-runner.ts",
-  "productionSmokeRunnerSha256": "48d0ee40b61459667ef2db9ed501db434d298eeb2c3325cbe63bffcca75ab540",
+  "productionSmokeRunnerSha256": "ea1fc457a05792ffdb2bba6847899623db3b59d14b9eab6d333df3ab6cc426f4",
   "productionSmokeAdapter": "src/adapters/production-smoke-canary-adapter.ts",
   "productionSmokeAdapterSha256": "8d7ce463b3f7050795926b919b4e09edb8ea80720b6fe1de75324c7aa55351d9",
   "productionSmokeRunnerStatus": "ready-protected-live-production",

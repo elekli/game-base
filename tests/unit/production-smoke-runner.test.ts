@@ -332,6 +332,13 @@ describe("production smoke runner", () => {
       expect(JSON.stringify(body)).not.toContain("client-secret");
       expect(JSON.stringify(body)).not.toContain("owner-jwt");
     }
+    const ownerRequest = requests.find(
+      ({ url }) => url === "https://game.example.com/api/private/ping",
+    );
+    expect(ownerRequest).toBeDefined();
+    const ownerHeaders = new Headers(ownerRequest?.init.headers);
+    expect(ownerHeaders.get("cf-access-token")).toBe("owner-jwt");
+    expect(ownerHeaders.has("cookie")).toBe(false);
     expect(requests.map(({ url }) => url)).toEqual(expect.arrayContaining([
       "https://project.supabase.co/storage/v1/object/public/game-media/release-smoke-v1/original.png",
       "https://project.supabase.co/storage/v1/object/public/game-media/release-smoke-v1/thumbnail.webp",
