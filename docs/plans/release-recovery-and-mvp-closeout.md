@@ -65,3 +65,9 @@ Vercel runtime logs 已定位直接失敗為兩次 `401 / release_smoke_access_d
 ```
 
 非目標：不修改授權、部署 mutation、驗收條件、workflow 或其他功能。驗收：實際 ports seam 假時鐘證明延遲成功只送一次 promotion、永不收斂有界停止、取消不再查詢、第三部署立即停止、rollback 延遲確認；契約 SHA 同步且回歸全綠。60 秒後仍未收斂需人工確認，不能自動宣稱回復或驗收成功。
+
+### 2026-09-22：服務憑證有效期綁定
+
+正式發布 35676647740 已完成候選部署與 alias 收斂，smoke route 以 `release_smoke_access_denied`／`invalid_lifetime` 回 401。Cloudflare 的服務 assertion 契約包含 `type: "app"`、空 `sub`、`iat`、`exp` 與 `common_name`；原 production binding 把擁有者 application session 的 24 小時期限當成服務 assertion 的上限。現有證據顯示正式 assertion 的時間欄位或 lifetime 未通過該上限，是否確為 lifetime 超限仍以正式 smoke 驗收。Cloudflare 服務憑證預設有效一年，因此 repository 採一年（31,536,000 秒）作為安全上限；這是本專案的接受政策，不宣稱每張 assertion 的 `exp - iat` 都等於一年。精確邊界測試證明一年可接受、一年加一秒仍拒絕。
+
+此修正不更換 service token，不放寬簽章、issuer、audience、主體型別、空 `sub` 或 `common_name` 指紋檢查，也不改動發布 mutation。合併後以同一受保護流程重新發布，並以正式 smoke artifact、alias、資料庫與 Storage 清理證據驗收。

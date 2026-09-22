@@ -44,7 +44,7 @@
   "releaseSmokeProductionAccessTokenVerifier": "src/shared/auth/production-release-smoke-access-token-verifier.ts",
   "releaseSmokeProductionAccessTokenVerifierSha256": "2a1463331e350d5284f75ae7eb51ebbf7da74e0951b826a4e21130f2b4648b76",
   "releaseSmokeDeploymentBindings": "src/shared/config/deployment-bindings.ts",
-  "releaseSmokeDeploymentBindingsSha256": "cf273ce015681fb1c9e92d2a322c0b93fdc9552e28b93b56553adf045938402c",
+  "releaseSmokeDeploymentBindingsSha256": "e7a6b5b7a4da57c2725981ceb81115db81d1148cd16ea4eebd38feb0d18f6981",
   "productionSmokeModel": "scripts/production-smoke-canary.ts",
   "productionSmokeModelSha256": "618cf243e1214778e6b0b9b437913f69e56af09bd1d0cd445fa0f2fae33e7ba9",
   "productionSmokePersistenceMigration": "supabase/migrations/0015_production_smoke_canary.sql",

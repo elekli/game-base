@@ -12,7 +12,7 @@ describe("parseRuntimeConfig", () => {
       projectRef: "wbtyuvufhrhybquzwfip",
       releaseSmokeCommonNameSha256:
         "2cf7b6cc4252a67e02f67bff493cf60aeac98e6436876aff29d74280b874c6b2",
-      releaseSmokeMaxTokenLifetimeSeconds: 86_400,
+      releaseSmokeMaxTokenLifetimeSeconds: 31_536_000,
       publishableKeySha256:
         "4462e410b46df06f21744e9cafcfc75e7eb8975cab8629ce6360be06d08fe557",
       secretKeySha256:
