@@ -161,7 +161,7 @@ describe("production release contract", () => {
       productionSmokeAdapterSha256:
         "8d7ce463b3f7050795926b919b4e09edb8ea80720b6fe1de75324c7aa55351d9",
       productionSmokeRunnerSha256:
-        "48d0ee40b61459667ef2db9ed501db434d298eeb2c3325cbe63bffcca75ab540",
+        "ea1fc457a05792ffdb2bba6847899623db3b59d14b9eab6d333df3ab6cc426f4",
       productionRestoreModel: "scripts/production-restore-drill.ts",
       productionRestoreExecutor: "scripts/production-restore-executor.ts",
       productionRestoreIntegrityChecker:

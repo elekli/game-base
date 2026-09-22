@@ -96,7 +96,7 @@ Production binding 已固定專用 service token `common_name` 的 SHA-256 finge
 1. 專用 `/api/internal/release-smoke` route 的 repository-owned Production fingerprint 與最大 lifetime pin 已固定；一般 owner 與此 service principal 仍維持雙向隔離。
 2. route 的唯一可變資料為固定 UUID 的 `app_private.production_smoke_canaries` row，以及固定的 private Storage PNG 原圖與 WebP 縮圖 path；row／objects 皆必須以 exact execution identity 清除，不能接受任意 table、game、object 或 owner input。
 3. route 可在同一受限 principal 下完成固定 library read 與 runtime DB read；private Storage 的公開路徑拒絕由外部 runner 核對，其餘 app 功能不授權給該 principal。
-4. `custom-domain-owner-access` 使用當次執行前取得的短效 owner `CF_Authorization` session；它不得成為長期 prerequisite，發布完成後立即從 GitHub Environment 移除。
+4. `custom-domain-owner-access` 使用當次執行前由 `cloudflared` 取得的短效 owner token，依 Cloudflare CLI 契約放在 `Cf-Access-Token` header；它不得成為長期 prerequisite，發布完成後立即從 GitHub Environment 移除。
 
 上述繫結已到位，`productionDeploymentEnabled` 設為 `true`；任何 runtime prerequisite 消失時，runner 仍必須 fail closed。
 
