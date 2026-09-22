@@ -14,6 +14,27 @@ import { smokeInterruptionDiagnostic } from "./production-release-failure-diagno
 import type { VercelDeploymentRestAdapter } from "./vercel-deployment-rest-adapter";
 
 const MAX_RELEASE_ACTIONS = 64;
+const MAX_ALIAS_CONFIRMATION_OBSERVATIONS = 30;
+const ALIAS_CONFIRMATION_INTERVAL_MS = 1_000;
+
+function waitForAliasConfirmation(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new ProductionApplicationReleaseRunnerError("release action aborted"));
+      return;
+    }
+    const abort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      reject(new ProductionApplicationReleaseRunnerError("release action aborted"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, ALIAS_CONFIRMATION_INTERVAL_MS);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
 
 export class ProductionApplicationReleaseRunnerError extends Error {
   constructor(readonly safeDetail: string) {
@@ -64,14 +85,28 @@ export function createProductionApplicationReleaseRunnerPorts(
             ...gate,
           };
         }
-        case "inspect-current-deployment":
-          return {
-            kind: "current-deployment-observed",
-            deploymentId: await dependencies.vercel.inspectCurrentDeployment(
-              dependencies.customDomain,
-              signal,
-            ),
-          };
+        case "inspect-current-deployment": {
+          const confirming = action.purpose === "verify-promotion" || action.purpose === "verify-rollback";
+          const previousDeploymentId = action.purpose === "verify-promotion"
+            ? release.baselineDeploymentId
+            : release.stagedDeploymentId;
+          const observations = confirming ? MAX_ALIAS_CONFIRMATION_OBSERVATIONS : 1;
+          for (let attempt = 0; attempt < observations; attempt += 1) {
+            if (signal.aborted) throw new ProductionApplicationReleaseRunnerError("release action aborted");
+            const deploymentId = await dependencies.vercel.inspectCurrentDeployment(
+              dependencies.customDomain, signal,
+            );
+            if (signal.aborted) throw new ProductionApplicationReleaseRunnerError("release action aborted");
+            // Only a known old alias is transient. A third deployment must reach
+            // the state machine immediately so its concurrency guard fails closed.
+            if (!confirming || deploymentId !== previousDeploymentId) {
+              return { kind: "current-deployment-observed", deploymentId };
+            }
+            if (attempt + 1 < observations) await waitForAliasConfirmation(signal);
+          }
+          // Never turn a confirmation timeout into another mutation attempt.
+          throw new ProductionApplicationReleaseRunnerError("alias confirmation exhausted");
+        }
         case "ensure-staged-deployment":
           return {
             kind: "staged-deployment-resolved",
