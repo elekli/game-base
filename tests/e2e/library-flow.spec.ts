@@ -229,6 +229,8 @@ test("#39 refresh failure keeps safe source data and retry succeeds once per cli
 });
 
 test("#40 board-only facets apply OR／AND and clear when switching to multiple media", async ({ page }, testInfo) => {
+  // This scenario creates three source-backed games before exercising every facet transition.
+  test.setTimeout(60_000);
   for (const title of ["篩選驗收合作", "篩選驗收策略", "篩選驗收另一機制"]) {
     await page.goto("/games/new");
     await page.getByLabel("搜尋遊戲").fill(title);
