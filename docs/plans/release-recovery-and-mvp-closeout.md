@@ -50,3 +50,18 @@ Vercel runtime logs 已定位直接失敗為兩次 `401 / release_smoke_access_d
 - 複製的本機 .env 缺 runtime bindings，直接 dev 起不來；改用既有 CI fixture 環境後 dev 與 HTTP 200 通過，未修改正式環境或放寬檢查。
 - Supabase CA 已從官方 Studio 原始碼固定的下載位置取得，通過憑證有效期檢查，實際 TLS／hostname 驗證連線成功。以既有 postgres 角色直接唯讀查詢固定 canary table（它有 SELECT 與 bypass-RLS）成功；不要 SET ROLE app_migrator，正式角色的 SET option 不允許該操作。
 - Cloudflare 應用程式 audience 與 service client_id 指紋皆匹配；組織設定 API 回 403，不能據此推論 issuer 不匹配。短效 owner session 可能需要更新，不能把過期 session 當程式缺陷。
+
+### 2026-09-20：非同步切換確認
+
+根因證據：35369026291 在 16:34:58.0707116Z 宣告 promotion attempts exhausted；Vercel aliasAssignedAt 在同秒 .102，晚約 31 毫秒。成功接受切換要求不等於 alias 已收斂，原流程兩次立即 GET 耗盡 mutation 次數。
+
+範圍：僅在 runner ports 的 verify-promotion／verify-rollback 輪詢既有 GET；最多 30 次、相隔 1 秒，action 有 60 秒硬截止且沿用可取消的 HTTP transport。只有仍觀察到切換前部署才等待。目標部署立即交回狀態機，第三部署立即交回既有拒絕分支。次數耗盡拋具名錯誤終止，不再增加 mutation。其他 inspection 維持單次。
+
+```text
+切換要求 → GET alias → 目標部署 → 既有驗收／回滾證據
+                │── 第三部署 → 既有拒絕分支
+                └── 舊部署 → 有界等待 → GET alias
+                              └── 耗盡／取消／錯誤 → 停止
+```
+
+非目標：不修改授權、部署 mutation、驗收條件、workflow 或其他功能。驗收：實際 ports seam 假時鐘證明延遲成功只送一次 promotion、永不收斂有界停止、取消不再查詢、第三部署立即停止、rollback 延遲確認；契約 SHA 同步且回歸全綠。60 秒後仍未收斂需人工確認，不能自動宣稱回復或驗收成功。

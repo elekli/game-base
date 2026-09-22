@@ -105,7 +105,7 @@ describe("production release contract", () => {
       productionApplicationStateRunner:
         "scripts/production-application-release-runner.ts",
       productionApplicationStateRunnerSha256:
-        "ac5fa8de9d769033ba3e6d898f5e2f7f732c28b4de56f7873c0fce02163210fd",
+        "3b71d93abc966cbc8906b0a4f119d182f1d53fc8d6cee942fa08445f4dba46fc",
       productionDeploymentEvidenceWriter:
         "scripts/production-deployment-evidence.ts",
       productionDeploymentEvidenceWriterSha256:
@@ -114,7 +114,7 @@ describe("production release contract", () => {
         "f67295d4f5b984bfa9c0a19bf9b9292f6d5d016a8d1a147bcd61649a63ca737a",
       productionDeploymentModel: "scripts/production-deployment-release.ts",
       productionDeploymentModelSha256:
-        "40813fc4081abec7772b481ef341c1ee2605c373aef2696e72e4128ce21c7738",
+        "57138896b0f5b1881c22bfde6dbce440e4ec5b2a07c355e843aa4d85644b7b76",
       productionDeploymentStatus: "ready-protected-rest-release",
       vercelDeploymentAdapter: "scripts/vercel-deployment-rest-adapter.ts",
       vercelDeploymentAdapterStatus:

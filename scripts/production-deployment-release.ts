@@ -296,7 +296,11 @@ function recordRolledBackEvidence(
 }
 
 function inspectCurrent(purpose: InspectionPurpose): ProductionDeploymentAction {
-  return { kind: "inspect-current-deployment", purpose, timeoutMs: 30_000 };
+  return {
+    kind: "inspect-current-deployment",
+    purpose,
+    timeoutMs: purpose === "verify-promotion" || purpose === "verify-rollback" ? 60_000 : 30_000,
+  };
 }
 
 function prePromotionFailure(

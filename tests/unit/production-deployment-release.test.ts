@@ -521,7 +521,7 @@ describe("production deployment release model", () => {
     expect(release.next).toEqual({
       kind: "inspect-current-deployment",
       purpose: "verify-rollback",
-      timeoutMs: 30_000,
+      timeoutMs: 60_000,
     });
 
     release = transitionProductionDeploymentRelease(release, {
@@ -656,7 +656,7 @@ describe("production deployment release model", () => {
     expect(promotionFailure.next).toEqual({
       kind: "inspect-current-deployment",
       purpose: "verify-promotion",
-      timeoutMs: 30_000,
+      timeoutMs: 60_000,
     });
 
     const smokeFailure = transitionProductionDeploymentRelease(reachSmoke(), {
@@ -717,7 +717,7 @@ describe("production deployment release model", () => {
     expect(rollbackFailure.next).toEqual({
       kind: "inspect-current-deployment",
       purpose: "verify-rollback",
-      timeoutMs: 30_000,
+      timeoutMs: 60_000,
     });
     rollbackFailure = transitionProductionDeploymentRelease(rollbackFailure, {
       kind: "operation-failed",

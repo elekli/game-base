@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   runProductionApplicationRelease,
+  createProductionApplicationReleaseRunnerPorts,
+  type ProductionApplicationReleaseActionDependencies,
   type ProductionApplicationReleaseRunnerPorts,
 } from "../../scripts/production-application-release-runner";
 import { calculateProductionSmokePayloadSha256 } from "../../scripts/production-smoke-canary";
@@ -313,6 +315,122 @@ describe("production application release runner", () => {
       expect(execute.mock.calls.filter(([action]) => action.kind === "run-production-smoke")).toHaveLength(1);
       expect(execute.mock.calls.some(([action]) => action.kind === "rollback-baseline" || action.kind === "record-sanitized-evidence")).toBe(false);
     } finally { vi.useRealTimers(); }
+  });
+
+});
+
+
+describe("bounded alias confirmation through real runner ports", () => {
+  afterEach(() => vi.useRealTimers());
+
+  function fixture(observations: string[]) {
+    const inspect = vi.fn(async () => observations.length > 1 ? observations.shift()! : observations[0]!);
+    const unused = vi.fn(async () => { throw new Error("unexpected mutation"); });
+    const dependencies = {
+      customDomain: "gamebase.example.com", executionSha: SHA,
+      vercel: { inspectCurrentDeployment: inspect, promote: unused, rollback: unused },
+    } as unknown as ProductionApplicationReleaseActionDependencies;
+    return { inspect, unused, ports: createProductionApplicationReleaseRunnerPorts(dependencies) };
+  }
+
+  function release() {
+    return { baselineDeploymentId: "dpl_D0", stagedDeploymentId: "dpl_D1" } as Parameters<ProductionApplicationReleaseRunnerPorts["execute"]>[2];
+  }
+
+  it.each([
+    ["verify-promotion", "dpl_D0", "dpl_D1"],
+    ["verify-rollback", "dpl_D1", "dpl_D0"],
+  ] as const)("waits for delayed %s without another mutation", async (purpose, oldId, target) => {
+    vi.useFakeTimers();
+    const f = fixture([oldId, oldId, target]);
+    const result = f.ports.execute({ kind: "inspect-current-deployment", purpose, timeoutMs: 60_000 }, new AbortController().signal, release());
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(result).resolves.toEqual({ kind: "current-deployment-observed", deploymentId: target });
+    expect(f.inspect).toHaveBeenCalledTimes(3);
+    expect(f.unused).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds never-converging confirmation", async () => {
+    vi.useFakeTimers();
+    const f = fixture(["dpl_D0"]);
+    const result = f.ports.execute({ kind: "inspect-current-deployment", purpose: "verify-promotion", timeoutMs: 60_000 }, new AbortController().signal, release());
+    const assertion = expect(result).rejects.toThrow("confirmation exhausted");
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+    expect(f.inspect).toHaveBeenCalledTimes(30);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("aborts the wait without another GET or lingering timer", async () => {
+    vi.useFakeTimers();
+    const f = fixture(["dpl_D0"]);
+    const controller = new AbortController();
+    const result = f.ports.execute({ kind: "inspect-current-deployment", purpose: "verify-promotion", timeoutMs: 60_000 }, controller.signal, release());
+    const assertion = expect(result).rejects.toThrow("aborted");
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    await assertion;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(f.inspect).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("returns a third deployment immediately for fail-closed model handling", async () => {
+    vi.useFakeTimers();
+    const f = fixture(["dpl_D2"]);
+    await expect(f.ports.execute({ kind: "inspect-current-deployment", purpose: "verify-promotion", timeoutMs: 60_000 }, new AbortController().signal, release())).resolves.toMatchObject({ deploymentId: "dpl_D2" });
+    expect(f.inspect).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("does not GET when already aborted", async () => {
+    const f = fixture(["dpl_D0"]);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(f.ports.execute({ kind: "inspect-current-deployment", purpose: "verify-promotion", timeoutMs: 60_000 }, controller.signal, release())).rejects.toThrow("aborted");
+    expect(f.inspect).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("runs a single promotion; convergence failure=%s prevents smoke and rollback", async (neverConverges) => {
+    vi.useFakeTimers();
+    const f = fixture(neverConverges ? ["dpl_D0"] : ["dpl_D0", "dpl_D0", "dpl_D1"]);
+    const base = successfulPorts();
+    const execute = vi.fn<ProductionApplicationReleaseRunnerPorts["execute"]>((action, signal, state) =>
+      action.kind === "inspect-current-deployment" && action.purpose === "verify-promotion"
+        ? f.ports.execute(action, signal, state)
+        : base.execute(action, signal, state));
+    const result = runProductionApplicationRelease({ executionSha: SHA, releaseKind: "code-only", smokeGeneration: GENERATION, sourceManifestSha256: MANIFEST_SHA256 }, { execute });
+    await vi.runAllTimersAsync();
+    await expect(result).resolves.toMatchObject(neverConverges
+      ? { phase: "failed", failure: "promotion-state-inspection-failed", next: { kind: "stop" } }
+      : { phase: "succeeded" });
+    expect(execute.mock.calls.filter(([a]) => a.kind === "promote-staged")).toHaveLength(1);
+    if (neverConverges) {
+      expect(execute.mock.calls.some(([a]) => a.kind === "run-production-smoke" || a.kind === "rollback-baseline")).toBe(false);
+    }
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("hard deadline stops a stalled confirmation request and aborts its signal", async () => {
+    vi.useFakeTimers();
+    const f = fixture(["dpl_D0"]);
+    f.inspect.mockImplementation(() => new Promise(() => {}));
+    const base = successfulPorts();
+    let confirmationSignal: AbortSignal | undefined;
+    const execute = vi.fn<ProductionApplicationReleaseRunnerPorts["execute"]>((action, signal, state) => {
+      if (action.kind === "inspect-current-deployment" && action.purpose === "verify-promotion") {
+        confirmationSignal = signal;
+        return f.ports.execute(action, signal, state);
+      }
+      return base.execute(action, signal, state);
+    });
+    const result = runProductionApplicationRelease({ executionSha: SHA, releaseKind: "code-only", smokeGeneration: GENERATION, sourceManifestSha256: MANIFEST_SHA256 }, { execute });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(result).resolves.toMatchObject({ phase: "failed", failure: "promotion-state-inspection-failed", next: { kind: "stop" } });
+    expect(confirmationSignal?.aborted).toBe(true);
+    expect(f.inspect).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls.some(([a]) => a.kind === "run-production-smoke" || a.kind === "rollback-baseline")).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
 });
