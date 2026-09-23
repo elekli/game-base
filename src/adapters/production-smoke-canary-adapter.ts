@@ -627,26 +627,42 @@ export function createSupabaseProductionSmokeObjectStore(input: Readonly<{
   supabaseUrl: string;
   secretKey?: string;
   files?: StorageFiles;
+  fetchImpl?: typeof fetch;
 }>): ProductionSmokeObjectStore {
   if (!input.files && !input.secretKey) throw new ProductionSmokeOperationError("Storage credentials are unavailable");
+  const storageFetch = (signal: AbortSignal) => async (
+    request: Parameters<typeof fetch>[0],
+    init?: Parameters<typeof fetch>[1],
+  ) => {
+    const headers = new Headers(init?.headers);
+    const secretKey = input.secretKey as string;
+    // Opaque sb_secret keys are API keys, not JWTs. supabase-js currently
+    // copies them into Authorization for Storage, which Storage rejects as an
+    // invalid compact JWS. Keep the privileged apikey header and remove only
+    // the SDK's exact API-key fallback; a real session bearer is preserved.
+    if (headers.get("Authorization") === `Bearer ${secretKey}`) {
+      headers.delete("Authorization");
+    }
+    return (input.fetchImpl ?? fetch)(request, { ...init, headers, signal });
+  };
   const files = input.files ?? {
     download(path: string, signal: AbortSignal) {
       const bucket = createClient(input.supabaseUrl, input.secretKey as string, {
         auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-        global: { fetch: (request, init) => fetch(request, { ...init, signal }) },
+        global: { fetch: storageFetch(signal) },
       }).storage.from("game-media");
       return { asStream: () => bucket.download(path).asStream() };
     },
     upload(path: string, body: Uint8Array, options: Readonly<{ contentType: string; upsert: false; cacheControl: string }>, signal: AbortSignal) {
       return createClient(input.supabaseUrl, input.secretKey as string, {
         auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-        global: { fetch: (request, init) => fetch(request, { ...init, signal }) },
+        global: { fetch: storageFetch(signal) },
       }).storage.from("game-media").upload(path, body, options);
     },
     remove(paths: string[], signal: AbortSignal) {
       return createClient(input.supabaseUrl, input.secretKey as string, {
         auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-        global: { fetch: (request, init) => fetch(request, { ...init, signal }) },
+        global: { fetch: storageFetch(signal) },
       }).storage.from("game-media").remove(paths);
     },
   } as unknown as StorageFiles;

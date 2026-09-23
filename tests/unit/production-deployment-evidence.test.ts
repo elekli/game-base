@@ -72,7 +72,7 @@ describe("production deployment evidence", () => {
   it("projects only the schema allowlist from a successful release", () => {
     expect(buildProductionDeploymentEvidence(release(), context)).toEqual(
       expect.objectContaining({
-        schemaVersion: 2,
+        schemaVersion: 3,
         outcome: "passed",
         rollbackOutcome: "not-required",
         smoke: expect.objectContaining({
@@ -98,6 +98,44 @@ describe("production deployment evidence", () => {
       }),
     ).toThrow("evidence context is invalid");
   });
+
+  it("projects only bounded failure evidence after verified cleanup and rollback", () => {
+    const evidence = buildProductionDeploymentEvidence(
+      {
+        ...release(),
+        evidenceOutcome: "rolled-back",
+        smokeEvidence: undefined,
+        rollbackAttempts: 1,
+        smokeFailureEvidence: {
+          outcome: "failed",
+          generation: GENERATION,
+          failure: {
+            name: "ProductionCanaryResidueMismatchError",
+            safeDetail: "Storage original write failed",
+          },
+          requestIds: [REQUEST_ID],
+          counts: { cleanup: { row: 0, object: 0 } },
+          checks: { "canary-cleanup-counts": "passed" },
+        },
+      },
+      context,
+    );
+
+    expect(evidence).toMatchObject({
+      schemaVersion: 3,
+      outcome: "rolled-back",
+      rollbackOutcome: "baseline-restored",
+      smoke: {
+        outcome: "failed",
+        failure: {
+          name: "ProductionCanaryResidueMismatchError",
+          safeDetail: "Storage original write failed",
+        },
+        counts: { cleanup: { row: 0, object: 0 } },
+      },
+    });
+  });
+
 
   it("projects a manual smoke recovery without arbitrary error detail", () => {
     const evidence = buildProductionDeploymentEvidence(

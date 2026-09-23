@@ -111,6 +111,10 @@ export type ProductionSmokeCanaryEvidence = Readonly<{
 export type ProductionSmokeFailedCleanupEvidence = Readonly<{
   outcome: "failed";
   generation: string;
+  failure: Readonly<{
+    name: "ProductionCanaryResidueMismatchError";
+    safeDetail: string;
+  }>;
   requestIds: ReadonlyArray<string>;
   counts: Readonly<{ cleanup: CountPair }>;
   checks: Readonly<{ "canary-cleanup-counts": "passed" }>;
@@ -628,6 +632,10 @@ export function transitionProductionSmokeCanary(
         evidence: {
           outcome: "failed",
           generation: canary.generation,
+          failure: {
+            name: "ProductionCanaryResidueMismatchError",
+            safeDetail: canary.failure?.safeDetail ?? "production smoke failed",
+          },
           requestIds: canary.requestIds,
           counts: { cleanup: { row: 0, object: 0 } },
           checks: { "canary-cleanup-counts": "passed" },

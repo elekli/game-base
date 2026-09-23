@@ -97,6 +97,7 @@ Production binding 已固定專用 service token `common_name` 的 SHA-256 finge
 2. route 的唯一可變資料為固定 UUID 的 `app_private.production_smoke_canaries` row，以及固定的 private Storage PNG 原圖與 WebP 縮圖 path；row／objects 皆必須以 exact execution identity 清除，不能接受任意 table、game、object 或 owner input。
 3. route 可在同一受限 principal 下完成固定 library read 與 runtime DB read；private Storage 的公開路徑拒絕由外部 runner 核對，其餘 app 功能不授權給該 principal。
 4. `custom-domain-owner-access` 使用當次執行前由 `cloudflared` 取得的短效 owner token，依 Cloudflare CLI 契約放在 `Cf-Access-Token` header；它不得成為長期 prerequisite，發布完成後立即從 GitHub Environment 移除。
+5. release-smoke 的服務端 Storage client 使用 opaque `sb_secret_…` 時，只把該金鑰放在 `apikey` header。若 SDK 自動產生完全相同值的 `Authorization: Bearer` fallback，transport 必須移除它，因為 opaque secret 不是 JWT；不同值的真實 session Bearer 不得移除。失敗且已證明清理為 `0/0` 時，sanitized evidence schema v3 保存受控 failure name 與最長 256 字元的 safe detail，不保存原始 response、header 或 credential。
 
 上述繫結已到位，`productionDeploymentEnabled` 設為 `true`；任何 runtime prerequisite 消失時，runner 仍必須 fail closed。
 

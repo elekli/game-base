@@ -309,6 +309,31 @@ describe("Production smoke database binding", () => {
 });
 
 describe("Production smoke fixed Storage adapter", () => {
+  it("sends an opaque secret only as apikey instead of an invalid Bearer JWT", async () => {
+    const secretKey = "sb_secret_production_fixture";
+    const fetchImpl = vi.fn(async (_request, init) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("apikey")).toBe(secretKey);
+      expect(headers.has("Authorization")).toBe(false);
+      return Response.json(
+        { statusCode: "404", error: "not_found", message: "not found" },
+        { status: 404 },
+      );
+    });
+    const store = createSupabaseProductionSmokeObjectStore({
+      supabaseUrl: "https://example.supabase.co",
+      secretKey,
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+    const media = await canonicalProductionSmokeMedia({
+      executionSha: SHA,
+      generation: GENERATION,
+    });
+
+    await expect(store.inspect(media)).resolves.toEqual({ count: 0, canonical: false });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it("uses only the fixed private original and thumbnail paths and verifies canonical bytes", async () => {
     const media = await canonicalProductionSmokeMedia({ executionSha: SHA, generation: GENERATION });
     const files = {
