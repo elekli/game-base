@@ -68,14 +68,16 @@ exact main CI
                evidence      │          │
                          current D1    non-D1
                               │          │
-                         rollback D0   不 rollback
+                      exact promote D0   不復原
                               │
                       verify current = D0
                               │
                        sanitized evidence
 ```
 
-Promotion guard 重新核對 `main` SHA 後，只接受 current deployment 為 D0 或已通過 READY 與 exact identity 驗證的 D1。若仍為 D0，流程明確 promotion；若 Vercel 已把自訂網域指向 D1，流程保留 D0 作為回滾目標並直接進 smoke；任何第三個 deployment 都立即停止。Promotion 結果不明時同樣只依重新查得的 current deployment 決策：D1 進 smoke、D0 最多再嘗試一次 promotion。Smoke 失敗後也只有再次證明 D1 仍是 current 才可 rollback；current 為 D0 或第三個 deployment 時不得送出 rollback。Promotion 與 rollback 各最多 2 次，所有查詢、等待、smoke 與 evidence 寫入都帶固定 timeout。重跑使用 `production:<exact SHA>` 作為穩定 release identity，並以 source manifest SHA-256 與 exact commit metadata 尋找既有 staged D1。Vercel project 的 `autoAssignCustomDomains` 已於 2026-09-10 設為 `false` 並由 REST read-back 核對；2026-09-12 的真實發布證明，透過 Production REST API 建立 deployment 時，自訂網域仍可能在明確 promotion 前移到 D1，因此狀態機不得把該設定視為唯一安全邊界。
+Promotion guard 重新核對 `main` SHA 後，只接受 current deployment 為 D0 或已通過 READY 與 exact identity 驗證的 D1。若仍為 D0，流程明確 promotion；若 Vercel 已把自訂網域指向 D1，流程保留 D0 作為回滾目標並直接進 smoke；任何第三個 deployment 都立即停止。Promotion 結果不明時同樣只依重新查得的 current deployment 決策：D1 進 smoke、D0 最多再嘗試一次 promotion。Smoke 失敗後也只有再次證明 D1 仍是 current 才可復原；current 為 D0 或第三個 deployment 時不得送出復原 mutation。復原以 artifact 固定的 D0 執行 exact promotion，不使用 Vercel 僅允許有限歷史深度的 rollback endpoint。Promotion 與基線復原各最多 2 次，所有查詢、等待、smoke 與 evidence 寫入都帶固定 timeout。重跑使用 `production:<exact SHA>` 作為穩定 release identity，並以 source manifest SHA-256 與 exact commit metadata 尋找既有 staged D1。Vercel project 的 `autoAssignCustomDomains` 已於 2026-09-10 設為 `false` 並由 REST read-back 核對；2026-09-12 的真實發布證明，透過 Production REST API 建立 deployment 時，自訂網域仍可能在明確 promotion 前移到 D1，因此狀態機不得把該設定視為唯一安全邊界。
+
+受保護 application job 在任何 Vercel deployment mutation 前，先由同一個 GitHub runner、同一個 Production environment secret 對自訂網域執行 owner private ping。非 200 一律在部署前停止；正式 smoke 仍會再次執行相同檢查，避免 preflight 與 mutation 之間的工作階段漂移。
 
 資料庫 schema 永不隨 application rollback 回滾。Migration-bearing release 必須先完成既有 migration strict verification 與 commit-bound ledger；code-only release 也由受保護 job 執行 strict-current-schema。若 additive migration 後的 application smoke 失敗，只回復 D0 程式並保留相容 schema；不相容資料變更仍須預先規劃 expand／migrate／contract 與 forward-fix。
 

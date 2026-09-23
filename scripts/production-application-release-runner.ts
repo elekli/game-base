@@ -164,7 +164,7 @@ export function createProductionApplicationReleaseRunnerPorts(
           };
         }
         case "rollback-baseline":
-          await dependencies.vercel.rollback(action.deploymentId, signal);
+          await dependencies.vercel.restoreBaseline(action.deploymentId, signal);
           return {
             kind: "rollback-attempt-finished",
             outcome: "reported-success",

@@ -106,7 +106,7 @@ export type VercelDeploymentRestAdapter = Readonly<{
     url: string;
   }>>;
   promote(deploymentId: string, signal?: AbortSignal): Promise<void>;
-  rollback(deploymentId: string, signal?: AbortSignal): Promise<void>;
+  restoreBaseline(deploymentId: string, signal?: AbortSignal): Promise<void>;
 }>;
 
 type ParsedDeployment = ResolvedDeployment &
@@ -340,14 +340,17 @@ export function buildPromoteVercelDeploymentRequest({
   };
 }
 
-export function buildRollbackVercelDeploymentRequest({
+export function buildRestoreBaselineVercelDeploymentRequest({
   deploymentId,
   projectId,
 }: Readonly<{ deploymentId: string; projectId: string }>): PostRequest {
+  // The state machine only calls this with its evidence-pinned D0 after a
+  // fresh inspection proves that D1 is still current. Promotion is used here
+  // because Vercel's rollback endpoint rejects older known-good deployments.
   validateMutationIds(projectId, deploymentId);
   return {
     method: "POST",
-    path: `/v1/projects/${encodeURIComponent(projectId)}/rollback/${encodeURIComponent(deploymentId)}`,
+    path: `/v10/projects/${encodeURIComponent(projectId)}/promote/${encodeURIComponent(deploymentId)}`,
   };
 }
 
@@ -686,8 +689,8 @@ export function createVercelDeploymentRestAdapter(config?: Readonly<{
       });
       await config.transport.postJson(request.path, request.body, request.query, signal);
     },
-    async rollback(deploymentId, signal) {
-      const request = buildRollbackVercelDeploymentRequest({
+    async restoreBaseline(deploymentId, signal) {
+      const request = buildRestoreBaselineVercelDeploymentRequest({
         deploymentId,
         projectId: config.projectId,
       });

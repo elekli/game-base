@@ -104,16 +104,20 @@ describe("production release contract", () => {
       productionApplicationRunner: "scripts/production-application-release.ts",
       productionApplicationRunnerSha256:
         "d3b3be5b75a02d92c5be588720584ddf302c805343c50574a7dccb7e0929420d",
+      productionOwnerSessionPreflight:
+        "scripts/production-owner-session-preflight.ts",
+      productionOwnerSessionPreflightSha256:
+        "f02b710715d71d251d146a6a2ae5cdd9b1f57909a604a31b4202f4cc6c530e12",
       productionApplicationStateRunner:
         "scripts/production-application-release-runner.ts",
       productionApplicationStateRunnerSha256:
-        "3b71d93abc966cbc8906b0a4f119d182f1d53fc8d6cee942fa08445f4dba46fc",
+        "f3b2f014777e8d91157a4d649d0ca66eb9eef6bb2babdd50cc7db307e7ad933f",
       productionDeploymentEvidenceWriter:
         "scripts/production-deployment-evidence.ts",
       productionDeploymentEvidenceWriterSha256:
         "eead0cd0d62d9692df37cedcba7e513e6edafcc01b7c3b61e8dbc63e28d8e307",
       productionDeploymentWriterSha256:
-        "f67295d4f5b984bfa9c0a19bf9b9292f6d5d016a8d1a147bcd61649a63ca737a",
+        "e8095d29d33cc87bfc47a758842b104e9d79894a4fdbc247aa402d810e31d08b",
       productionDeploymentModel: "scripts/production-deployment-release.ts",
       productionDeploymentModelSha256:
         "57138896b0f5b1881c22bfde6dbce440e4ec5b2a07c355e843aa4d85644b7b76",
@@ -163,7 +167,7 @@ describe("production release contract", () => {
       productionSmokeAdapterSha256:
         "feaaec6b9f27d962d6a0b73c8d69647f9268ece996fc2ebd9b99e34d23b61b90",
       productionSmokeRunnerSha256:
-        "ea1fc457a05792ffdb2bba6847899623db3b59d14b9eab6d333df3ab6cc426f4",
+        "7bef5273a1c712acda38d4ce49539c1cadde866e1c71edd14d3c8721233efc4f",
       productionRestoreModel: "scripts/production-restore-drill.ts",
       productionRestoreExecutor: "scripts/production-restore-executor.ts",
       productionRestoreIntegrityChecker:
@@ -201,7 +205,7 @@ describe("production release contract", () => {
       productionDeploymentSourceManifestSchemaSha256:
         "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
       vercelDeploymentAdapterSha256:
-        "fcea0fd520df434b1c549e0d7b848530c60b43b87711814dae6f6ff3ffa464c3",
+        "93060646e4f06fefe23adc9723641756a4e037d745519567bafa0f7e0f99d0d6",
       productionSmokeContractSha256:
         "aab60949aa19dbec335d9012ce10d751a273bc244b35bab9bdc10861892f83ea",
       productionSmokeModelSha256:

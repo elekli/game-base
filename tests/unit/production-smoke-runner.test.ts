@@ -7,6 +7,7 @@ import {
   ProductionSmokePrerequisiteError,
   ProductionSmokeTransportError,
   runProductionSmokeCanary,
+  verifyProductionOwnerAccess,
   type ProductionSmokeRunnerDependencies,
 } from "../../scripts/production-smoke-runner";
 
@@ -15,6 +16,7 @@ const GENERATION = "11111111-1111-4111-8111-111111111111";
 const REQUEST_ID = "11111111-1111-4111-8111-111111111111";
 const IDENTITY = `release-smoke-v1:${SHA}`;
 const PAYLOAD_SHA = calculateProductionSmokePayloadSha256(SHA);
+const OWNER_JWT = "header.payload.signature";
 
 function routeEvent(operation: string) {
   switch (operation) {
@@ -67,6 +69,67 @@ function dependencies(): ProductionSmokeRunnerDependencies {
 }
 
 describe("production smoke runner", () => {
+  it("verifies the owner session through the custom domain without following an auth denial", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 })) as typeof fetch;
+    await expect(verifyProductionOwnerAccess({
+      customDomain: "game.example.com",
+      ownerAccessJwt: OWNER_JWT,
+    }, new AbortController().signal, fetchImpl)).resolves.toBe("passed");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://game.example.com/api/private/ping",
+      expect.objectContaining({
+        headers: { "Cf-Access-Token": OWNER_JWT },
+        redirect: "manual",
+      }),
+    );
+  });
+
+  it("names an owner redirect as a boundary denial", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 302 })) as typeof fetch;
+    await expect(verifyProductionOwnerAccess({
+      customDomain: "game.example.com",
+      ownerAccessJwt: OWNER_JWT,
+    }, new AbortController().signal, fetchImpl)).rejects.toMatchObject({
+      name: "ProductionSmokeTransportError",
+      errorCode: "boundary-owner-auth-denied",
+      httpStatus: 302,
+    });
+  });
+
+  it.each([401, 403, 500])("fails closed for owner boundary HTTP %s", async (status) => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status })) as typeof fetch;
+    await expect(verifyProductionOwnerAccess({
+      customDomain: "game.example.com",
+      ownerAccessJwt: OWNER_JWT,
+    }, new AbortController().signal, fetchImpl)).rejects.toMatchObject({
+      errorCode: "boundary-owner-auth-denied",
+      httpStatus: status,
+    });
+  });
+
+  it.each(["", " ", "not-a-jwt", "header.payload.signature\n"])(
+    "rejects malformed owner tokens without making a request",
+    async (ownerAccessJwt) => {
+      const fetchImpl = vi.fn() as typeof fetch;
+      await expect(verifyProductionOwnerAccess({
+        customDomain: "game.example.com",
+        ownerAccessJwt,
+      }, new AbortController().signal, fetchImpl)).rejects.toBeInstanceOf(
+        ProductionSmokePrerequisiteError,
+      );
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not place the owner token in a boundary failure", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 403 })) as typeof fetch;
+    const error = await verifyProductionOwnerAccess({
+      customDomain: "game.example.com",
+      ownerAccessJwt: OWNER_JWT,
+    }, new AbortController().signal, fetchImpl).catch((caught) => caught);
+    expect(JSON.stringify(error)).not.toContain(OWNER_JWT);
+    expect(error.message).not.toContain(OWNER_JWT);
+  });
   it.each([
     [JSON.stringify({ requestId: REQUEST_ID, message: "SECRET_SENTINEL" }), REQUEST_ID],
     [JSON.stringify({ requestId: "SECRET_SENTINEL" }), undefined],
@@ -80,7 +143,7 @@ describe("production smoke runner", () => {
       publishableKey: "sb_publishable_public",
       cfAccessClientId: "client-id",
       cfAccessClientSecret: "client-secret",
-      ownerAccessJwt: "owner-jwt",
+      ownerAccessJwt: OWNER_JWT,
     }, vi.fn(async () => new Response(body, { status: 401 })) as typeof fetch);
     const error = await runAction(createProductionSmokeCanary({ executionSha: SHA, generation: GENERATION }).next, SHA, new AbortController().signal).catch(error => error);
     expect(error).toBeInstanceOf(ProductionSmokeTransportError);
@@ -96,7 +159,7 @@ describe("production smoke runner", () => {
       const runAction = createProductionSmokeActionRunner({
         customDomain: "game.example.com", deploymentOrigin: "https://deployment.example.com",
         supabaseUrl: "https://project.supabase.co", publishableKey: "sb_publishable_public",
-        cfAccessClientId: "client-id", cfAccessClientSecret: "client-secret", ownerAccessJwt: "owner-jwt",
+        cfAccessClientId: "client-id", cfAccessClientSecret: "client-secret", ownerAccessJwt: OWNER_JWT,
       }, vi.fn(async () => new Response(new ReadableStream({ cancel }), { status: 401 })) as typeof fetch);
       const pending = runAction(createProductionSmokeCanary({ executionSha: SHA, generation: GENERATION }).next, SHA, new AbortController().signal).catch(error => error);
       await vi.advanceTimersByTimeAsync(2_100);
@@ -248,7 +311,7 @@ describe("production smoke runner", () => {
       publishableKey: "sb_publishable_public",
       cfAccessClientId: "client-id",
       cfAccessClientSecret: "client-secret",
-      ownerAccessJwt: "owner-jwt",
+      ownerAccessJwt: OWNER_JWT,
     }, fetchImpl as typeof fetch);
 
     await expect(runAction({
@@ -292,7 +355,7 @@ describe("production smoke runner", () => {
       publishableKey: "sb_publishable_public",
       cfAccessClientId: "client-id",
       cfAccessClientSecret: "client-secret",
-      ownerAccessJwt: "owner-jwt",
+      ownerAccessJwt: OWNER_JWT,
     }, fetchImpl as typeof fetch);
 
     await expect(run({ executionSha: SHA, generation: GENERATION })).rejects.toThrow(
@@ -320,7 +383,7 @@ describe("production smoke runner", () => {
       publishableKey: "sb_publishable_public",
       cfAccessClientId: "client-id",
       cfAccessClientSecret: "client-secret",
-      ownerAccessJwt: "owner-jwt",
+      ownerAccessJwt: OWNER_JWT,
     }, fetchImpl as typeof fetch);
 
     await expect(run({ executionSha: SHA, generation: GENERATION })).resolves.toMatchObject({ outcome: "passed" });
@@ -337,7 +400,7 @@ describe("production smoke runner", () => {
     );
     expect(ownerRequest).toBeDefined();
     const ownerHeaders = new Headers(ownerRequest?.init.headers);
-    expect(ownerHeaders.get("cf-access-token")).toBe("owner-jwt");
+    expect(ownerHeaders.get("cf-access-token")).toBe(OWNER_JWT);
     expect(ownerHeaders.has("cookie")).toBe(false);
     expect(requests.map(({ url }) => url)).toEqual(expect.arrayContaining([
       "https://project.supabase.co/storage/v1/object/public/game-media/release-smoke-v1/original.png",
