@@ -161,7 +161,7 @@ describe("production release contract", () => {
       productionSmokeAdapter:
         "src/adapters/production-smoke-canary-adapter.ts",
       productionSmokeAdapterSha256:
-        "e754b99c8138077cc0206d07b6791f4ba1dd1555477c19002b6679a854890fc6",
+        "feaaec6b9f27d962d6a0b73c8d69647f9268ece996fc2ebd9b99e34d23b61b90",
       productionSmokeRunnerSha256:
         "ea1fc457a05792ffdb2bba6847899623db3b59d14b9eab6d333df3ab6cc426f4",
       productionRestoreModel: "scripts/production-restore-drill.ts",

@@ -3,6 +3,7 @@ import sharp from "sharp";
 
 import {
   canonicalProductionSmokeMedia,
+  createProductionSmokeStorageHeaders,
   createProductionSmokeSessionDatabaseUrl,
   createSupabaseProductionSmokeObjectStore,
   ProductionSmokeCanaryAdapter,
@@ -309,6 +310,19 @@ describe("Production smoke database binding", () => {
 });
 
 describe("Production smoke fixed Storage adapter", () => {
+  it("preserves legacy service-role JWTs and different session Bearers", () => {
+    const legacyServiceRole = "header.payload.signature";
+    expect(createProductionSmokeStorageHeaders(
+      legacyServiceRole,
+      { Authorization: `Bearer ${legacyServiceRole}` },
+    ).get("Authorization")).toBe(`Bearer ${legacyServiceRole}`);
+
+    expect(createProductionSmokeStorageHeaders(
+      "sb_secret_production_fixture",
+      { Authorization: "Bearer signed-session-jwt" },
+    ).get("Authorization")).toBe("Bearer signed-session-jwt");
+  });
+
   it("sends an opaque secret only as apikey instead of an invalid Bearer JWT", async () => {
     const secretKey = "sb_secret_production_fixture";
     const fetchImpl = vi.fn(async (_request, init) => {

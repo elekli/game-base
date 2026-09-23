@@ -623,6 +623,20 @@ async function readBoundedStream(stream: ReadableStream<Uint8Array>, signal: Abo
   return bytes;
 }
 
+export function createProductionSmokeStorageHeaders(
+  secretKey: string,
+  input?: HeadersInit,
+): Headers {
+  const headers = new Headers(input);
+  if (
+    secretKey.startsWith("sb_secret_") &&
+    headers.get("Authorization") === `Bearer ${secretKey}`
+  ) {
+    headers.delete("Authorization");
+  }
+  return headers;
+}
+
 export function createSupabaseProductionSmokeObjectStore(input: Readonly<{
   supabaseUrl: string;
   secretKey?: string;
@@ -634,15 +648,12 @@ export function createSupabaseProductionSmokeObjectStore(input: Readonly<{
     request: Parameters<typeof fetch>[0],
     init?: Parameters<typeof fetch>[1],
   ) => {
-    const headers = new Headers(init?.headers);
     const secretKey = input.secretKey as string;
     // Opaque sb_secret keys are API keys, not JWTs. supabase-js currently
     // copies them into Authorization for Storage, which Storage rejects as an
     // invalid compact JWS. Keep the privileged apikey header and remove only
     // the SDK's exact API-key fallback; a real session bearer is preserved.
-    if (headers.get("Authorization") === `Bearer ${secretKey}`) {
-      headers.delete("Authorization");
-    }
+    const headers = createProductionSmokeStorageHeaders(secretKey, init?.headers);
     return (input.fetchImpl ?? fetch)(request, { ...init, headers, signal });
   };
   const files = input.files ?? {
