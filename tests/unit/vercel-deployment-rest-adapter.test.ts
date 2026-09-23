@@ -16,7 +16,7 @@ import {
   parseVercelProductionAlias,
   buildListVercelProductionDeploymentsRequest,
   buildPromoteVercelDeploymentRequest,
-  buildRollbackVercelDeploymentRequest,
+  buildRestoreBaselineVercelDeploymentRequest,
   buildUploadVercelFileRequest,
   createVercelDeploymentRestAdapter,
   parseReadyVercelProductionDeployment,
@@ -219,7 +219,7 @@ describe("Vercel deployment REST adapter contract", () => {
     ).toThrow();
   });
 
-  it("builds empty-body promote and rollback contracts", () => {
+  it("builds empty-body promote and exact-baseline restore contracts", () => {
     expect(
       buildPromoteVercelDeploymentRequest({
         deploymentId: "dpl_D1",
@@ -230,13 +230,13 @@ describe("Vercel deployment REST adapter contract", () => {
       path: "/v10/projects/prj_project/promote/dpl_D1",
     });
     expect(
-      buildRollbackVercelDeploymentRequest({
+      buildRestoreBaselineVercelDeploymentRequest({
         deploymentId: "dpl_D0",
         projectId: "prj_project",
       }),
     ).toEqual({
       method: "POST",
-      path: "/v1/projects/prj_project/rollback/dpl_D0",
+      path: "/v10/projects/prj_project/promote/dpl_D0",
     });
   });
 
@@ -299,7 +299,7 @@ describe("Vercel deployment REST adapter contract", () => {
     expect(sleep).toHaveBeenCalledTimes(1);
 
     await adapter.promote("dpl_D1");
-    await adapter.rollback("dpl_D0");
+    await adapter.restoreBaseline("dpl_D0");
     expect(postJson).toHaveBeenNthCalledWith(
       2,
       "/v10/projects/prj_project/promote/dpl_D1",
@@ -309,7 +309,7 @@ describe("Vercel deployment REST adapter contract", () => {
     );
     expect(postJson).toHaveBeenNthCalledWith(
       3,
-      "/v1/projects/prj_project/rollback/dpl_D0",
+      "/v10/projects/prj_project/promote/dpl_D0",
       undefined,
       undefined,
       undefined,

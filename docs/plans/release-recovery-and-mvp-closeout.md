@@ -75,3 +75,9 @@ Vercel runtime logs 已定位直接失敗為兩次 `401 / release_smoke_access_d
 正式重跑前以原生 `curl` 對同一 owner token 實測，`CF_Authorization` cookie 與 Cloudflare CLI 契約的 `Cf-Access-Token` header 都回 200；先前 Python `urllib` 的 403 是 client-specific 行為，不能據此判定 cookie 無效。runner 的 owner boundary probe 採用官方 CLI token header；service-principal headers、private route 本身與短效 secret 清除政策不變。
 
 2026-09-22 受保護發布 run 35710482016 已跨過 Cloudflare 驗證、alias 收斂、資料庫與固定讀取檢查，於 `write-object` 回滾。Vercel 六次 route 時序將失敗定位在第四步；Supabase Storage 正式日誌顯示固定原圖 POST 回 400，內部為 `AccessDenied`／`Invalid Compact JWS`，角色落為 `anon`。根因是 `@supabase/supabase-js 2.112.4` 對 Storage 仍把 opaque `sb_secret_…` 同時當作 Bearer JWT 傳送。修正限定於 release-smoke 的服務端 Storage transport：保留 `apikey` 並移除只等於該 secret 的 SDK Bearer fallback；真實 session Bearer 不受影響。發布證據 schema v3 另保存清理完成後的受控 failure name／safe detail，避免再把可診斷失敗投影成 `unknown-error`。
+## 2026-09-23 發布診斷補充
+
+- Release run `35805546663` 已建立並 promote exact-main deployment `dpl_7EoZRrGUoNdaLvYsLQR2hQT78PCc`，但第一個 owner boundary check 從 GitHub runner 收到 Cloudflare 302，尚未進入資料或 Storage mutation。
+- Artifact schema v3 正確保存 `manual-recovery-required`、已知基線 `dpl_4RUaXf42ZxSmJiEAF5d43qyS9ky7` 與 `boundary-owner-auth-denied`。短效 GitHub secret 已立即刪除。
+- Vercel rollback endpoint 對該基線回 402，原因是它只允許有限的 production 歷史深度；以 exact baseline promotion 完成復原，正式 alias 已重新核對為 D0。
+- 下一次發布前先合併兩項流程修正：GitHub runner 在任何 deployment mutation 前驗 owner session；自動復原以 exact baseline promotion 取代 rollback endpoint。

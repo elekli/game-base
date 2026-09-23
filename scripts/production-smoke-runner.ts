@@ -22,6 +22,7 @@ const MAX_TRANSPORT_ATTEMPTS = 2;
 const REQUEST_TIMEOUT_MS = 40_000;
 const RUN_TIMEOUT_MS = 180_000;
 const MAX_RESPONSE_BODY_BYTES = 4_096;
+const COMPACT_JWS = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
 export class ProductionSmokePrerequisiteError extends Error {
   constructor() {
@@ -64,6 +65,11 @@ export type ProductionSmokeRunnerDependencies = Readonly<{
   }>>;
   checkPrivateStorageDenial(signal: AbortSignal): Promise<"passed">;
   now(): number;
+}>;
+
+export type ProductionOwnerAccessInput = Readonly<{
+  customDomain: string;
+  ownerAccessJwt: string;
 }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -403,15 +409,10 @@ function createProductionSmokeRunnerDependencies(
       return { event: value.event, requestId: value.requestId };
     },
     async runBoundaryChecks(signal) {
-      const owner = await boundedFetch(fetchImpl, `${customOrigin}/api/private/ping`, {
-        method: "GET",
-        headers: { "Cf-Access-Token": config.ownerAccessJwt },
-      }, signal);
-      if (owner.status !== 200) throw new ProductionSmokeTransportError(
-        "custom-domain owner access failed",
-        "boundary-owner-auth-denied",
-        { httpStatus: owner.status },
-      );
+      await verifyProductionOwnerAccess({
+        customDomain: config.customDomain,
+        ownerAccessJwt: config.ownerAccessJwt,
+      }, signal, fetchImpl);
       const origin = await boundedFetch(fetchImpl, `${deploymentOrigin}/security-error`, { method: "GET" }, signal);
       const redirectLocation = origin.headers.get("location");
       const vercelLoginRedirect = isVercelLoginRedirect(
@@ -450,6 +451,33 @@ function createProductionSmokeRunnerDependencies(
     },
   };
   return dependencies;
+}
+
+export async function verifyProductionOwnerAccess(
+  input: ProductionOwnerAccessInput,
+  signal: AbortSignal,
+  fetchImpl: typeof fetch = fetch,
+): Promise<"passed"> {
+  if (
+    !input ||
+    !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(input.customDomain) ||
+    !COMPACT_JWS.test(input.ownerAccessJwt)
+  ) {
+    throw new ProductionSmokePrerequisiteError();
+  }
+  const customOrigin = assertUrl(`https://${input.customDomain}`).origin;
+  const owner = await boundedFetch(fetchImpl, `${customOrigin}/api/private/ping`, {
+    method: "GET",
+    headers: { "Cf-Access-Token": input.ownerAccessJwt },
+  }, signal);
+  if (owner.status !== 200) {
+    throw new ProductionSmokeTransportError(
+      "custom-domain owner access failed",
+      "boundary-owner-auth-denied",
+      { httpStatus: owner.status },
+    );
+  }
+  return "passed";
 }
 
 export function createProductionSmokeActionRunner(

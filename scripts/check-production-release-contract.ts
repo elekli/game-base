@@ -19,6 +19,8 @@ type ProductionReleaseContract = Readonly<{
   productionReleaseFailureDiagnosticsSha256: string;
   productionApplicationRunner: string;
   productionApplicationRunnerSha256: string;
+  productionOwnerSessionPreflight: string;
+  productionOwnerSessionPreflightSha256: string;
   productionApplicationStateRunner: string;
   productionApplicationStateRunnerSha256: string;
   productionDeploymentEvidenceWriter: string;
@@ -130,7 +132,7 @@ type PackageSurface = Readonly<{
 const VERCEL_MUTATION_ENDPOINT =
   /\/v(?:2\/files|13\/deployments|10\/projects\/[^\s"']+\/promote|1\/projects\/[^\s"']+\/rollback)/i;
 const VERCEL_MUTATION_SYMBOL =
-  /\b(?:buildUploadVercelFileRequest|buildCreateVercelDeploymentRequest|buildPromoteVercelDeploymentRequest|buildRollbackVercelDeploymentRequest|createVercelDeploymentRestAdapter)\b/;
+  /\b(?:buildUploadVercelFileRequest|buildCreateVercelDeploymentRequest|buildPromoteVercelDeploymentRequest|buildRestoreBaselineVercelDeploymentRequest|buildRollbackVercelDeploymentRequest|createVercelDeploymentRestAdapter)\b/;
 const VERCEL_CLI_MUTATION =
   /(?:^|[\s"'])(?:vercel\s+(?:deploy|promote|rollback)|(?:pnpm\s+(?:dlx|exec)|npx|npm\s+exec)[^\n]*\bvercel\b)/im;
 const VERCEL_HTTP_MUTATION =
@@ -504,6 +506,7 @@ export async function checkProductionReleaseContract(root: string) {
   await assertPinnedArtifact(root, contract.productionSmokePersistenceMigration, "supabase/migrations/0015_production_smoke_canary.sql", contract.productionSmokePersistenceMigrationSha256, "smoke persistence migration");
   await assertPinnedArtifact(root, contract.productionSmokePersistencePgtap, "supabase/tests/0015_production_smoke_canary.pgtap.sql", contract.productionSmokePersistencePgtapSha256, "smoke persistence pgTAP");
   await assertPinnedArtifact(root, contract.productionSmokeRunner, "scripts/production-smoke-runner.ts", contract.productionSmokeRunnerSha256, "smoke runner");
+  await assertPinnedArtifact(root, contract.productionOwnerSessionPreflight, "scripts/production-owner-session-preflight.ts", contract.productionOwnerSessionPreflightSha256, "owner session preflight");
   await assertPinnedArtifact(root, contract.productionSmokeAdapter, "src/adapters/production-smoke-canary-adapter.ts", contract.productionSmokeAdapterSha256, "smoke adapter");
   assertContract(
     contract.productionSmokeRunnerStatus === "ready-protected-live-production",
@@ -526,6 +529,7 @@ export async function checkProductionReleaseContract(root: string) {
       contract.productionDeploymentModelSha256,
       contract.productionDeploymentWriterSha256,
       contract.productionApplicationRunnerSha256,
+      contract.productionOwnerSessionPreflightSha256,
       contract.productionApplicationStateRunnerSha256,
       contract.productionDeploymentEvidenceWriterSha256,
       contract.vercelDeploymentAdapterSha256,
@@ -551,17 +555,18 @@ export async function checkProductionReleaseContract(root: string) {
       "589afce50b16f0d4e6896ad091b9621a96065ad6f2a15c7d9c16d7e95ed1405a",
       "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
       "57138896b0f5b1881c22bfde6dbce440e4ec5b2a07c355e843aa4d85644b7b76",
-      "f67295d4f5b984bfa9c0a19bf9b9292f6d5d016a8d1a147bcd61649a63ca737a",
+      "e8095d29d33cc87bfc47a758842b104e9d79894a4fdbc247aa402d810e31d08b",
       "d3b3be5b75a02d92c5be588720584ddf302c805343c50574a7dccb7e0929420d",
-      "3b71d93abc966cbc8906b0a4f119d182f1d53fc8d6cee942fa08445f4dba46fc",
+      "f02b710715d71d251d146a6a2ae5cdd9b1f57909a604a31b4202f4cc6c530e12",
+      "f3b2f014777e8d91157a4d649d0ca66eb9eef6bb2babdd50cc7db307e7ad933f",
       "eead0cd0d62d9692df37cedcba7e513e6edafcc01b7c3b61e8dbc63e28d8e307",
-      "fcea0fd520df434b1c549e0d7b848530c60b43b87711814dae6f6ff3ffa464c3",
+      "93060646e4f06fefe23adc9723641756a4e037d745519567bafa0f7e0f99d0d6",
       "92569dcc9e85de5efe083da1ddf7951326ae3793ccfe535fda7024aedde139d4",
       "aab60949aa19dbec335d9012ce10d751a273bc244b35bab9bdc10861892f83ea",
       "ad7e15f92fc1abc20a66507752834569f0b1676149982f3f0b9d478d641f6534",
       "ecc8b4b53f319f877a3e5dc50d9690e1a36d94d5ee123d81d33a4eb1820687f8",
       "f1cc8366f5dafa9b9aa28fa7334c9a2e4ffa555e6e62b7e0f09d7d31eb8998e3",
-      "ea1fc457a05792ffdb2bba6847899623db3b59d14b9eab6d333df3ab6cc426f4",
+      "7bef5273a1c712acda38d4ce49539c1cadde866e1c71edd14d3c8721233efc4f",
       "feaaec6b9f27d962d6a0b73c8d69647f9268ece996fc2ebd9b99e34d23b61b90",
       "66d3bdee6562b98b3b65e411403a4f376b24c0c6954a2f5dcbbf35d2c1c1d79d",
       "8a793e07f82b2721b70539e93fd149311cf17a1ca8994163b75e84e731f6fb25",
@@ -681,7 +686,7 @@ export async function checkProductionReleaseContract(root: string) {
       contract.stagedProductionSafetyStatus === "verified-auto-assign-disabled" &&
       typeof adapterModule.buildCreateVercelDeploymentRequest === "function" &&
       typeof adapterModule.buildPromoteVercelDeploymentRequest === "function" &&
-      typeof adapterModule.buildRollbackVercelDeploymentRequest === "function" &&
+      typeof adapterModule.buildRestoreBaselineVercelDeploymentRequest === "function" &&
       typeof adapterModule.parseReadyVercelProductionDeployment === "function",
     "Vercel REST request contract must remain explicit and protected",
   );
@@ -771,6 +776,13 @@ export async function checkProductionReleaseContract(root: string) {
         productionApplicationWorkflow.indexOf("release-production-application:"),
       ).includes("secrets.") &&
       productionApplicationWorkflow.includes("pnpm release:application:run") &&
+      productionApplicationWorkflow.includes("pnpm release:application:owner-preflight") &&
+      packageJson.scripts?.["release:application:owner-preflight"] ===
+        "tsx scripts/production-owner-session-preflight.ts" &&
+      productionApplicationWorkflow.includes("PRODUCTION_SMOKE_OWNER_ACCESS_JWT: ${{ secrets.PRODUCTION_SMOKE_OWNER_ACCESS_JWT }}") &&
+      productionApplicationWorkflow.indexOf("pnpm release:application:owner-preflight") <
+        productionApplicationWorkflow.indexOf("pnpm release:application:run") &&
+      !productionApplicationWorkflow.includes("/rollback/") &&
       productionApplicationWorkflow.includes("pnpm release:migration:verify") &&
       productionApplicationWorkflow.includes("group: production-release") &&
       !VERCEL_CLI_MUTATION.test(productionApplicationWorkflow),
@@ -901,7 +913,7 @@ export async function checkProductionReleaseContract(root: string) {
       productionReleaseDoc.includes(contract.productionDeploymentWriter) &&
       productionReleaseDoc.includes(contract.productionDeploymentEvidenceSchema) &&
       productionReleaseDoc.includes("資料庫 schema 永不隨 application rollback 回滾") &&
-      productionReleaseDoc.includes("Promotion 與 rollback 各最多 2 次"),
+      productionReleaseDoc.includes("Promotion 與基線復原各最多 2 次"),
     "Production release documentation must preserve the enabled bounded deployment model",
   );
   assertContract(contract.hostedPreview === false, "Hosted Preview must remain disabled");

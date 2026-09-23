@@ -146,6 +146,8 @@ jobs:
           PRODUCTION_MIGRATION_CA_CERT: ${{ secrets.PRODUCTION_MIGRATION_CA_CERT }}
           PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
         run: pnpm release:migration:verify
+      - name: Verify owner session before any deployment mutation
+        run: pnpm release:application:owner-preflight
       - name: Deploy, smoke, and recover application
         env:
           RELEASE_EVIDENCE_PATH: ${{ runner.temp }}/evidence/application-release.json
