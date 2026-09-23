@@ -100,6 +100,7 @@ Production binding 已固定專用 service token `common_name` 的 SHA-256 finge
 3. route 可在同一受限 principal 下完成固定 library read 與 runtime DB read；private Storage 的公開路徑拒絕由外部 runner 核對，其餘 app 功能不授權給該 principal。
 4. `custom-domain-owner-access` 使用當次執行前由 `cloudflared` 取得的短效 owner token，依 Cloudflare CLI 契約放在 `Cf-Access-Token` header；它不得成為長期 prerequisite，發布完成後立即從 GitHub Environment 移除。
 5. release-smoke 的服務端 Storage client 使用 opaque `sb_secret_…` 時，只把該金鑰放在 `apikey` header。若 SDK 自動產生完全相同值的 `Authorization: Bearer` fallback，transport 必須移除它，因為 opaque secret 不是 JWT；不同值的真實 session Bearer 不得移除。失敗且已證明清理為 `0/0` 時，sanitized evidence schema v3 保存受控 failure name 與最長 256 字元的 safe detail，不保存原始 response、header 或 credential。
+6. Repository fingerprint 與 Vercel expected fingerprint 相等，只能證明兩者一致，不能證明該 secret 仍在 Supabase 啟用。每次輪替後及正式發布前，必須執行 `pnpm release:settings:check`，同時核對 Supabase 目前 active key、Vercel Production 變數與 repository binding；任一不符都不得建立新 deployment。
 
 上述繫結已到位，`productionDeploymentEnabled` 設為 `true`；任何 runtime prerequisite 消失時，runner 仍必須 fail closed。
 

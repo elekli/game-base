@@ -289,6 +289,7 @@ export async function readLiveSettings({
       "api-keys",
       "--project-ref",
       deploymentBindings.production.projectRef,
+      "--reveal",
       "--output",
       "json",
     ],

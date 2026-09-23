@@ -30,7 +30,7 @@ const validSettings = {
   supabaseApiKeyFingerprints: {
     publishable:
       "4462e410b46df06f21744e9cafcfc75e7eb8975cab8629ce6360be06d08fe557",
-    secret: "d44eabeca41cb395b0d615673cc6ba17d762beb16d55380aecf539a551ed93b2",
+    secret: "902073529a30595a4532129356f6b42a3eff7bf0227e2818280fb0f87f22fdf9",
   },
   githubProtection: {
     enforce_admins: { enabled: true },
@@ -82,7 +82,7 @@ const validSettings = {
       key: "EXPECTED_SUPABASE_SECRET_KEY_SHA256",
       target: ["production"],
       type: "encrypted",
-      value: "d44eabeca41cb395b0d615673cc6ba17d762beb16d55380aecf539a551ed93b2",
+      value: "902073529a30595a4532129356f6b42a3eff7bf0227e2818280fb0f87f22fdf9",
     },
   ],
   vercelProject: {
@@ -358,6 +358,11 @@ describe("live production settings", () => {
     ).not.toContain("vercel");
     expect(commandRunner.mock.calls.map(([command]) => command)).toContain("gh");
     expect(commandRunner.mock.calls.map(([command]) => command)).toContain("pnpm");
+    expect(commandRunner).toHaveBeenCalledWith(
+      "pnpm",
+      expect.arrayContaining(["projects", "api-keys", "--reveal"]),
+      { encoding: "utf8" },
+    );
     expect(vercelClient.listProjectEnvironmentVariables).toHaveBeenCalledOnce();
     expect(vercelClient.getProjectEnvironmentVariable).toHaveBeenCalledTimes(11);
     expect(vercelClient.getProject).toHaveBeenCalledOnce();

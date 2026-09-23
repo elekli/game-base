@@ -39,7 +39,7 @@ export const deploymentBindings: Readonly<
       "2cf7b6cc4252a67e02f67bff493cf60aeac98e6436876aff29d74280b874c6b2",
     releaseSmokeMaxTokenLifetimeSeconds: 31_536_000,
     secretKeySha256:
-      "d44eabeca41cb395b0d615673cc6ba17d762beb16d55380aecf539a551ed93b2",
+      "902073529a30595a4532129356f6b42a3eff7bf0227e2818280fb0f87f22fdf9",
     supavisorHost: "aws-0-ap-south-1.pooler.supabase.com",
     supavisorPort: 6543,
     supavisorUsername: "app_runtime.wbtyuvufhrhybquzwfip",
