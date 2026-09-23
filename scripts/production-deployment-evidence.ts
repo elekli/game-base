@@ -56,7 +56,7 @@ export function buildProductionDeploymentEvidence(
   }
 
   const common = {
-    schemaVersion: 2 as const,
+    schemaVersion: 3 as const,
     repository: context.repository,
     workflowRunId: context.workflowRunId,
     workflowRunAttempt: context.workflowRunAttempt,
@@ -100,6 +100,10 @@ export function buildProductionDeploymentEvidence(
       smoke: {
         outcome: "failed" as const,
         generation: release.smokeFailureEvidence.generation,
+        failure: {
+          name: release.smokeFailureEvidence.failure.name,
+          safeDetail: release.smokeFailureEvidence.failure.safeDetail,
+        },
         requestIds: [...release.smokeFailureEvidence.requestIds],
         counts: release.smokeFailureEvidence.counts,
         checks: release.smokeFailureEvidence.checks,

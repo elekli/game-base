@@ -72,4 +72,6 @@ Vercel runtime logs 已定位直接失敗為兩次 `401 / release_smoke_access_d
 
 此修正不更換 service token，不放寬簽章、issuer、audience、主體型別、空 `sub` 或 `common_name` 指紋檢查，也不改動發布 mutation。合併後以同一受保護流程重新發布，並以正式 smoke artifact、alias、資料庫與 Storage 清理證據驗收。
 
-正式重跑前以同一 owner token 實測：`CF_Authorization` cookie 回 403，`cloudflared access curl` 依 CLI 契約使用 `Cf-Access-Token` header 回 200。runner 的 owner boundary probe 改用該 header；service-principal headers、private route 本身與短效 secret 清除政策不變。
+正式重跑前以原生 `curl` 對同一 owner token 實測，`CF_Authorization` cookie 與 Cloudflare CLI 契約的 `Cf-Access-Token` header 都回 200；先前 Python `urllib` 的 403 是 client-specific 行為，不能據此判定 cookie 無效。runner 的 owner boundary probe 採用官方 CLI token header；service-principal headers、private route 本身與短效 secret 清除政策不變。
+
+2026-09-22 受保護發布 run 35710482016 已跨過 Cloudflare 驗證、alias 收斂、資料庫與固定讀取檢查，於 `write-object` 回滾。Vercel 六次 route 時序將失敗定位在第四步；Supabase Storage 正式日誌顯示固定原圖 POST 回 400，內部為 `AccessDenied`／`Invalid Compact JWS`，角色落為 `anon`。根因是 `@supabase/supabase-js 2.112.4` 對 Storage 仍把 opaque `sb_secret_…` 同時當作 Bearer JWT 傳送。修正限定於 release-smoke 的服務端 Storage transport：保留 `apikey` 並移除只等於該 secret 的 SDK Bearer fallback；真實 session Bearer 不受影響。發布證據 schema v3 另保存清理完成後的受控 failure name／safe detail，避免再把可診斷失敗投影成 `unknown-error`。

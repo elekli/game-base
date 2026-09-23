@@ -31,6 +31,7 @@ describe("production release contract", () => {
         smoke: {
           required?: string[];
           properties: {
+            failure: unknown;
             generation: unknown;
             requestIds: unknown;
           };
@@ -42,6 +43,7 @@ describe("production release contract", () => {
           properties?: {
             rollbackAttempts?: { minimum?: number };
             smoke?: {
+              required?: string[];
               properties?: {
                 counts?: {
                   required?: string[];
@@ -109,7 +111,7 @@ describe("production release contract", () => {
       productionDeploymentEvidenceWriter:
         "scripts/production-deployment-evidence.ts",
       productionDeploymentEvidenceWriterSha256:
-        "fb99d5cb0b20fccb71a91671ad19bf023ec54b1fcdebded5797a022cba2bfae4",
+        "eead0cd0d62d9692df37cedcba7e513e6edafcc01b7c3b61e8dbc63e28d8e307",
       productionDeploymentWriterSha256:
         "f67295d4f5b984bfa9c0a19bf9b9292f6d5d016a8d1a147bcd61649a63ca737a",
       productionDeploymentModel: "scripts/production-deployment-release.ts",
@@ -159,7 +161,7 @@ describe("production release contract", () => {
       productionSmokeAdapter:
         "src/adapters/production-smoke-canary-adapter.ts",
       productionSmokeAdapterSha256:
-        "8d7ce463b3f7050795926b919b4e09edb8ea80720b6fe1de75324c7aa55351d9",
+        "feaaec6b9f27d962d6a0b73c8d69647f9268ece996fc2ebd9b99e34d23b61b90",
       productionSmokeRunnerSha256:
         "ea1fc457a05792ffdb2bba6847899623db3b59d14b9eab6d333df3ab6cc426f4",
       productionRestoreModel: "scripts/production-restore-drill.ts",
@@ -193,7 +195,7 @@ describe("production release contract", () => {
       productionDeploymentEvidenceSchema:
         ".github/production-deployment-evidence.schema.json",
       productionDeploymentEvidenceSchemaSha256:
-        "1c2d720c513fad2dda1a726e46ede4435651fb94532c89f5db9be84a492f9904",
+        "ce8e6d3af7dd3098c0938b0152baca73acd3af71bfecbda49e9d413e97f0e58a",
       productionDeploymentSourceManifestBuilderSha256:
         "589afce50b16f0d4e6896ad091b9621a96065ad6f2a15c7d9c16d7e95ed1405a",
       productionDeploymentSourceManifestSchemaSha256:
@@ -203,7 +205,7 @@ describe("production release contract", () => {
       productionSmokeContractSha256:
         "aab60949aa19dbec335d9012ce10d751a273bc244b35bab9bdc10861892f83ea",
       productionSmokeModelSha256:
-        "618cf243e1214778e6b0b9b437913f69e56af09bd1d0cd445fa0f2fae33e7ba9",
+        "ad7e15f92fc1abc20a66507752834569f0b1676149982f3f0b9d478d641f6534",
       productionRestoreModelSha256:
         "96604eb799d32eefff62297efafe8e18cca595cc6d4505083f60ead85402f028",
       productionRestoreExecutorSha256:
@@ -240,6 +242,7 @@ describe("production release contract", () => {
     expect(evidenceSchema.required).toContain("releaseIdentity");
     expect(evidenceSchema.required).toContain("sourceManifestSha256");
     expect(evidenceSchema.properties.canaryContractVersion).toEqual({ const: 3 });
+    expect(evidenceSchema.properties.schemaVersion).toEqual({ const: 3 });
     expect(evidenceSchema.properties.smoke.required).toEqual([
       "outcome",
       "generation",
@@ -282,6 +285,16 @@ describe("production release contract", () => {
     expect(rolledBackEvidence?.smoke?.properties?.checks?.required).toEqual([
       "canary-cleanup-counts",
     ]);
+    expect(rolledBackEvidence?.smoke?.required).toContain("failure");
+    expect(evidenceSchema.properties.smoke.properties.failure).toEqual({
+      type: "object",
+      additionalProperties: false,
+      required: ["name", "safeDetail"],
+      properties: {
+        name: { const: "ProductionCanaryResidueMismatchError" },
+        safeDetail: { type: "string", minLength: 1, maxLength: 256 },
+      },
+    });
     expect(
       rolledBackEvidence?.smoke?.properties?.checks?.properties?.[
         "canary-cleanup-counts"
@@ -326,7 +339,7 @@ describe("production release contract", () => {
     }).allOf?.[0]?.then?.properties?.smoke?.properties;
     expect(passedEvidenceRule?.counts?.properties?.mutation?.properties).toEqual({
       row: { const: 1 },
-      object: { const: 1 },
+      object: { const: 2 },
     });
     expect(Object.values(passedEvidenceRule?.checks?.properties ?? {})).toHaveLength(8);
     expect(

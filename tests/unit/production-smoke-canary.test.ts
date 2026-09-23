@@ -335,6 +335,10 @@ describe("production smoke canary", () => {
       evidence: {
         outcome: "failed",
         generation: GENERATION,
+        failure: {
+          name: "ProductionCanaryResidueMismatchError",
+          safeDetail: "row write outcome is ambiguous",
+        },
         requestIds: [REQUEST_ID],
         counts: { cleanup: { row: 0, object: 0 } },
         checks: { "canary-cleanup-counts": "passed" },

@@ -554,15 +554,15 @@ export async function checkProductionReleaseContract(root: string) {
       "f67295d4f5b984bfa9c0a19bf9b9292f6d5d016a8d1a147bcd61649a63ca737a",
       "d3b3be5b75a02d92c5be588720584ddf302c805343c50574a7dccb7e0929420d",
       "3b71d93abc966cbc8906b0a4f119d182f1d53fc8d6cee942fa08445f4dba46fc",
-      "fb99d5cb0b20fccb71a91671ad19bf023ec54b1fcdebded5797a022cba2bfae4",
+      "eead0cd0d62d9692df37cedcba7e513e6edafcc01b7c3b61e8dbc63e28d8e307",
       "fcea0fd520df434b1c549e0d7b848530c60b43b87711814dae6f6ff3ffa464c3",
       "92569dcc9e85de5efe083da1ddf7951326ae3793ccfe535fda7024aedde139d4",
       "aab60949aa19dbec335d9012ce10d751a273bc244b35bab9bdc10861892f83ea",
-      "618cf243e1214778e6b0b9b437913f69e56af09bd1d0cd445fa0f2fae33e7ba9",
+      "ad7e15f92fc1abc20a66507752834569f0b1676149982f3f0b9d478d641f6534",
       "ecc8b4b53f319f877a3e5dc50d9690e1a36d94d5ee123d81d33a4eb1820687f8",
       "f1cc8366f5dafa9b9aa28fa7334c9a2e4ffa555e6e62b7e0f09d7d31eb8998e3",
       "ea1fc457a05792ffdb2bba6847899623db3b59d14b9eab6d333df3ab6cc426f4",
-      "8d7ce463b3f7050795926b919b4e09edb8ea80720b6fe1de75324c7aa55351d9",
+      "feaaec6b9f27d962d6a0b73c8d69647f9268ece996fc2ebd9b99e34d23b61b90",
       "66d3bdee6562b98b3b65e411403a4f376b24c0c6954a2f5dcbbf35d2c1c1d79d",
       "8a793e07f82b2721b70539e93fd149311cf17a1ca8994163b75e84e731f6fb25",
       "8326464e6af23dfd1d1a0257055090f86bffb19b9f4ba333560f6ac5d893366b",
@@ -758,7 +758,7 @@ export async function checkProductionReleaseContract(root: string) {
   );
   assertContract(
     contract.productionDeploymentEvidenceSchemaSha256 ===
-      "1c2d720c513fad2dda1a726e46ede4435651fb94532c89f5db9be84a492f9904" &&
+      "ce8e6d3af7dd3098c0938b0152baca73acd3af71bfecbda49e9d413e97f0e58a" &&
       createHash("sha256").update(deploymentEvidenceSchemaText).digest("hex") ===
         contract.productionDeploymentEvidenceSchemaSha256,
     "Production deployment evidence schema fingerprint does not match the approved redaction boundary",
@@ -813,13 +813,21 @@ export async function checkProductionReleaseContract(root: string) {
     "Production deployment evidence must use the exact secret-free field allowlist",
   );
   const smokeSchema = evidenceProperties.smoke as JsonSchema | undefined;
+  const smokeFailureSchema = smokeSchema?.properties?.failure as JsonSchema | undefined;
   const failureSchema = evidenceProperties.failure as JsonSchema | undefined;
   assertContract(
     smokeSchema?.additionalProperties === false &&
       JSON.stringify(Object.keys(smokeSchema.properties ?? {}).sort()) ===
-        JSON.stringify(["checks", "counts", "generation", "outcome", "requestIds"]) &&
+        JSON.stringify(["checks", "counts", "failure", "generation", "outcome", "requestIds"]) &&
       JSON.stringify(smokeSchema.required) ===
         JSON.stringify(["outcome", "generation", "requestIds"]) &&
+      smokeFailureSchema?.additionalProperties === false &&
+      JSON.stringify(smokeFailureSchema?.required) ===
+        JSON.stringify(["name", "safeDetail"]) &&
+      (smokeFailureSchema?.properties?.name as { const?: unknown } | undefined)?.const ===
+        "ProductionCanaryResidueMismatchError" &&
+      (smokeFailureSchema?.properties?.safeDetail as { maxLength?: unknown } | undefined)?.maxLength === 256 &&
+      (evidenceProperties.schemaVersion as { const?: unknown } | undefined)?.const === 3 &&
       (evidenceProperties.canaryContractVersion as { const?: unknown } | undefined)?.const === 3,
     "Production smoke evidence must reject payloads and unknown fields",
   );

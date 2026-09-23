@@ -50,6 +50,10 @@ function failedCleanupEvidence() {
   return {
     outcome: "failed" as const,
     generation: SMOKE_GENERATION,
+    failure: {
+      name: "ProductionCanaryResidueMismatchError",
+      safeDetail: "canary write outcome is ambiguous",
+    },
     requestIds: [SMOKE_REQUEST_ID],
     counts: { cleanup: { row: 0, object: 0 } },
     checks: { "canary-cleanup-counts": "passed" as const },
