@@ -38,6 +38,10 @@ type ProductionReleaseContract = Readonly<{
   productionDeploymentStatus: string;
   productionDeploymentWriter: string;
   productionDeploymentWriterSha256: string;
+  productionSupabaseFingerprintHelper: string;
+  productionSupabaseFingerprintHelperSha256: string;
+  productionLiveSettingsChecker: string;
+  productionLiveSettingsCheckerSha256: string;
   productionRestoreEvidenceSchema: string;
   productionRestoreEvidenceSchemaSha256: string;
   productionRestoreModel: string;
@@ -376,6 +380,12 @@ export async function checkProductionReleaseContract(root: string) {
     contract.productionDeploymentWriterSha256,
     "Production application workflow",
   );
+  await assertPinnedArtifact(root, contract.productionSupabaseFingerprintHelper,
+    "scripts/fingerprint-supabase-api-keys.mjs", contract.productionSupabaseFingerprintHelperSha256,
+    "Supabase key fingerprint isolation helper");
+  await assertPinnedArtifact(root, contract.productionLiveSettingsChecker,
+    "scripts/check-live-production-settings.ts", contract.productionLiveSettingsCheckerSha256,
+    "Production live settings checker");
   await assertPinnedArtifact(root, contract.productionReleaseFailureDiagnostics,
     "scripts/production-release-failure-diagnostics.ts", contract.productionReleaseFailureDiagnosticsSha256,
     "Production release failure diagnostics");
@@ -528,6 +538,8 @@ export async function checkProductionReleaseContract(root: string) {
       contract.productionDeploymentSourceManifestSchemaSha256,
       contract.productionDeploymentModelSha256,
       contract.productionDeploymentWriterSha256,
+      contract.productionSupabaseFingerprintHelperSha256,
+      contract.productionLiveSettingsCheckerSha256,
       contract.productionApplicationRunnerSha256,
       contract.productionOwnerSessionPreflightSha256,
       contract.productionApplicationStateRunnerSha256,
@@ -555,7 +567,9 @@ export async function checkProductionReleaseContract(root: string) {
       "589afce50b16f0d4e6896ad091b9621a96065ad6f2a15c7d9c16d7e95ed1405a",
       "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
       "57138896b0f5b1881c22bfde6dbce440e4ec5b2a07c355e843aa4d85644b7b76",
-      "e8095d29d33cc87bfc47a758842b104e9d79894a4fdbc247aa402d810e31d08b",
+      "e9aecd21e93451143e4fc0e9a6ad222908109e2fe1622703ddde550935c62cb5",
+      "e5046bdc858d1cd3777115d1e277d8995d2a594bc5c902ff13a15969154d0ba9",
+      "4abb9cf071fa261bc54e6facd1b2a43401d4be5d1ce67023a8d8d1089234e831",
       "d3b3be5b75a02d92c5be588720584ddf302c805343c50574a7dccb7e0929420d",
       "f02b710715d71d251d146a6a2ae5cdd9b1f57909a604a31b4202f4cc6c530e12",
       "f3b2f014777e8d91157a4d649d0ca66eb9eef6bb2babdd50cc7db307e7ad933f",
@@ -740,6 +754,7 @@ export async function checkProductionReleaseContract(root: string) {
     JSON.stringify(contract.productionDeploymentRequiredSecrets) ===
       JSON.stringify([
         "VERCEL_TOKEN",
+        "SUPABASE_ACCESS_TOKEN",
         "PRODUCTION_MIGRATION_DATABASE_URL",
         "PRODUCTION_MIGRATION_CA_CERT",
         "PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID",
@@ -777,10 +792,14 @@ export async function checkProductionReleaseContract(root: string) {
       ).includes("secrets.") &&
       productionApplicationWorkflow.includes("pnpm release:application:run") &&
       productionApplicationWorkflow.includes("pnpm release:application:owner-preflight") &&
+      productionApplicationWorkflow.includes("SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}") &&
+      productionApplicationWorkflow.includes("pnpm release:settings:check --hosted-only") &&
       packageJson.scripts?.["release:application:owner-preflight"] ===
         "tsx scripts/production-owner-session-preflight.ts" &&
       productionApplicationWorkflow.includes("PRODUCTION_SMOKE_OWNER_ACCESS_JWT: ${{ secrets.PRODUCTION_SMOKE_OWNER_ACCESS_JWT }}") &&
       productionApplicationWorkflow.indexOf("pnpm release:application:owner-preflight") <
+        productionApplicationWorkflow.indexOf("pnpm release:application:run") &&
+      productionApplicationWorkflow.indexOf("pnpm release:settings:check") <
         productionApplicationWorkflow.indexOf("pnpm release:application:run") &&
       !productionApplicationWorkflow.includes("/rollback/") &&
       productionApplicationWorkflow.includes("pnpm release:migration:verify") &&

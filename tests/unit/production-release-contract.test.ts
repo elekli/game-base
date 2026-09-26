@@ -117,7 +117,12 @@ describe("production release contract", () => {
       productionDeploymentEvidenceWriterSha256:
         "eead0cd0d62d9692df37cedcba7e513e6edafcc01b7c3b61e8dbc63e28d8e307",
       productionDeploymentWriterSha256:
-        "e8095d29d33cc87bfc47a758842b104e9d79894a4fdbc247aa402d810e31d08b",
+        "e9aecd21e93451143e4fc0e9a6ad222908109e2fe1622703ddde550935c62cb5",
+      productionSupabaseFingerprintHelper: "scripts/fingerprint-supabase-api-keys.mjs",
+      productionSupabaseFingerprintHelperSha256:
+        "e5046bdc858d1cd3777115d1e277d8995d2a594bc5c902ff13a15969154d0ba9",
+      productionLiveSettingsChecker: "scripts/check-live-production-settings.ts",
+      productionLiveSettingsCheckerSha256: "4abb9cf071fa261bc54e6facd1b2a43401d4be5d1ce67023a8d8d1089234e831",
       productionDeploymentModel: "scripts/production-deployment-release.ts",
       productionDeploymentModelSha256:
         "57138896b0f5b1881c22bfde6dbce440e4ec5b2a07c355e843aa4d85644b7b76",
@@ -183,6 +188,7 @@ describe("production release contract", () => {
       productionDeploymentEnabled: true,
       productionDeploymentRequiredSecrets: [
         "VERCEL_TOKEN",
+        "SUPABASE_ACCESS_TOKEN",
         "PRODUCTION_MIGRATION_DATABASE_URL",
         "PRODUCTION_MIGRATION_CA_CERT",
         "PRODUCTION_SMOKE_CF_ACCESS_CLIENT_ID",

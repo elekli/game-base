@@ -100,7 +100,7 @@ Production binding 已固定專用 service token `common_name` 的 SHA-256 finge
 3. route 可在同一受限 principal 下完成固定 library read 與 runtime DB read；private Storage 的公開路徑拒絕由外部 runner 核對，其餘 app 功能不授權給該 principal。
 4. `custom-domain-owner-access` 使用當次執行前由 `cloudflared` 取得的短效 owner token，依 Cloudflare CLI 契約放在 `Cf-Access-Token` header；它不得成為長期 prerequisite，發布完成後立即從 GitHub Environment 移除。
 5. release-smoke 的服務端 Storage client 使用 opaque `sb_secret_…` 時，只把該金鑰放在 `apikey` header。若 SDK 自動產生完全相同值的 `Authorization: Bearer` fallback，transport 必須移除它，因為 opaque secret 不是 JWT；不同值的真實 session Bearer 不得移除。失敗且已證明清理為 `0/0` 時，sanitized evidence schema v3 保存受控 failure name 與最長 256 字元的 safe detail，不保存原始 response、header 或 credential。
-6. Repository fingerprint 與 Vercel expected fingerprint 相等，只能證明兩者一致，不能證明該 secret 仍在 Supabase 啟用。每次輪替後及正式發布前，必須執行 `pnpm release:settings:check`，同時核對 Supabase 目前 active key、Vercel Production 變數與 repository binding；任一不符都不得建立新 deployment。
+6. Repository fingerprint 與 Vercel expected fingerprint 相等，只能證明兩者一致，不能證明該 secret 仍在 Supabase 啟用。受保護發布工作流程在任何部署變更前執行 `pnpm release:settings:check --hosted-only`，核對 Supabase 目前啟用的金鑰指紋、Vercel 可讀的 Production 設定與 repository binding。此模式無權查驗 GitHub 保護規則；每次發布前，操作者須以具管理讀權限的憑證執行完整 `pnpm release:settings:check`，核對 reviewer、branch allowlist、主分支 PR 與 CI 保護。Vercel 的 sensitive `SUPABASE_SECRET_KEY` 無法經唯讀 API 取回實值；新部署仍須由執行期綁定檢查與正式 smoke 驗證，失敗時復原至原部署。
 
 上述繫結已到位，`productionDeploymentEnabled` 設為 `true`；任何 runtime prerequisite 消失時，runner 仍必須 fail closed。
 
@@ -137,7 +137,7 @@ Vercel CLI `59.11.7` 的 registry metadata 宣告 Node.js `>= 18`，且已確認
 ```text
 release:settings:check
   ├─ gh subprocess ───────────────→ GitHub protection／Environment metadata
-  ├─ Supabase CLI subprocess ─────→ current API key fingerprints
+  ├─ isolated Supabase subprocess → revealed keys 留在子程序，只回傳指紋
   └─ repository Vercel REST client
        ├─ GET project env list ───→ key／target／type／id
        ├─ GET allowlisted env id ─→ encrypted readable value only
@@ -152,14 +152,14 @@ Repository 內可公開核對的 binding 是 `.github/production-release-contrac
 
 `.github/production-release-contract.json` 另記錄上述 Supabase Git production sentinel 與唯一 schema writer，供 repository checker 防止文件與程式內契約漂移。這只聲明預期設定；CI 無法查證 Supabase 外部 integration 的實際 mapping。每次發布前仍須由操作者在 Supabase Dashboard 核對 sentinel，且確認 GitHub repository 不存在該名稱的 branch。
 
-T01 只要求 Vercel Production scope 已有 `SUPABASE_PUBLISHABLE_KEY`（encrypted）與 `SUPABASE_SECRET_KEY`（sensitive），並以 `EXPECTED_SUPABASE_*_SHA256` 綁定 fingerprint。T07 另要求同一個 Production-only scope 具備 `BGG_TOKEN`（sensitive）、`IGDB_CLIENT_ID`（encrypted）與 `IGDB_CLIENT_SECRET`（sensitive）；Preview 與 Development 不得取得這些正式憑證。Vercel API 可安全讀回 publishable key並核對 fingerprint，但 sensitive secret 不允許解密讀回；`release:settings:check` 對來源憑證只核對名稱、scope 與 type，不讀取或輸出實值。T01 已用 Supabase CLI 當前 secret 覆寫該 Vercel variable，之後由 runtime `environment:check` 比對實值與 fingerprint。T02A 使用 GitHub `Production` Environment 的 `PRODUCTION_MIGRATION_DATABASE_URL` 與 `PRODUCTION_MIGRATION_CA_CERT` secrets；連線只能指向正式專案的 direct endpoint 或 port 5432 session pooler，不能指向 port 6543 transaction pooler，且必須以 `verify-full` 同時驗證 CA 與 hostname。Vercel token 等 secrets 仍屬 T02B／T03。憑證設定依 [Supabase SSL enforcement](https://supabase.com/docs/guides/platform/ssl-enforcement)；憑證本身不提交 repository 或 artifact。
+T01 只要求 Vercel Production scope 已有 `SUPABASE_PUBLISHABLE_KEY`（encrypted）與 `SUPABASE_SECRET_KEY`（sensitive），並以 `EXPECTED_SUPABASE_*_SHA256` 綁定 fingerprint。T07 另要求同一個 Production-only scope 具備 `BGG_TOKEN`（sensitive）、`IGDB_CLIENT_ID`（encrypted）與 `IGDB_CLIENT_SECRET`（sensitive）；Preview 與 Development 不得取得這些正式憑證。Vercel API 可安全讀回 publishable key 並核對 fingerprint，但 sensitive secret 不允許解密讀回；`release:settings:check` 對後者只核對名稱、scope 與 type，不讀取或輸出實值。受保護工作流程以 `SUPABASE_ACCESS_TOKEN` 唯讀查詢目前啟用的金鑰，隔離子程序只回傳指紋。T01 已用 Supabase CLI 當前 secret 覆寫該 Vercel variable，之後由新部署的 runtime `environment:check` 比對實值與 fingerprint。T02A 使用 GitHub `Production` Environment 的 `PRODUCTION_MIGRATION_DATABASE_URL` 與 `PRODUCTION_MIGRATION_CA_CERT` secrets；連線只能指向正式專案的 direct endpoint 或 port 5432 session pooler，不能指向 port 6543 transaction pooler，且必須以 `verify-full` 同時驗證 CA 與 hostname。Vercel token 等 secrets 仍屬 T02B／T03。憑證設定依 [Supabase SSL enforcement](https://supabase.com/docs/guides/platform/ssl-enforcement)；憑證本身不提交 repository 或 artifact。
 
 ## 每次發布前
 
 1. `gh api repos/elekli/game-base/branches/main/protection`：確認 required check 為 `verify`、PR required、`enforce_admins.enabled` 為 `true`。
 2. `gh api repos/elekli/game-base/environments/Production`：確認 required reviewer、禁止管理員 bypass，以及只允許 protected branch。
 3. 在 Supabase Dashboard 核對 GitHub integration 的 production branch mapping 精確為 `production-deploy-disabled-use-github-actions`，並以 GitHub branch API 確認 repository 不存在該 branch；任一不符都停止發布。
-4. 設定 `VERCEL_TOKEN` 後執行 `pnpm release:settings:check`；repository-owned REST adapter 會確認 project ID 符合契約、Git integration 未連接，並核對 Supabase 與 BGG／IGDB 憑證的 Production-only scope、type，以及可安全核對的 Supabase fingerprint。不得另行呼叫 global Vercel CLI。
+4. 受保護工作流程使用 `VERCEL_TOKEN` 與 `SUPABASE_ACCESS_TOKEN`，在部署變更前執行 `pnpm release:settings:check --hosted-only`；repository-owned REST adapter 會確認 project ID 符合契約、Git integration 未連接，並核對 Supabase 與 BGG／IGDB 憑證的 Production-only scope、type，以及可安全核對的 Supabase fingerprint。此模式不呼叫需要 GitHub 管理讀權限的 API；操作者的完整 `pnpm release:settings:check` 另核對 GitHub 設定。不得另行呼叫 global Vercel CLI。
 5. Environment list request 不帶 `decrypt` query，只取得 key、target、type 與 id。只有固定 allowlist 內的 encrypted binding 可透過單一 variable endpoint 讀值供本機比對；`SUPABASE_SECRET_KEY` 等 sensitive variable 永不要求解密、輸出或記錄。若任何 credential target 包含 Preview 或 Development，立即停止發布並移除錯誤 scope。
 6. 執行 `pnpm release:contract:check`，並由受保護 workflow 的 orchestrator 執行 production migration preflight。Preflight 先以 `BEGIN TRANSACTION READ ONLY` 鎖定唯讀交易，再核對 repository migration history、角色、grants、RLS、private bucket 與正式專案 binding；無論成功或失敗都 rollback。RLS 必須與 `.github/production-rls-policy-manifest.json` 對 `app_private` 聲明的 policy name、permissiveness、command、roles、`USING`、`WITH CHECK` 完全相同；缺少、額外或條件漂移都停止發布。每個政策 revision 以 `validFrom` 與 `validUntilExclusive` 表示生效區間：新增政策時建立末端為 `null` 的 revision；替換既有政策時，在同一支 migration 把舊 revision 的末端與新 revision 的起點設成該版本。相同 table／name 的 revision 不得重疊或留空檔。套用前只比對 production 已套用 tail 當時有效的 revision，strict verification 則比對目標 commit 最新 tail，避免 pending 政策變更卡死套用流程。`storage` schema 不納入應用政策固定清單，僅由獨立的 bucket 與 `storage.objects` RLS 檢查覆蓋，避免把 Supabase 管理的系統政策誤判成應用漂移。T03 完成前不可把 migration 成功誤當成 app 已部署。
 

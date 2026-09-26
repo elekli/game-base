@@ -104,6 +104,7 @@ jobs:
       MIGRATION_TAIL: ${{ inputs.migration_tail }}
       GITHUB_TOKEN: ${{ github.token }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
       PRODUCTION_CUSTOM_DOMAIN: ${{ vars.PRODUCTION_CUSTOM_DOMAIN }}
@@ -132,6 +133,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm release:contract:check
+      - name: Verify live Production settings before deployment mutation
+        run: pnpm release:settings:check --hosted-only
       - name: Install protected CA file
         env:
           PRODUCTION_MIGRATION_CA_CERT: ${{ secrets.PRODUCTION_MIGRATION_CA_CERT }}
