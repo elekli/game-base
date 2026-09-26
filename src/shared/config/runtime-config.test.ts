@@ -16,7 +16,7 @@ describe("parseRuntimeConfig", () => {
       publishableKeySha256:
         "4462e410b46df06f21744e9cafcfc75e7eb8975cab8629ce6360be06d08fe557",
       secretKeySha256:
-        "d44eabeca41cb395b0d615673cc6ba17d762beb16d55380aecf539a551ed93b2",
+        "902073529a30595a4532129356f6b42a3eff7bf0227e2818280fb0f87f22fdf9",
       supavisorHost: "aws-0-ap-south-1.pooler.supabase.com",
       supavisorPort: 6543,
       supavisorUsername: "app_runtime.wbtyuvufhrhybquzwfip",
@@ -146,7 +146,7 @@ describe("parseRuntimeConfig", () => {
       EXPECTED_SUPABASE_PUBLISHABLE_KEY_SHA256:
         "4462e410b46df06f21744e9cafcfc75e7eb8975cab8629ce6360be06d08fe557",
       EXPECTED_SUPABASE_SECRET_KEY_SHA256:
-        "d44eabeca41cb395b0d615673cc6ba17d762beb16d55380aecf539a551ed93b2",
+        "902073529a30595a4532129356f6b42a3eff7bf0227e2818280fb0f87f22fdf9",
       SUPAVISOR_HOST: "aws-0-ap-south-1.pooler.supabase.com",
       EXPECTED_SUPAVISOR_HOST: "aws-0-ap-south-1.pooler.supabase.com",
       SUPAVISOR_USERNAME: "app_runtime.wbtyuvufhrhybquzwfip",

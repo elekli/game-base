@@ -12,8 +12,8 @@ export type LiveProductionSettings = Readonly<{
   githubDeploymentBranchPolicies: Array<{ name?: string }>;
   githubEnvironmentSecretNames: string[];
   supabaseApiKeyFingerprints: {
-    publishable: string;
-    secret: string;
+    publishable: string[];
+    secret: string[];
   };
   githubProtection: {
     enforce_admins?: { enabled?: boolean };
@@ -56,7 +56,7 @@ function assertSetting(condition: unknown, message: string): asserts condition {
   }
 }
 
-export function checkLiveProductionSettings(settings: LiveProductionSettings) {
+export function checkLiveProductionSettings(settings: LiveProductionSettings, hostedOnly = false) {
   const {
     githubEnvironment,
     githubProtection,
@@ -64,37 +64,39 @@ export function checkLiveProductionSettings(settings: LiveProductionSettings) {
     vercelEnvironmentVariables,
     vercelProject,
   } = settings;
-  assertSetting(githubProtection.required_pull_request_reviews != null, "main must require pull requests");
-  assertSetting(githubProtection.required_status_checks?.contexts?.includes("verify"), "main must require verify");
-  assertSetting(
-    githubProtection.required_status_checks?.checks?.some(
-      (check) => check.context === "verify" && check.app_id === 15368,
-    ),
-    "main must bind verify to the GitHub Actions app",
-  );
-  assertSetting(githubProtection.enforce_admins?.enabled === true, "main protection must include administrators");
-  assertSetting(githubEnvironment.name === "Production", "Production environment is missing");
-  assertSetting(githubEnvironment.can_admins_bypass === false, "Production must disallow administrator bypass");
-  assertSetting(githubEnvironment.protection_rules?.some((rule) => rule.type === "required_reviewers"), "Production must require a reviewer");
-  assertSetting(
-    githubEnvironment.deployment_branch_policy?.protected_branches === false &&
-      githubEnvironment.deployment_branch_policy?.custom_branch_policies === true,
-    "Production must use a custom branch allowlist",
-  );
-  assertSetting(
-    settings.githubDeploymentBranchPolicies.length === 1 &&
-      settings.githubDeploymentBranchPolicies[0]?.name === "main",
-    "Production must allow only the main branch",
-  );
-  assertSetting(
-    settings.githubEnvironmentSecretNames.includes(
-      "PRODUCTION_MIGRATION_DATABASE_URL",
-    ) &&
-      settings.githubEnvironmentSecretNames.includes(
-        "PRODUCTION_MIGRATION_CA_CERT",
+  if (!hostedOnly) {
+    assertSetting(githubProtection.required_pull_request_reviews != null, "main must require pull requests");
+    assertSetting(githubProtection.required_status_checks?.contexts?.includes("verify"), "main must require verify");
+    assertSetting(
+      githubProtection.required_status_checks?.checks?.some(
+        (check) => check.context === "verify" && check.app_id === 15368,
       ),
-    "Production migration TLS secrets are missing",
-  );
+      "main must bind verify to the GitHub Actions app",
+    );
+    assertSetting(githubProtection.enforce_admins?.enabled === true, "main protection must include administrators");
+    assertSetting(githubEnvironment.name === "Production", "Production environment is missing");
+    assertSetting(githubEnvironment.can_admins_bypass === false, "Production must disallow administrator bypass");
+    assertSetting(githubEnvironment.protection_rules?.some((rule) => rule.type === "required_reviewers"), "Production must require a reviewer");
+    assertSetting(
+      githubEnvironment.deployment_branch_policy?.protected_branches === false &&
+        githubEnvironment.deployment_branch_policy?.custom_branch_policies === true,
+      "Production must use a custom branch allowlist",
+    );
+    assertSetting(
+      settings.githubDeploymentBranchPolicies.length === 1 &&
+        settings.githubDeploymentBranchPolicies[0]?.name === "main",
+      "Production must allow only the main branch",
+    );
+    assertSetting(
+      settings.githubEnvironmentSecretNames.includes("PRODUCTION_MIGRATION_DATABASE_URL") &&
+        settings.githubEnvironmentSecretNames.includes("PRODUCTION_MIGRATION_CA_CERT"),
+      "Production migration TLS secrets are missing",
+    );
+    assertSetting(
+      settings.githubEnvironmentSecretNames.includes("SUPABASE_ACCESS_TOKEN"),
+      "Production Supabase management token is missing",
+    );
+  }
   assertSetting(vercelProject.id === "prj_iTlWeDkcKItHTKYIayoNjQQ0vHec", "unexpected Vercel project ID");
   assertSetting(vercelProject.name === "game-base", "unexpected Vercel project name");
   assertSetting(vercelProject.gitRepository == null && vercelProject.link == null, "Vercel Git integration must be disconnected");
@@ -186,21 +188,22 @@ export function checkLiveProductionSettings(settings: LiveProductionSettings) {
     "secret key fingerprint variable does not match the Production binding",
   );
   assertSetting(
-    supabaseApiKeyFingerprints.publishable ===
+    supabaseApiKeyFingerprints.publishable.includes(
       deploymentBindings.production.publishableKeySha256,
+    ),
     "current Supabase publishable key does not match the Production binding",
   );
   assertSetting(
-    supabaseApiKeyFingerprints.secret === deploymentBindings.production.secretKeySha256,
+    supabaseApiKeyFingerprints.secret.includes(deploymentBindings.production.secretKeySha256),
     "current Supabase secret key does not match the Production binding",
   );
 
   return {
-    githubEnvironment: githubEnvironment.name,
-    productionMigrationTlsSecretsPresent: true,
+    githubEnvironment: hostedOnly ? undefined : githubEnvironment.name,
+    productionMigrationTlsSecretsPresent: hostedOnly ? undefined : true,
     productionSourceCredentialsPresent: true,
     productionCustomDomain: "gamebase.elek.li",
-    requiredCheck: "verify",
+    requiredCheck: hostedOnly ? undefined : "verify",
     vercelEnvironmentVariableCount: vercelEnvironmentVariables.length,
     vercelGitConnected: false,
   };
@@ -209,7 +212,7 @@ export function checkLiveProductionSettings(settings: LiveProductionSettings) {
 type CommandRunner = (
   command: string,
   args: string[],
-  options: { encoding: "utf8" },
+  options: { encoding: "utf8"; stdio: ["ignore", "pipe", "pipe"] },
 ) => string | Buffer;
 
 export class ProductionSettingsCommandError extends Error {
@@ -225,7 +228,7 @@ export function readJsonSafely(
   runner: CommandRunner = execFileSync,
 ) {
   try {
-    const output = runner(command, args, { encoding: "utf8" });
+    const output = runner(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     return JSON.parse(String(output));
   } catch {
     throw new ProductionSettingsCommandError();
@@ -238,9 +241,11 @@ const VERCEL_TEAM_ID = "team_vpaufHhAabxSup7QLCbCGwlF";
 export async function readLiveSettings({
   commandRunner = execFileSync,
   vercelClient,
+  hostedOnly = false,
 }: Readonly<{
   commandRunner?: CommandRunner;
   vercelClient: VercelReadOnlyRestClient;
+  hostedOnly?: boolean;
 }>): Promise<LiveProductionSettings> {
   const vercelEnvironmentVariables =
     await vercelClient.listProjectEnvironmentVariables(VERCEL_PROJECT_ID);
@@ -280,27 +285,20 @@ export async function readLiveSettings({
     ),
   );
   const publishableKey = readableValues.get("SUPABASE_PUBLISHABLE_KEY")!;
-  const supabaseApiKeys = readJsonSafely(
-    "pnpm",
-    [
-      "exec",
-      "supabase",
-      "projects",
-      "api-keys",
-      "--project-ref",
-      deploymentBindings.production.projectRef,
-      "--output",
-      "json",
-    ],
+  const supabaseApiKeyFingerprints = readJsonSafely(
+    process.execPath,
+    ["scripts/fingerprint-supabase-api-keys.mjs"],
     commandRunner,
-  ) as Array<{ api_key?: string; type?: string }>;
-  const fingerprintSupabaseKey = (prefix: "sb_publishable_" | "sb_secret_") => {
-    const value = supabaseApiKeys.find((key) => key.api_key?.startsWith(prefix))?.api_key;
-    assertSetting(typeof value === "string", `current ${prefix} key is unavailable`);
-    return createHash("sha256").update(value).digest("hex");
-  };
+  ) as { publishable?: unknown; secret?: unknown };
+  assertSetting(
+    Array.isArray(supabaseApiKeyFingerprints.publishable) &&
+      supabaseApiKeyFingerprints.publishable.every((value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)) &&
+      Array.isArray(supabaseApiKeyFingerprints.secret) &&
+      supabaseApiKeyFingerprints.secret.every((value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)),
+    "Supabase API key fingerprints are invalid",
+  );
   return {
-    githubDeploymentBranchPolicies: (
+    githubDeploymentBranchPolicies: hostedOnly ? [] : (
       readJsonSafely(
         "gh",
         [
@@ -310,7 +308,7 @@ export async function readLiveSettings({
         commandRunner,
       ) as { branch_policies?: Array<{ name?: string }> }
     ).branch_policies ?? [],
-    githubEnvironmentSecretNames: (
+    githubEnvironmentSecretNames: hostedOnly ? [] : (
       readJsonSafely(
         "gh",
         ["api", "repos/elekli/game-base/environments/Production/secrets"],
@@ -318,15 +316,15 @@ export async function readLiveSettings({
       ) as { secrets?: Array<{ name?: string }> }
     ).secrets?.flatMap((secret) => (secret.name ? [secret.name] : [])) ?? [],
     supabaseApiKeyFingerprints: {
-      publishable: fingerprintSupabaseKey("sb_publishable_"),
-      secret: fingerprintSupabaseKey("sb_secret_"),
+      publishable: supabaseApiKeyFingerprints.publishable,
+      secret: supabaseApiKeyFingerprints.secret,
     },
-    githubProtection: readJsonSafely(
+    githubProtection: hostedOnly ? {} : readJsonSafely(
       "gh",
       ["api", "repos/elekli/game-base/branches/main/protection"],
       commandRunner,
     ),
-    githubEnvironment: readJsonSafely(
+    githubEnvironment: hostedOnly ? {} : readJsonSafely(
       "gh",
       ["api", "repos/elekli/game-base/environments/Production"],
       commandRunner,
@@ -349,14 +347,17 @@ export async function readLiveSettings({
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   assertSetting(process.argv.includes("--live"), "pass --live to query GitHub and Vercel");
+  const hostedOnly = process.argv.includes("--hosted-only");
+  if (hostedOnly) assertSetting(Boolean(process.env.SUPABASE_ACCESS_TOKEN), "Supabase management token is missing");
   const result = checkLiveProductionSettings(
     await readLiveSettings({
+      hostedOnly,
       vercelClient: createVercelReadOnlyRestClient({
         teamId: VERCEL_TEAM_ID,
         timeoutMs: 10_000,
         token: process.env.VERCEL_TOKEN ?? "",
       }),
-    }),
+    }), hostedOnly,
   );
   console.log(JSON.stringify({ event: "live_production_settings_validated", ...result }));
 }

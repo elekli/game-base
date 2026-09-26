@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -7,6 +8,7 @@ import {
   readJsonSafely,
   readLiveSettings,
 } from "../../scripts/check-live-production-settings";
+import { fingerprintRevealedKeys } from "../../scripts/fingerprint-supabase-api-keys.mjs";
 
 const encrypted = (key: string, value: string) => ({
   key,
@@ -26,11 +28,13 @@ const validSettings = {
   githubEnvironmentSecretNames: [
     "PRODUCTION_MIGRATION_CA_CERT",
     "PRODUCTION_MIGRATION_DATABASE_URL",
+    "SUPABASE_ACCESS_TOKEN",
   ],
   supabaseApiKeyFingerprints: {
-    publishable:
+    publishable: [
       "4462e410b46df06f21744e9cafcfc75e7eb8975cab8629ce6360be06d08fe557",
-    secret: "d44eabeca41cb395b0d615673cc6ba17d762beb16d55380aecf539a551ed93b2",
+    ],
+    secret: ["902073529a30595a4532129356f6b42a3eff7bf0227e2818280fb0f87f22fdf9"],
   },
   githubProtection: {
     enforce_admins: { enabled: true },
@@ -82,7 +86,7 @@ const validSettings = {
       key: "EXPECTED_SUPABASE_SECRET_KEY_SHA256",
       target: ["production"],
       type: "encrypted",
-      value: "d44eabeca41cb395b0d615673cc6ba17d762beb16d55380aecf539a551ed93b2",
+      value: "902073529a30595a4532129356f6b42a3eff7bf0227e2818280fb0f87f22fdf9",
     },
   ],
   vercelProject: {
@@ -210,6 +214,23 @@ describe("live production settings", () => {
     ).toThrow("Production migration TLS secrets are missing");
   });
 
+  it("rejects a missing Supabase management token", () => {
+    expect(() => checkLiveProductionSettings({
+      ...validSettings,
+      githubEnvironmentSecretNames: validSettings.githubEnvironmentSecretNames.filter((name) => name !== "SUPABASE_ACCESS_TOKEN"),
+    })).toThrow("Production Supabase management token is missing");
+  });
+
+  it("checks hosted bindings without GitHub administration access", () => {
+    expect(checkLiveProductionSettings({
+      ...validSettings,
+      githubDeploymentBranchPolicies: [],
+      githubEnvironmentSecretNames: [],
+      githubProtection: {},
+      githubEnvironment: {},
+    }, true).productionCustomDomain).toBe("gamebase.elek.li");
+  });
+
   it("rejects verify checks owned by the wrong GitHub app", () => {
     expect(() =>
       checkLiveProductionSettings({
@@ -285,15 +306,41 @@ describe("live production settings", () => {
     expect(JSON.stringify(thrown)).not.toContain(secret);
   });
 
+  it("captures stderr from a real failing subprocess", () => {
+    const stderr = vi.spyOn(process.stderr, "write");
+    try {
+      expect(() => readJsonSafely(process.execPath, ["-e", "process.stderr.write('sb_secret_must_never_escape');process.exit(1)"], execFileSync)).toThrow("無法安全讀取 production 設定。");
+      expect(stderr.mock.calls.join(" ")).not.toContain("sb_secret_must_never_escape");
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("fingerprints every active key and rejects masked or missing keys", () => {
+    const publishable = "sb_publishable_abcdefghijklmnop";
+    const oldSecret = "sb_secret_abcdefghijklmnop";
+    const newSecret = "sb_secret_qrstuvwxyzABCDEF";
+    expect(fingerprintRevealedKeys([
+      { type: "publishable", api_key: publishable },
+      { type: "secret", api_key: oldSecret },
+      { type: "secret", api_key: newSecret },
+    ])).toEqual({
+      publishable: [createHash("sha256").update(publishable).digest("hex")],
+      secret: [oldSecret, newSecret].map((key) => createHash("sha256").update(key).digest("hex")),
+    });
+    expect(() => fingerprintRevealedKeys([{ type: "publishable", api_key: publishable }, { type: "secret", api_key: "sb_secret_****" }])).toThrow("masked");
+    expect(() => fingerprintRevealedKeys([{ type: "publishable", api_key: publishable }])).toThrow("missing");
+  });
+
   it("reads Vercel through REST while retaining the GitHub and Supabase command runner", async () => {
-    const publishable = "sb_publishable_fixture";
-    const secret = "sb_secret_fixture";
+    const publishable = "sb_publishable_fixture_abcdefghijklmnop";
+    const secret = "sb_secret_fixture_abcdefghijklmnop";
     const commandRunner = vi.fn((command: string, args: string[]) => {
-      if (command === "pnpm") {
-        return JSON.stringify([
-          { api_key: publishable, type: "publishable" },
-          { api_key: secret, type: "secret" },
-        ]);
+      if (command === process.execPath) {
+        return JSON.stringify({
+          publishable: [createHash("sha256").update(publishable).digest("hex")],
+          secret: [createHash("sha256").update(secret).digest("hex")],
+        });
       }
       if (args.at(-1)?.endsWith("deployment-branch-policies")) {
         return JSON.stringify({ branch_policies: [{ name: "main" }] });
@@ -357,7 +404,12 @@ describe("live production settings", () => {
       commandRunner.mock.calls.map(([command]) => command),
     ).not.toContain("vercel");
     expect(commandRunner.mock.calls.map(([command]) => command)).toContain("gh");
-    expect(commandRunner.mock.calls.map(([command]) => command)).toContain("pnpm");
+    expect(commandRunner.mock.calls.map(([command]) => command)).toContain(process.execPath);
+    expect(commandRunner).toHaveBeenCalledWith(
+      process.execPath,
+      ["scripts/fingerprint-supabase-api-keys.mjs"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
     expect(vercelClient.listProjectEnvironmentVariables).toHaveBeenCalledOnce();
     expect(vercelClient.getProjectEnvironmentVariable).toHaveBeenCalledTimes(11);
     expect(vercelClient.getProject).toHaveBeenCalledOnce();
@@ -376,5 +428,9 @@ describe("live production settings", () => {
       value: "wbtyuvufhrhybquzwfip",
       valueSha256: undefined,
     });
+
+    commandRunner.mockClear();
+    await readLiveSettings({ commandRunner, vercelClient, hostedOnly: true });
+    expect(commandRunner.mock.calls.map(([command]) => command)).toEqual([process.execPath]);
   });
 });
