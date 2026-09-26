@@ -326,8 +326,14 @@ export class PostgresGameStore implements GameStore {
   async createFromSource(ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<{ game: GameRecord; created: boolean }> {
     const sourceCoverOperationId = randomUUID();
     const run = async (tx: QueryExecutor) => {
-      const identityRows = await tx.execute(sql`insert into app_private.external_game_identities (provider, source_id, medium, snapshot) values (${ref.provider}, ${ref.sourceId}, ${ref.medium}, ${JSON.stringify(snapshot)}::jsonb) returning id`) as Row[];
+      let identityRows = await tx.execute(sql`insert into app_private.external_game_identities (provider, source_id, medium, snapshot) values (${ref.provider}, ${ref.sourceId}, ${ref.medium}, ${JSON.stringify(snapshot)}::jsonb) on conflict (provider, source_id) do nothing returning id, medium`) as Row[];
+      if (!identityRows[0]) identityRows = await tx.execute(sql`select id, medium from app_private.external_game_identities where provider = ${ref.provider} and source_id = ${ref.sourceId} for update`) as Row[];
+      if (!identityRows[0]) throw new SourcePersistenceFailedError();
+      if (identityRows[0].medium !== ref.medium) throw new SourceMediumMismatchError();
       const identityId = String(identityRows[0].id);
+      const existingRows = await tx.execute(sql`select id from app_private.games where external_game_identity_id = ${identityId} limit 1`) as Row[];
+      if (existingRows[0]) return { gameId: String(existingRows[0].id), created: false };
+      await tx.execute(sql`update app_private.external_game_identities set snapshot = ${JSON.stringify(snapshot)}::jsonb, updated_at = clock_timestamp() where id = ${identityId}`);
       const gameRows = await tx.execute(sql`insert into app_private.games (medium, display_name, external_game_identity_id) values (${ref.medium}, ${snapshot.title}, ${identityId}) returning id, version, medium, display_name, player_count_note, external_game_identity_id, trashed_at, created_at`) as Row[];
       const gameId = String(gameRows[0].id);
       await this.writeSourceNames(tx, gameId, snapshot);
@@ -339,7 +345,7 @@ export class PostgresGameStore implements GameStore {
       const created = await this.db.transaction(run);
       const game = await this.get(created.gameId);
       if (!game) throw new SourcePersistenceFailedError();
-      return { game, created: true };
+      return { game, created: created.created };
     }
     catch (error) {
       if (sqlState(error) === "23505") {

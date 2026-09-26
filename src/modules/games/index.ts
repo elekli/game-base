@@ -64,7 +64,7 @@ export function createGamesService(catalogs: Readonly<Record<Provider, SourceCat
       if (actual !== expected) throw new SourceContentChangedError({ candidate: { ref, title: snapshot.title, releaseYear: snapshot.releaseYear, coverPreviewUrl: snapshot.coverUrl }, snapshot, fingerprint: actual });
       try {
         const result = await store.createFromSource(ref, snapshot);
-        return { ...result, identityConflict: null };
+        return { ...result, identityConflict: result.created ? null : result.game.trashedAt ? "trashed" : "active" };
       } catch (error) {
         if (isSourceIdentityConflictError(error)) {
           const game = await store.get(error.gameId);
