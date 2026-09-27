@@ -15,6 +15,7 @@ import {
   type CommandResourceState,
 } from "@/modules/commands";
 import { NoteContentBlankError, NoteGameUnavailableError, NoteStateConflictError, NoteVersionConflictError, type NoteRecord } from "@/modules/notes";
+import { ListMemberConflictError, ListNameInUseError, ListNameInvalidError, ListReferenceInvalidError, ListStateConflictError, type ListRecord } from "@/modules/lists";
 
 type PrivateActionDependencies = Readonly<{
   verifyAccessToken: AccessTokenVerifier;
@@ -22,7 +23,7 @@ type PrivateActionDependencies = Readonly<{
   onUnhandledFailure: (context: Readonly<{ errorCode: string; requestId: string }>) => void | Promise<void>;
 }>;
 
-type PrivateActionFailureCode = "access_denied" | "invalid_input" | "library_conflict" | "source_operation" | "command_version_conflict" | "command_idempotency_conflict" | "command_target_not_found" | "note_content_blank" | "note_game_unavailable" | "note_state_conflict" | "operation_failed";
+type PrivateActionFailureCode = "access_denied" | "invalid_input" | "library_conflict" | "source_operation" | "command_version_conflict" | "command_idempotency_conflict" | "command_target_not_found" | "note_content_blank" | "note_game_unavailable" | "note_state_conflict" | "list_name_invalid" | "list_name_in_use" | "archived_list_found" | "list_member_conflict" | "list_reference_invalid" | "list_state_conflict" | "operation_failed";
 
 export type PrivateActionResult<Success extends object = Record<never, never>> =
   | (Readonly<{ ok: true }> & Success)
@@ -37,6 +38,8 @@ export type PrivateActionResult<Success extends object = Record<never, never>> =
     currentVersion?: number;
     currentState?: CommandResourceState;
     currentNote?: NoteRecord;
+    existingList?: ListRecord;
+    restorableMember?: boolean;
   }>;
 
 type PrivateActionOptions<Input, Success extends object> = PrivateActionDependencies & Readonly<{
@@ -81,6 +84,15 @@ export async function handlePrivateAction<Input, Success extends object>(
     }
     return { ok: true, ...(await options.operation(owner, parsed.data)) };
   } catch (error) {
+    if (error instanceof ListNameInUseError) {
+      return { ok: false, code: error.code as "list_name_in_use" | "archived_list_found", message: error.message, requestId, existingList: error.existing };
+    }
+    if (error instanceof ListMemberConflictError) {
+      return { ok: false, code: "list_member_conflict", message: error.message, requestId, restorableMember: error.restorable };
+    }
+    if (error instanceof ListNameInvalidError || error instanceof ListReferenceInvalidError || error instanceof ListStateConflictError) {
+      return { ok: false, code: error.code as "list_name_invalid" | "list_reference_invalid" | "list_state_conflict", message: error.message, requestId };
+    }
     if (error instanceof NoteVersionConflictError) {
       return { ok: false, code: "command_version_conflict", message: error.message, requestId, currentVersion: error.current.version, currentState: error.current.state, currentNote: error.current };
     }

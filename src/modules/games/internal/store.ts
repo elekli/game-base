@@ -231,7 +231,7 @@ export class InMemoryGameStore implements GameStore {
       const existingId = this.identities.get(key);
       if (existingId) {
         const existing = this.games.get(existingId);
-        if (existing) throw new SourceIdentityConflictError(existing.id, existing.trashedAt !== null);
+        if (existing) return { game: existing, created: false };
       }
       const game: GameRecord = { id: randomUUID(), version: 1, medium: ref.medium, displayName: snapshot.title, customDisplayName: null, sourceNames: sourceNames(snapshot), aliases: snapshot.aliases, actualPlatforms: [], tags: [], contributors: this.sourceContributionsFor(snapshot), playerCountNote: null, coverIngestState: null, trashedAt: null, externalIdentityId: randomUUID(), snapshot, createdAt: new Date().toISOString() };
       this.games.set(game.id, game);

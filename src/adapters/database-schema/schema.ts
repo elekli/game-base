@@ -81,6 +81,27 @@ export const externalGameIdentitiesInAppPrivate = appPrivate.table("external_gam
 	pgPolicy("runtime_external_identity", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
+export const externalGameReferencesInAppPrivate = appPrivate.table("external_game_references", {
+	externalGameIdentityId: uuid("external_game_identity_id").notNull(),
+	name: text().notNull(),
+	releaseYear: integer("release_year"),
+	thumbnailObjectKey: text("thumbnail_object_key"),
+	thumbnailState: text("thumbnail_state").default('missing').notNull(),
+	thumbnailLeaseToken: uuid("thumbnail_lease_token"),
+	thumbnailLeaseUntil: timestamp("thumbnail_lease_until", { withTimezone: true, mode: 'string' }),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	version: bigint({ mode: "number" }).default(1).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.externalGameIdentityId],
+			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
+			name: "external_game_references_external_game_identity_id_fkey"
+		}).onDelete("restrict"),
+	pgPolicy("runtime_external_game_references", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
 export const externalPlayerProfilesInAppPrivate = appPrivate.table("external_player_profiles", {
 	identityId: uuid("identity_id").notNull(),
 	minPlayers: integer("min_players"),
@@ -185,6 +206,70 @@ export const gamesInAppPrivate = appPrivate.table("games", {
 			name: "games_external_identity_medium_fk"
 		}),
 	pgPolicy("runtime_games", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
+export const listCommandReceiptsInAppPrivate = appPrivate.table("list_command_receipts", {
+	commandId: uuid("command_id").notNull(),
+	ownerId: text("owner_id").notNull(),
+	commandKind: text("command_kind").notNull(),
+	targetId: uuid("target_id"),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	expectedVersion: bigint("expected_version", { mode: "number" }),
+	payloadSha256: text("payload_sha256").notNull(),
+	resultId: uuid("result_id"),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	resultVersion: bigint("result_version", { mode: "number" }),
+	resultState: text("result_state"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).default(sql`(now() + '90 days'::interval)`).notNull(),
+}, (table) => [
+	index("list_command_receipts_expiry_idx").using("btree", table.expiresAt.asc().nullsLast().op("timestamptz_ops"), table.commandId.asc().nullsLast().op("timestamptz_ops")),
+	pgPolicy("runtime_list_command_receipts", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
+export const listMembershipsInAppPrivate = appPrivate.table("list_memberships", {
+	id: uuid().notNull(),
+	listId: uuid("list_id").notNull(),
+	gameId: uuid("game_id"),
+	externalGameIdentityId: uuid("external_game_identity_id"),
+	description: text(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	version: bigint({ mode: "number" }).default(1).notNull(),
+	removedAt: timestamp("removed_at", { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+}, (table) => [
+	index("list_memberships_external_idx").using("btree", table.externalGameIdentityId.asc().nullsLast().op("uuid_ops")).where(sql`(removed_at IS NULL)`),
+	index("list_memberships_game_idx").using("btree", table.gameId.asc().nullsLast().op("uuid_ops")).where(sql`(removed_at IS NULL)`),
+	foreignKey({
+			columns: [table.externalGameIdentityId],
+			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
+			name: "list_memberships_external_game_identity_id_fkey"
+		}).onDelete("restrict"),
+	foreignKey({
+			columns: [table.gameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "list_memberships_game_id_fkey"
+		}).onDelete("restrict"),
+	foreignKey({
+			columns: [table.listId],
+			foreignColumns: [listsInAppPrivate.id],
+			name: "list_memberships_list_id_fkey"
+		}).onDelete("restrict"),
+	pgPolicy("runtime_list_memberships", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
+export const listsInAppPrivate = appPrivate.table("lists", {
+	id: uuid().notNull(),
+	name: text().notNull(),
+	nameKey: text("name_key").generatedAlwaysAs(sql`(lower(btrim(name)) COLLATE "C")`),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	version: bigint({ mode: "number" }).default(1).notNull(),
+	archivedAt: timestamp("archived_at", { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+}, (table) => [
+	pgPolicy("runtime_lists", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
 export const manualContributionsInAppPrivate = appPrivate.table("manual_contributions", {

@@ -57,6 +57,17 @@
       "withCheck": "true"
     },
     {
+      "table": "external_game_references",
+      "name": "runtime_external_game_references",
+      "validFrom": "0018",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
       "table": "external_player_profiles",
       "name": "runtime_external_player_profiles",
       "validFrom": "0003",
@@ -115,6 +126,39 @@
       "table": "games",
       "name": "runtime_games",
       "validFrom": "0002",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "list_command_receipts",
+      "name": "runtime_list_command_receipts",
+      "validFrom": "0018",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "list_memberships",
+      "name": "runtime_list_memberships",
+      "validFrom": "0018",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "lists",
+      "name": "runtime_lists",
+      "validFrom": "0018",
       "validUntilExclusive": null,
       "permissiveness": "PERMISSIVE",
       "command": "ALL",
