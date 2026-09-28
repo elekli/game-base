@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getTableConfig } from "drizzle-orm/pg-core";
-import { mediaAssetsInAppPrivate, mediaIngestsInAppPrivate } from "./schema";
+import { gameRelationsInAppPrivate, mediaAssetsInAppPrivate, mediaIngestsInAppPrivate } from "./schema";
 
 describe("generated database schema", () => {
   it.each([
@@ -11,5 +11,11 @@ describe("generated database schema", () => {
 
     expect(matches).toHaveLength(1);
     expect(matches[0]?.onDelete).toBe(onDelete);
+  });
+
+  it("prevents cascading deletion of either stable relation endpoint", () => {
+    const foreignKeys = getTableConfig(gameRelationsInAppPrivate).foreignKeys;
+    expect(foreignKeys).toHaveLength(4);
+    expect(foreignKeys.map((foreignKey) => foreignKey.onDelete)).toEqual(["restrict", "restrict", "restrict", "restrict"]);
   });
 });

@@ -10,6 +10,7 @@ export type SourceErrorCode =
   | "source_response_invalid"
   | "source_content_changed"
   | "source_identity_conflict"
+  | "source_link_reference_conflict"
   | "source_medium_mismatch"
   | "source_not_linked"
   | "source_game_unavailable"
@@ -53,6 +54,12 @@ export class SourceContentChangedError extends SourceOperationError {
 }
 export class SourceIdentityConflictError extends SourceOperationError {
   constructor(public readonly gameId: string, public readonly trashed: boolean) { super("source_identity_conflict", trashed ? "此來源已存在於資源回收區，請先還原。" : "此來源已存在於收藏庫。", null); this.name = "SourceIdentityConflictError"; }
+}
+export class SourceLinkReferenceConflictError extends SourceOperationError {
+  constructor(readonly lists: readonly Readonly<{ id: string; name: string }>[], readonly relations: readonly Readonly<{ id: string; version: number; otherGameId: string | null; otherName: string }>[]) {
+    super("source_link_reference_conflict", "連結這個來源會造成清單或關聯重複。請先在列出的清單或關聯中解除其中一筆，再重試。", null);
+    this.name = "SourceLinkReferenceConflictError";
+  }
 }
 
 export function isSourceIdentityConflictError(error: unknown): error is SourceIdentityConflictError {

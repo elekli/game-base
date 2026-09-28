@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { SourceIdentityConflictError, SourceRateLimitedError, SourceUnavailableError } from "@/modules/games/internal/errors";
+import { SourceIdentityConflictError, SourceLinkReferenceConflictError, SourceRateLimitedError, SourceUnavailableError } from "@/modules/games/internal/errors";
 import { LibraryConflictError } from "@/modules/library/internal/errors";
 import { AccessDeniedError } from "@/shared/auth/access-denied-error";
 import { handlePrivateAction } from "@/shared/auth/private-action";
@@ -183,6 +183,28 @@ describe("private Server Action boundary", () => {
       ok: false,
       code: "source_operation",
       message: "來源暫時無法使用，請稍後再試。",
+      requestId,
+    });
+  });
+
+  it("names a source link rejected because it would collapse memberships or relations", async () => {
+    const result = await handlePrivateAction(makeHeaders("valid-token"), {
+      verifyAccessToken: createVerifier(),
+      input: validInput,
+      schema: inputSchema,
+      inputErrorMessage,
+      operation: async () => { throw new SourceLinkReferenceConflictError([{ id: "list-1", name: "想玩的遊戲" }], [{ id: "relation-1", version: 2, otherGameId: "game-1", otherName: "Catan" }]); },
+      onAccessDenied: async () => undefined,
+      onUnhandledFailure: async () => undefined,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "source_operation",
+      sourceCode: "source_link_reference_conflict",
+      message: "連結這個來源會造成清單或關聯重複。請先在列出的清單或關聯中解除其中一筆，再重試。",
+      conflictingLists: [{ id: "list-1", name: "想玩的遊戲" }],
+      conflictingRelations: [{ id: "relation-1", version: 2, otherGameId: "game-1", otherName: "Catan" }],
       requestId,
     });
   });

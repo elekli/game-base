@@ -21,6 +21,10 @@ type ContributionConfirmation = Readonly<{
   role: ContributionRole;
   matches: readonly ContributorMatch[];
 }>;
+type SourceLinkConflicts = Readonly<{
+  lists: readonly Readonly<{ id: string; name: string }>[];
+  relations: readonly Readonly<{ id: string; version: number; otherGameId: string | null; otherName: string }>[];
+}>;
 
 class PrivateActionError extends Error {
   constructor(readonly result: Extract<PrivateActionResult, { ok: false }>) { super(result.message); this.name = "PrivateActionError"; }
@@ -43,6 +47,7 @@ export function GameEditClient({ game }: Props) {
   const [confirmation, setConfirmation] = useState<NormalizedSearchCandidate | null>(null);
   const [linkReady, setLinkReady] = useState(false);
   const [conflictGameId, setConflictGameId] = useState<string | null>(null);
+  const [referenceConflicts, setReferenceConflicts] = useState<SourceLinkConflicts | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [confirmingRefKey, setConfirmingRefKey] = useState<string | null>(null);
   const [isLinking, setIsLinking] = useState(false);
@@ -287,12 +292,14 @@ export function GameEditClient({ game }: Props) {
       linkingRef.current = true;
       setIsLinking(true);
       setConflictGameId(null);
+      setReferenceConflicts(null);
       setMessage("連結中……");
       unwrapPrivateAction(await linkExternalSource({ gameId: game.id, provider: selectedRef.provider, sourceId: selectedRef.sourceId, confirmationFingerprint: fingerprint }));
       window.location.reload();
     } catch (error) {
       if (error instanceof PrivateActionError) {
         if (typeof error.result.existingGameId === "string") setConflictGameId(error.result.existingGameId);
+        if (error.result.sourceCode === "source_link_reference_conflict") setReferenceConflicts({ lists: error.result.conflictingLists ?? [], relations: error.result.conflictingRelations ?? [] });
         setMessage(error.result.existingIsTrashed
           ? "此來源已存在於資源回收區，請先還原，再開啟既有條目。"
           : error.result.message);
@@ -393,6 +400,7 @@ export function GameEditClient({ game }: Props) {
         </section>}
         {confirmation && selectedRef && <div className="rounded-xl bg-emerald-50 p-3 text-sm"><p className="font-semibold">{confirmation.title}</p><p className="mt-1 text-slate-600">發行年份：{confirmation.releaseYear ?? "未提供"}</p><p className="mt-1 text-slate-600">來源：{confirmation.ref.provider.toUpperCase()}</p><p className="mt-1 text-slate-600">請確認這是要連結的遊戲。</p></div>}
         {conflictGameId && <Link href={`/games/${conflictGameId}`} className="block rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-center text-sm font-semibold text-amber-900">開啟既有條目</Link>}
+        {referenceConflicts && <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"><h3 className="font-semibold">請先處理重複項目，再重試來源連結</h3>{referenceConflicts.lists.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-5">{referenceConflicts.lists.map((list) => <li key={list.id}>清單：<Link href={`/lists/${list.id}`} className="underline">{list.name}</Link>（開啟後移除要捨棄的其中一項）</li>)}</ul>}{referenceConflicts.relations.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-5">{referenceConflicts.relations.map((relation) => <li key={relation.id}>關聯：<Link href={`/games/${relation.otherGameId ?? game.id}#relations-title`} className="underline">{relation.otherName}</Link>（開啟關聯區，解除要捨棄的一筆）</li>)}</ul>}</div>}
         {linkReady && <button type="button" disabled={isLinking || confirmingRefKey !== null} onClick={() => void link()} className="w-full rounded-xl bg-emerald-900 px-4 py-3 font-semibold text-white disabled:opacity-60">{isLinking ? "連結中……" : "連結此來源"}</button>}
       </div>
     </details>}
