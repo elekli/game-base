@@ -163,6 +163,56 @@ export const gamePlatformsInAppPrivate = appPrivate.table("game_platforms", {
 	pgPolicy("runtime_game_platforms", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
+export const gameRelationsInAppPrivate = appPrivate.table("game_relations", {
+	id: uuid().defaultRandom().notNull(),
+	leftGameId: uuid("left_game_id"),
+	leftExternalGameIdentityId: uuid("left_external_game_identity_id"),
+	rightGameId: uuid("right_game_id"),
+	rightExternalGameIdentityId: uuid("right_external_game_identity_id"),
+	leftReferenceKey: text("left_reference_key").generatedAlwaysAs(sql`
+CASE
+    WHEN (left_game_id IS NOT NULL) THEN ('1:'::text || (left_game_id)::text)
+    ELSE ('0:'::text || (left_external_game_identity_id)::text)
+END`),
+	rightReferenceKey: text("right_reference_key").generatedAlwaysAs(sql`
+CASE
+    WHEN (right_game_id IS NOT NULL) THEN ('1:'::text || (right_game_id)::text)
+    ELSE ('0:'::text || (right_external_game_identity_id)::text)
+END`),
+	description: text(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	version: bigint({ mode: "number" }).default(1).notNull(),
+	removedAt: timestamp("removed_at", { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+}, (table) => [
+	index("game_relations_left_external_idx").using("btree", table.leftExternalGameIdentityId.asc().nullsLast().op("uuid_ops")).where(sql`(removed_at IS NULL)`),
+	index("game_relations_left_game_idx").using("btree", table.leftGameId.asc().nullsLast().op("uuid_ops")).where(sql`(removed_at IS NULL)`),
+	index("game_relations_right_external_idx").using("btree", table.rightExternalGameIdentityId.asc().nullsLast().op("uuid_ops")).where(sql`(removed_at IS NULL)`),
+	index("game_relations_right_game_idx").using("btree", table.rightGameId.asc().nullsLast().op("uuid_ops")).where(sql`(removed_at IS NULL)`),
+	foreignKey({
+			columns: [table.leftExternalGameIdentityId],
+			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
+			name: "game_relations_left_external_game_identity_id_fkey"
+		}).onDelete("restrict"),
+	foreignKey({
+			columns: [table.leftGameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "game_relations_left_game_id_fkey"
+		}).onDelete("restrict"),
+	foreignKey({
+			columns: [table.rightExternalGameIdentityId],
+			foreignColumns: [externalGameIdentitiesInAppPrivate.id],
+			name: "game_relations_right_external_game_identity_id_fkey"
+		}).onDelete("restrict"),
+	foreignKey({
+			columns: [table.rightGameId],
+			foreignColumns: [gamesInAppPrivate.id],
+			name: "game_relations_right_game_id_fkey"
+		}).onDelete("restrict"),
+	pgPolicy("runtime_game_relations", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
 export const gameTagsInAppPrivate = appPrivate.table("game_tags", {
 	gameId: uuid("game_id").notNull(),
 	tagId: uuid("tag_id").notNull(),
@@ -531,6 +581,25 @@ export const productionSmokeCanariesInAppPrivate = appPrivate.table("production_
 	pgPolicy("migrator_production_smoke_canaries_all", { as: "permissive", for: "all", to: ["app_migrator"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
+export const relationCommandReceiptsInAppPrivate = appPrivate.table("relation_command_receipts", {
+	commandId: uuid("command_id").notNull(),
+	ownerId: text("owner_id").notNull(),
+	commandKind: text("command_kind").notNull(),
+	targetId: uuid("target_id"),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	expectedVersion: bigint("expected_version", { mode: "number" }),
+	payloadSha256: text("payload_sha256").notNull(),
+	resultId: uuid("result_id"),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	resultVersion: bigint("result_version", { mode: "number" }),
+	resultState: text("result_state"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).default(sql`(now() + '90 days'::interval)`).notNull(),
+}, (table) => [
+	index("relation_command_receipts_expiry_idx").using("btree", table.expiresAt.asc().nullsLast().op("timestamptz_ops"), table.commandId.asc().nullsLast().op("timestamptz_ops")),
+	pgPolicy("runtime_relation_command_receipts", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
 export const sourceCategoriesInAppPrivate = appPrivate.table("source_categories", {
 	id: uuid().defaultRandom().notNull(),
 	provider: text().notNull(),
@@ -591,47 +660,4 @@ export const tagsInAppPrivate = appPrivate.table("tags", {
 	normalizedName: text("normalized_name").notNull(),
 }, (table) => [
 	pgPolicy("runtime_tags", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
-]);
-
-export const gameRelationsInAppPrivate = appPrivate.table("game_relations", {
-	id: uuid().defaultRandom().notNull(),
-	leftGameId: uuid("left_game_id"),
-	leftExternalGameIdentityId: uuid("left_external_game_identity_id"),
-	rightGameId: uuid("right_game_id"),
-	rightExternalGameIdentityId: uuid("right_external_game_identity_id"),
-	leftReferenceKey: text("left_reference_key").generatedAlwaysAs(sql`case when left_game_id is not null then '1:' || left_game_id::text else '0:' || left_external_game_identity_id::text end`),
-	rightReferenceKey: text("right_reference_key").generatedAlwaysAs(sql`case when right_game_id is not null then '1:' || right_game_id::text else '0:' || right_external_game_identity_id::text end`),
-	description: text(),
-	version: bigint({ mode: "number" }).default(1).notNull(),
-	removedAt: timestamp("removed_at", { withTimezone: true, mode: "string" }),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).default(sql`clock_timestamp()`).notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).default(sql`clock_timestamp()`).notNull(),
-}, (table) => [
-	index("game_relations_left_game_idx").using("btree", table.leftGameId.asc().nullsLast().op("uuid_ops")).where(sql`(removed_at IS NULL)`),
-	index("game_relations_right_game_idx").using("btree", table.rightGameId.asc().nullsLast().op("uuid_ops")).where(sql`(removed_at IS NULL)`),
-	index("game_relations_left_external_idx").using("btree", table.leftExternalGameIdentityId.asc().nullsLast().op("uuid_ops")).where(sql`(removed_at IS NULL)`),
-	index("game_relations_right_external_idx").using("btree", table.rightExternalGameIdentityId.asc().nullsLast().op("uuid_ops")).where(sql`(removed_at IS NULL)`),
-	foreignKey({ columns: [table.leftGameId], foreignColumns: [gamesInAppPrivate.id], name: "game_relations_left_game_id_fkey" }).onDelete("restrict"),
-	foreignKey({ columns: [table.leftExternalGameIdentityId], foreignColumns: [externalGameIdentitiesInAppPrivate.id], name: "game_relations_left_external_game_identity_id_fkey" }).onDelete("restrict"),
-	foreignKey({ columns: [table.rightGameId], foreignColumns: [gamesInAppPrivate.id], name: "game_relations_right_game_id_fkey" }).onDelete("restrict"),
-	foreignKey({ columns: [table.rightExternalGameIdentityId], foreignColumns: [externalGameIdentitiesInAppPrivate.id], name: "game_relations_right_external_game_identity_id_fkey" }).onDelete("restrict"),
-	uniqueIndex("game_relations_reference_pair_unique").on(table.leftReferenceKey, table.rightReferenceKey),
-	pgPolicy("runtime_game_relations", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true` }),
-]);
-
-export const relationCommandReceiptsInAppPrivate = appPrivate.table("relation_command_receipts", {
-	commandId: uuid("command_id").notNull(),
-	ownerId: text("owner_id").notNull(),
-	commandKind: text("command_kind").notNull(),
-	targetId: uuid("target_id"),
-	expectedVersion: bigint("expected_version", { mode: "number" }),
-	payloadSha256: text("payload_sha256").notNull(),
-	resultId: uuid("result_id"),
-	resultVersion: bigint("result_version", { mode: "number" }),
-	resultState: text("result_state"),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).defaultNow().notNull(),
-	expiresAt: timestamp("expires_at", { withTimezone: true, mode: "string" }).default(sql`(now() + '90 days'::interval)`).notNull(),
-}, (table) => [
-	index("relation_command_receipts_expiry_idx").using("btree", table.expiresAt.asc().nullsLast().op("timestamptz_ops"), table.commandId.asc().nullsLast().op("uuid_ops")),
-	pgPolicy("runtime_relation_command_receipts", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true` }),
 ]);
