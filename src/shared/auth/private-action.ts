@@ -6,7 +6,7 @@ import { requireOwner } from "./require-owner";
 import type { AccessTokenVerifier, OwnerIdentity } from "./verify-access-token";
 import { getRequestId } from "@/shared/observability/request-id";
 import { serializeBootstrapLogEvent } from "@/shared/observability/structured-log";
-import { SourceIdentityConflictError, SourceOperationError } from "@/modules/games";
+import { SourceIdentityConflictError, SourceLinkReferenceConflictError, SourceOperationError } from "@/modules/games";
 import { LibraryConflictError } from "@/modules/library";
 import {
   CommandIdempotencyConflictError,
@@ -16,6 +16,7 @@ import {
 } from "@/modules/commands";
 import { NoteContentBlankError, NoteGameUnavailableError, NoteStateConflictError, NoteVersionConflictError, type NoteRecord } from "@/modules/notes";
 import { ListMemberConflictError, ListNameInUseError, ListNameInvalidError, ListReferenceInvalidError, ListStateConflictError, type ListRecord } from "@/modules/lists";
+import { RelationConflictError, RelationInvalidError, RelationStateConflictError } from "@/modules/relations";
 
 type PrivateActionDependencies = Readonly<{
   verifyAccessToken: AccessTokenVerifier;
@@ -23,7 +24,7 @@ type PrivateActionDependencies = Readonly<{
   onUnhandledFailure: (context: Readonly<{ errorCode: string; requestId: string }>) => void | Promise<void>;
 }>;
 
-type PrivateActionFailureCode = "access_denied" | "invalid_input" | "library_conflict" | "source_operation" | "command_version_conflict" | "command_idempotency_conflict" | "command_target_not_found" | "note_content_blank" | "note_game_unavailable" | "note_state_conflict" | "list_name_invalid" | "list_name_in_use" | "archived_list_found" | "list_member_conflict" | "list_reference_invalid" | "list_state_conflict" | "operation_failed";
+type PrivateActionFailureCode = "access_denied" | "invalid_input" | "library_conflict" | "source_operation" | "command_version_conflict" | "command_idempotency_conflict" | "command_target_not_found" | "note_content_blank" | "note_game_unavailable" | "note_state_conflict" | "list_name_invalid" | "list_name_in_use" | "archived_list_found" | "list_member_conflict" | "list_reference_invalid" | "list_state_conflict" | "relation_invalid" | "relation_conflict" | "relation_state_conflict" | "operation_failed";
 
 export type PrivateActionResult<Success extends object = Record<never, never>> =
   | (Readonly<{ ok: true }> & Success)
@@ -40,6 +41,12 @@ export type PrivateActionResult<Success extends object = Record<never, never>> =
     currentNote?: NoteRecord;
     existingList?: ListRecord;
     restorableMember?: boolean;
+    restorableRelation?: boolean;
+    existingRelationId?: string;
+    existingRelationVersion?: number;
+    sourceCode?: string;
+    conflictingLists?: readonly Readonly<{ id: string; name: string }>[];
+    conflictingRelations?: readonly Readonly<{ id: string; version: number; otherGameId: string | null; otherName: string }>[];
   }>;
 
 type PrivateActionOptions<Input, Success extends object> = PrivateActionDependencies & Readonly<{
@@ -120,11 +127,15 @@ export async function handlePrivateAction<Input, Success extends object>(
         code: "source_operation",
         message: error.message,
         requestId,
+        ...(error instanceof SourceLinkReferenceConflictError ? { sourceCode: error.sourceCode, conflictingLists: error.lists, conflictingRelations: error.relations } : {}),
         ...(error instanceof SourceIdentityConflictError ? { existingGameId: error.gameId } : {}),
         ...(error instanceof SourceIdentityConflictError ? { existingIsTrashed: error.trashed } : {}),
         ...(error.retryAfterSeconds !== null ? { retryAfterSeconds: error.retryAfterSeconds } : {}),
       };
     }
+    if (error instanceof RelationConflictError) return { ok: false, code: "relation_conflict", message: error.message, requestId, restorableRelation: error.restorable, ...(error.relationId ? { existingRelationId: error.relationId } : {}), ...(error.currentVersion ? { existingRelationVersion: error.currentVersion } : {}) };
+    if (error instanceof RelationStateConflictError) return { ok: false, code: "relation_state_conflict", message: error.message, requestId };
+    if (error instanceof RelationInvalidError) return { ok: false, code: "relation_invalid", message: error.message, requestId };
     if (error instanceof AccessDeniedError) {
       await observeFailureWithoutChangingResult(requestId, () => options.onAccessDenied({ requestId }));
       return { ok: false, code: "access_denied", message: error.message, requestId };

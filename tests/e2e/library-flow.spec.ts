@@ -132,7 +132,7 @@ test("#36 owner data keeps source platforms read-only and hides platform editing
   await expect(page.getByText("PC", { exact: true })).toBeVisible();
   await page.getByText("編輯擁有者資料").click();
   await expect(page.locator('input[name="actualPlatforms"]:checked')).toHaveCount(0);
-  await page.getByLabel("自訂顯示名稱").fill("#36 自訂顯示名稱");
+  await page.getByRole("textbox", { name: "自訂顯示名稱" }).fill("#36 自訂顯示名稱");
   await page.locator('input[name="actualPlatforms"][value="Steam"]').check();
   await page.getByLabel("自由標籤（以逗號分隔）").fill("合作, 收藏");
   await page.getByLabel("人數說明（選填）").fill("兩人時採輪流模式");
@@ -179,7 +179,7 @@ test("#68 response-loss retry preserves form values and replays the same command
     await route.continue();
   });
 
-  const displayName = page.getByLabel("自訂顯示名稱");
+  const displayName = page.getByRole("textbox", { name: "自訂顯示名稱" });
   await displayName.fill(updatedName);
   await page.getByLabel("自由標籤（以逗號分隔）").fill("回應遺失, 可重試");
   await page.getByRole("button", { name: "儲存資料" }).click();
@@ -210,7 +210,7 @@ test("#39 refresh failure keeps safe source data and retry succeeds once per cli
   await expect(page.getByText("A & B", { exact: true })).toBeVisible();
   await expect(page.getByText("alert(1)", { exact: true })).toHaveCount(0);
   await page.getByText("編輯擁有者資料").click();
-  await expect(page.getByLabel("自訂顯示名稱")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "自訂顯示名稱" })).toBeVisible();
   let refreshRequests = 0;
   page.on("request", (request) => { if (request.method() === "POST" && request.headers()["next-action"]) refreshRequests += 1; });
   const refreshButton = page.getByRole("button", { name: "重新整理來源資料" });

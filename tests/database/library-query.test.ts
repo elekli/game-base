@@ -137,16 +137,16 @@ describe("Postgres 收藏庫 SQL 查詢", () => {
     expect((await store.get(alpha.game.id))?.snapshot).toMatchObject({ weight: 1.2, strategyRank: 300 });
     expect((await store.get(beta.game.id))?.snapshot).toMatchObject({ weight: null, strategyRank: null });
     expect((await store.get(video.game.id))?.snapshot).toMatchObject({ weight: null, strategyRank: null });
-    expect((await library.listGames({ media: ["board_game"], weightMax: 2 })).map((game) => game.id)).toEqual([alpha.game.id]);
-    expect((await library.listGames({ media: ["board_game"], sourceCategories: [
+    expect((await library.listGames({ search: "SQL 篩選測試：", media: ["board_game"], weightMax: 2 })).map((game) => game.id)).toEqual([alpha.game.id]);
+    expect((await library.listGames({ search: "SQL 篩選測試：", media: ["board_game"], sourceCategories: [
       { kind: "category", sourceCategoryId: "sql-query-category-a" },
       { kind: "category", sourceCategoryId: "sql-query-category-b" },
       { kind: "mechanic", sourceCategoryId: "sql-query-mechanic" },
     ] })).map((game) => game.id)).toEqual([alpha.game.id, beta.game.id]);
-    expect((await library.listGames({ media: ["board_game"], sort: "weight_asc" })).map((game) => game.id)).toEqual([alpha.game.id, gamma.game.id, beta.game.id]);
-    expect((await library.listGames({ media: ["board_game"], sort: "weight_desc" })).map((game) => game.id)).toEqual([gamma.game.id, alpha.game.id, beta.game.id]);
-    expect((await library.listGames({ media: ["board_game"], sort: "strategy_rank" })).map((game) => game.id)).toEqual([gamma.game.id, alpha.game.id, beta.game.id]);
-    expect((await library.listGames({ media: ["board_game", "video_game"], sourceCategories: [{ kind: "category", sourceCategoryId: "sql-query-hidden" }], weightMin: 4, sort: "weight_desc" })).map((game) => game.id)).toEqual([alpha.game.id, beta.game.id, gamma.game.id, video.game.id]);
+    expect((await library.listGames({ search: "SQL 篩選測試：", media: ["board_game"], sort: "weight_asc" })).map((game) => game.id)).toEqual([alpha.game.id, gamma.game.id, beta.game.id]);
+    expect((await library.listGames({ search: "SQL 篩選測試：", media: ["board_game"], sort: "weight_desc" })).map((game) => game.id)).toEqual([gamma.game.id, alpha.game.id, beta.game.id]);
+    expect((await library.listGames({ search: "SQL 篩選測試：", media: ["board_game"], sort: "strategy_rank" })).map((game) => game.id)).toEqual([gamma.game.id, alpha.game.id, beta.game.id]);
+    expect((await library.listGames({ search: "SQL 篩選測試：", media: ["board_game", "video_game"], sourceCategories: [{ kind: "category", sourceCategoryId: "sql-query-hidden" }], weightMin: 4, sort: "weight_desc" })).map((game) => game.id)).toEqual([alpha.game.id, beta.game.id, gamma.game.id, video.game.id]);
   });
 
   it("facet 只讀取單一媒介的白名單來源分類，且不回收全量 GameRecord", async () => {
@@ -181,7 +181,7 @@ describe("Postgres 收藏庫 SQL 查詢", () => {
     await expect(library.listGames({ actualPlatforms: ["SQL 篩選測試：Steam", "SQL 篩選測試：Switch"], tags: ["SQL 篩選測試：劇情向"] })).resolves.toHaveLength(2);
     await expect(library.listGames({ actualPlatforms: ["sql 篩選測試：steam"], tags: ["SQL 篩選測試：派對", "SQL 篩選測試：動作"] })).resolves.toMatchObject([{ id: hades.id }]);
     await expect(library.listGames({ actualPlatforms: ["來源 PC"] })).resolves.toEqual([]);
-    await expect(library.listGames({ actualPlatforms: [], tags: [] })).resolves.toHaveLength(3);
+    await expect(library.listGames({ search: "SQL 篩選測試：", actualPlatforms: [], tags: [] })).resolves.toHaveLength(3);
     const videoContributorId = (await store.get(zelda.game.id))?.contributors[0]?.contributorId;
     await expect(library.listGames({
       search: "zelDA",

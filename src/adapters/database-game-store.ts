@@ -1,9 +1,10 @@
 import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
+import { referenceKey } from "./reference-key";
 import type { ContributorFacet, ContributorMatch, GameStore, GameEditInput, LegacyManualContributionInput, LibraryGameQuery, ManualContributionInput, ManualContributionResult, SharedLibraryItem } from "@/modules/games";
 import type { ExternalGameRef, GameContribution, GameRecord, Medium, SourceCategory, SourceSnapshot } from "@/modules/games";
-import { SourceGameUnavailableError, SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError, SourceRefreshIdempotencyConflictError } from "@/modules/games";
+import { SourceGameUnavailableError, SourceIdentityConflictError, SourceLinkReferenceConflictError, SourceMediumMismatchError, SourcePersistenceFailedError, SourceRefreshIdempotencyConflictError } from "@/modules/games";
 import { beginSourceCoverIngest, isAllowedSourceCoverUrl } from "@/modules/media/internal/source-cover-ingest";
 import { LibraryConflictError } from "@/modules/library/internal/errors";
 import {
@@ -326,6 +327,7 @@ export class PostgresGameStore implements GameStore {
   async createFromSource(ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<{ game: GameRecord; created: boolean }> {
     const sourceCoverOperationId = randomUUID();
     const run = async (tx: QueryExecutor) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${'source:' + ref.provider + ':' + ref.sourceId}, 0))`);
       let identityRows = await tx.execute(sql`insert into app_private.external_game_identities (provider, source_id, medium, snapshot) values (${ref.provider}, ${ref.sourceId}, ${ref.medium}, ${JSON.stringify(snapshot)}::jsonb) on conflict (provider, source_id) do nothing returning id, medium`) as Row[];
       if (!identityRows[0]) identityRows = await tx.execute(sql`select id, medium from app_private.external_game_identities where provider = ${ref.provider} and source_id = ${ref.sourceId} for update`) as Row[];
       if (!identityRows[0]) throw new SourcePersistenceFailedError();
@@ -359,6 +361,8 @@ export class PostgresGameStore implements GameStore {
   async linkFromSource(gameId: string, ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<GameRecord> {
     const sourceCoverOperationId = randomUUID();
     const run = async (tx: QueryExecutor) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('source-link-reference-collision', 0))`);
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${'source:' + ref.provider + ':' + ref.sourceId}, 0))`);
       const gameRows = await tx.execute(sql`select id, medium, external_game_identity_id, trashed_at from app_private.games where id = ${gameId} for update`) as Row[];
       if (!gameRows[0]) throw new SourcePersistenceFailedError();
       if (gameRows[0].trashed_at) throw new SourceGameUnavailableError();
@@ -366,8 +370,51 @@ export class PostgresGameStore implements GameStore {
       if (gameRows[0].medium !== ref.medium) throw new SourceMediumMismatchError();
       const existing = await tx.execute(sql`select g.id, g.trashed_at from app_private.external_game_identities i join app_private.games g on g.external_game_identity_id = i.id where i.provider = ${ref.provider} and i.source_id = ${ref.sourceId} for update`) as Row[];
       if (existing[0]) throw new SourceIdentityConflictError(String(existing[0].id), Boolean(existing[0].trashed_at));
-      const identityRows = await tx.execute(sql`insert into app_private.external_game_identities (provider, source_id, medium, snapshot) values (${ref.provider}, ${ref.sourceId}, ${ref.medium}, ${JSON.stringify(snapshot)}::jsonb) returning id`) as Row[];
+      let identityRows = await tx.execute(sql`insert into app_private.external_game_identities (provider, source_id, medium, snapshot) values (${ref.provider}, ${ref.sourceId}, ${ref.medium}, ${JSON.stringify(snapshot)}::jsonb) on conflict (provider, source_id) do nothing returning id, medium`) as Row[];
+      if (!identityRows[0]) identityRows = await tx.execute(sql`select id, medium from app_private.external_game_identities where provider = ${ref.provider} and source_id = ${ref.sourceId} for update`) as Row[];
+      if (!identityRows[0] || identityRows[0].medium !== ref.medium) throw new SourceMediumMismatchError();
       const identityId = String(identityRows[0].id);
+      const listConflicts = await tx.execute(sql`
+        select l.id, l.name from app_private.list_memberships m
+        join app_private.lists l on l.id = m.list_id
+        where (m.game_id = ${gameId} or m.external_game_identity_id = ${identityId}) and m.removed_at is null
+        group by l.id, l.name having count(*) > 1
+        order by lower(l.name), l.id
+      `) as Row[];
+      const relationConflicts = await tx.execute(sql`
+        with mapped as (
+          select r.id, r.version,
+            case when r.left_game_id = ${gameId} then '0:' || ${identityId} else ${referenceKey(sql`r.left_external_game_identity_id`, sql`left_game.external_game_identity_id`, sql`r.left_game_id`)} end as left_key,
+            case when r.right_game_id = ${gameId} then '0:' || ${identityId} else ${referenceKey(sql`r.right_external_game_identity_id`, sql`right_game.external_game_identity_id`, sql`r.right_game_id`)} end as right_key,
+            coalesce(left_game.display_name, left_identity.snapshot->>'title', '庫外遊戲') as left_name,
+            coalesce(right_game.display_name, right_identity.snapshot->>'title', '庫外遊戲') as right_name,
+            coalesce(left_game.id, left_linked.id) as left_resolved_game_id,
+            coalesce(right_game.id, right_linked.id) as right_resolved_game_id
+          from app_private.game_relations r
+          left join app_private.games left_game on left_game.id = r.left_game_id
+          left join app_private.games right_game on right_game.id = r.right_game_id
+          left join app_private.external_game_identities left_identity on left_identity.id = r.left_external_game_identity_id
+          left join app_private.external_game_identities right_identity on right_identity.id = r.right_external_game_identity_id
+          left join app_private.games left_linked on left_linked.external_game_identity_id = r.left_external_game_identity_id
+          left join app_private.games right_linked on right_linked.external_game_identity_id = r.right_external_game_identity_id
+          where r.removed_at is null
+        ), conflicting as (
+          select id, version,
+            case when left_key in ('0:' || ${identityId}, '1:' || ${gameId}) then right_resolved_game_id else left_resolved_game_id end as other_game_id,
+            case when left_key in ('0:' || ${identityId}, '1:' || ${gameId}) then right_name else left_name end as other_name
+          from mapped
+          where (left_key in ('0:' || ${identityId}, '1:' || ${gameId}) or right_key in ('0:' || ${identityId}, '1:' || ${gameId}))
+            and (left_key = right_key or (least(left_key, right_key), greatest(left_key, right_key)) in (
+            select least(left_key, right_key), greatest(left_key, right_key) from mapped
+            group by least(left_key, right_key), greatest(left_key, right_key) having count(*) > 1
+          ))
+        ) select distinct id, version, other_game_id, other_name from conflicting order by id
+      `) as Row[];
+      if (listConflicts.length > 0 || relationConflicts.length > 0) throw new SourceLinkReferenceConflictError(
+        listConflicts.map((row) => ({ id: String(row.id), name: String(row.name) })),
+        relationConflicts.map((row) => ({ id: String(row.id), version: Number(row.version), otherGameId: row.other_game_id == null ? null : String(row.other_game_id), otherName: String(row.other_name) })),
+      );
+      await tx.execute(sql`update app_private.external_game_identities set snapshot = ${JSON.stringify(snapshot)}::jsonb, updated_at = clock_timestamp() where id = ${identityId}`);
       await tx.execute(sql`update app_private.games set external_game_identity_id = ${identityId}, display_name = coalesce((select name from app_private.game_names where game_id = ${gameId} and name_kind = 'custom'), ${snapshot.title}) where id = ${gameId}`);
       await this.writeSourceNames(tx, gameId, snapshot);
       await this.writeSourceRows(tx, identityId, snapshot);

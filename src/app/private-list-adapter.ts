@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { externalGameRefSchema } from "@/app/external-game-ref-schema";
 import type { ListsService } from "@/modules/lists";
 import type { GamesService } from "@/modules/games";
 import { handlePrivateAction, type PrivateActionDependencies } from "@/shared/auth/private-action";
@@ -6,20 +7,16 @@ import { ExternalReferenceThumbnailUnavailableError, type ExternalReferenceThumb
 import { getRequestId } from "@/shared/observability/request-id";
 
 const uuid = z.uuid().transform((value) => value.toLowerCase());
-const ref = z.discriminatedUnion("provider", [
-  z.object({ provider: z.literal("bgg"), medium: z.literal("board_game"), sourceId: z.string().regex(/^(0|[1-9][0-9]*)$/) }),
-  z.object({ provider: z.literal("igdb"), medium: z.literal("video_game"), sourceId: z.string().regex(/^(0|[1-9][0-9]*)$/) }),
-]);
 const target = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("game"), gameId: uuid }),
-  z.object({ kind: z.literal("external"), ref, name: z.string().trim().min(1).max(240), releaseYear: z.number().int().min(0).max(9999).nullable() }),
+  z.object({ kind: z.literal("external"), ref: externalGameRefSchema, name: z.string().trim().min(1).max(240), releaseYear: z.number().int().min(0).max(9999).nullable() }),
 ]);
 const create = z.object({ commandId: uuid, name: z.string().max(240), firstMember: target });
 const add = z.object({ commandId: uuid, listId: uuid, expectedVersion: z.number().int().positive(), member: target });
 const list = z.object({ commandId: uuid, listId: uuid, expectedVersion: z.number().int().positive() });
 const member = z.object({ commandId: uuid, memberId: uuid, expectedVersion: z.number().int().positive() });
 const describe = member.extend({ description: z.string().max(1000).nullable() });
-const retryThumbnail = z.object({ ref });
+const retryThumbnail = z.object({ ref: externalGameRefSchema });
 
 export function createPrivateListAdapter(input: Readonly<{ getHeaders: () => Promise<Headers>; getPrivateDependencies: () => PrivateActionDependencies; listsService: ListsService; gamesService: GamesService; externalThumbnailService?: ExternalReferenceThumbnailService | null; onExternalThumbnailFailure?: (requestId: string) => void | Promise<void> }>) {
   const verifiedTarget = async <Target extends { kind: string }>(candidate: Target): Promise<{ target: Target; coverUrl: string | null }> => {

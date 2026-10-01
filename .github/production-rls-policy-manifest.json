@@ -101,6 +101,17 @@
       "withCheck": "true"
     },
     {
+      "table": "game_relations",
+      "name": "runtime_game_relations",
+      "validFrom": "0019",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
       "table": "game_platforms",
       "name": "runtime_game_platforms",
       "validFrom": "0004",
@@ -350,6 +361,17 @@
       "permissiveness": "PERMISSIVE",
       "command": "ALL",
       "roles": ["app_migrator"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "relation_command_receipts",
+      "name": "runtime_relation_command_receipts",
+      "validFrom": "0019",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_runtime"],
       "using": "true",
       "withCheck": "true"
     },

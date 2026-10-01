@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
+import { referenceKey } from "./reference-key";
 import { CommandIdempotencyConflictError, CommandTargetNotFoundError, CommandVersionConflictError, commandPayloadSha256 } from "@/modules/commands";
 import type { ExternalGameRef } from "@/modules/games/internal/types";
 import { ListMemberConflictError, ListNameInUseError, ListReferenceInvalidError, ListStateConflictError, listTargetCommandBinding, type AddListMemberCommand, type CreateListCommand, type ListCommand, type ListMember, type ListRecord, type ListResult, type ListStore, type ListTarget, type MemberCommand } from "@/modules/lists";
@@ -134,6 +135,24 @@ export class PostgresListStore implements ListStore {
       const member = rows[0];
       if (Number(member.version) !== command.expectedVersion) throw new CommandVersionConflictError(Number(member.version), member.removed_at === null ? "active" : "removed");
       if (kind === "list.member.remove" && member.removed_at !== null || kind === "list.member.restore" && member.removed_at === null || kind === "list.member.describe" && member.removed_at !== null) throw new ListStateConflictError();
+      if (kind === "list.member.restore") {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('source-link-reference-collision', 0))`);
+        const targetRows = await tx.execute(sql`
+          select m.list_id,
+            ${referenceKey(sql`m.external_game_identity_id`, sql`g.external_game_identity_id`, sql`m.game_id`)} as reference_key
+          from app_private.list_memberships m left join app_private.games g on g.id = m.game_id
+          where m.id = ${command.memberId}
+        `) as Row[];
+        const target = targetRows[0];
+        if (!target) throw new CommandTargetNotFoundError();
+        const conflicts = await tx.execute(sql`
+          select m.id from app_private.list_memberships m left join app_private.games g on g.id = m.game_id
+          where m.list_id = ${target.list_id} and m.id <> ${command.memberId} and m.removed_at is null
+            and ${referenceKey(sql`m.external_game_identity_id`, sql`g.external_game_identity_id`, sql`m.game_id`)} = ${target.reference_key}
+          limit 1
+        `) as Row[];
+        if (conflicts[0]) throw new ListMemberConflictError(false);
+      }
       const updated = await tx.execute(sql`update app_private.list_memberships set removed_at = ${kind === "list.member.remove" ? sql`clock_timestamp()` : kind === "list.member.restore" ? sql`null` : sql`removed_at`}, description = ${kind === "list.member.describe" ? description ?? null : sql`description`}, version = version + 1, updated_at = clock_timestamp() where id = ${command.memberId} returning id, version, removed_at`) as Row[];
       if (kind !== "list.member.describe") await tx.execute(sql`update app_private.lists set version = version + 1, updated_at = clock_timestamp() where id = ${String(member.list_id)}`);
       return asResult(updated[0]!);
@@ -159,6 +178,7 @@ export class PostgresListStore implements ListStore {
     } else {
       const { ref, name, releaseYear } = target;
       if (!/^(0|[1-9][0-9]*)$/.test(ref.sourceId) || !name.trim() || (ref.provider === "bgg" && ref.medium !== "board_game") || (ref.provider === "igdb" && ref.medium !== "video_game")) throw new ListReferenceInvalidError();
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${'source:' + ref.provider + ':' + ref.sourceId}, 0))`);
       const identity = await tx.execute(sql`insert into app_private.external_game_identities (provider, source_id, medium, snapshot) values (${ref.provider}, ${ref.sourceId}, ${ref.medium}, ${JSON.stringify({ ref, title: name.trim(), releaseYear })}::jsonb) on conflict (provider, source_id) do update set provider = excluded.provider returning id, medium`) as Row[];
       if (!identity[0] || identity[0].medium !== ref.medium) throw new ListReferenceInvalidError();
       identityId = String(identity[0].id);
