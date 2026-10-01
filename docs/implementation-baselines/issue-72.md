@@ -27,6 +27,7 @@
 - 下一個 migration 只擴充既有 `command_receipts.command_kind` 約束以接受 `game.trash`、`game.restore`；不新增第二張遊戲生命週期 receipt 表。
 - 聚合內容數量是確認畫面的唯讀快照，不參與 trash 交易，也不形成「只移除畫面列出的子資料」語意。確認後新增的內容同樣因遊戲狀態而隱藏，沒有部分刪除。
 - 一般收藏庫、搜尋、篩選、來源重新整理、筆記與媒體一般讀取持續排除 trashed game。`listTrashedGames` 是唯一列出全部資源回收遊戲的查詢。
+- 所有會改寫遊戲本身或附加新子資料／關係的命令，在交易內鎖定 game 並確認仍為 active：遊戲編輯、首次來源連結、來源重新整理、貢獻者增刪、筆記建立／更新、媒體 begin／封面與資產改寫、加入清單成員，以及新增／更新關聯。trash 先取得鎖時，後續命令必須拒絕；子命令先取得鎖並提交時，trash 隨後只隱藏完整的最新聚合。既有清單成員與關聯自己的移除／還原仍可從其他 active 脈絡操作，且不得改變遊戲 trash 狀態。
 - private action 在建立 store 或執行資料庫查詢前完成 Cloudflare 擁有者驗證；錯誤映射沿用命名錯誤與結構化記錄，不輸出私人內容。
 - 移入與還原沒有 Storage 工作、非同步工作或補償刪除。
 
@@ -50,11 +51,12 @@
 ## 驗證
 
 - 模組／private action：擁有者驗證先於 store、狀態與版本衝突、target 不存在、response-loss replay、command ID 不同用途衝突、安全錯誤映射。
-- 真 PostgreSQL：trash／restore 前後逐項比對外部身分、來源資料、筆記、媒體與 object path、標籤、平台、貢獻者、清單成員、關聯主鍵及說明；只有 `trashed_at`、版本與 receipt 改變。
-- 真 PostgreSQL 交錯：兩個 stale writer 恰一成功；trash 與新增筆記／媒體 begin 的鎖定順序不允許在 trashed game 留下新的 active 子資料；交易中任一錯誤完整回滾。
+- 真 PostgreSQL：trash／restore 前後逐欄比對 game row 的名稱、媒介、年份、擁有者資料及來源欄位，只有 `trashed_at` 與版本可變；另逐項比對外部身分、來源資料、筆記、媒體、標籤、平台、貢獻者、清單成員、關聯主鍵與說明，只有新增的 receipt 屬預期差異。
+- Storage 邊界：生命週期命令的依賴不含 Storage 寫入／刪除能力，測試斷言兩個命令不呼叫 Storage mutation；以一個既有私有媒體物件驗證 restore 後仍可讀且內容 SHA-256 不變，不能只比對 object path。
+- 真 PostgreSQL 交錯：兩個 stale writer恰一成功；同 command ID 並行重送只完成一次；trash 分別與遊戲編輯、來源連結／重新整理、貢獻者、筆記、媒體 begin、清單成員及關聯寫入交錯時，以上述 game row lock＋active 狀態檢查仲裁，不允許在 trashed game 提交新的 active 子資料或關係。以各共用鎖定模式的代表性交錯測試加上其餘命令的交易邊界測試覆蓋，不為每個命令建立重複的時序測試；任一錯誤完整回滾。
 - pgTAP：命令種類約束、receipt owner／RLS、來源唯一性不因 trash 釋放、子資料列及關係保留。
 - 查詢測試：一般收藏庫與所有 active query 排除 trashed game；資源回收區只列 trashed game；清單與關聯保留並標示狀態。
-- Playwright 390 px：確認數量、移入、立即還原、資源回收區還原、清單／關聯就地還原，以及來源碰撞導向既有資源回收項目。
+- Playwright 390 px：確認數量、移入、立即還原、資源回收區還原、清單／關聯就地還原、來源碰撞導向既有資源回收項目；直接開啟 trashed game 時只顯示還原狀態，不顯示一般編輯、筆記或媒體操作。
 
 ## 非目標
 
