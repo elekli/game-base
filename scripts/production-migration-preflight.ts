@@ -942,6 +942,41 @@ function isExactMediaDerivativeStateExpansion(statement: readonly SqlToken[]) {
     });
 }
 
+const GAME_LIFECYCLE_RECEIPT_KIND_EXPANSION: readonly SqlToken[] = [
+  { kind: "word", value: "alter" },
+  { kind: "word", value: "table" },
+  { kind: "word", value: "app_private" },
+  { kind: "symbol", value: "." },
+  { kind: "word", value: "command_receipts" },
+  { kind: "word", value: "drop" },
+  { kind: "word", value: "constraint" },
+  { kind: "word", value: "command_receipts_command_kind_check" },
+  { kind: "symbol", value: "," },
+  { kind: "word", value: "add" },
+  { kind: "word", value: "constraint" },
+  { kind: "word", value: "command_receipts_command_kind_check" },
+  { kind: "word", value: "check" },
+  { kind: "symbol", value: "(" },
+  { kind: "word", value: "command_kind" },
+  { kind: "word", value: "in" },
+  { kind: "symbol", value: "(" },
+  { kind: "string", value: "'game.edit'" },
+  { kind: "symbol", value: "," },
+  { kind: "string", value: "'game.trash'" },
+  { kind: "symbol", value: "," },
+  { kind: "string", value: "'game.restore'" },
+  { kind: "symbol", value: ")" },
+  { kind: "symbol", value: ")" },
+];
+
+function isExactGameLifecycleReceiptKindExpansion(statement: readonly SqlToken[]) {
+  return statement.length === GAME_LIFECYCLE_RECEIPT_KIND_EXPANSION.length
+    && statement.every((token, index) => {
+      const expected = GAME_LIFECYCLE_RECEIPT_KIND_EXPANSION[index];
+      return token.kind === expected?.kind && token.value === expected.value;
+    });
+}
+
 function matchingParenIndex(tokens: readonly SqlToken[], openIndex: number) {
   let depth = 0;
   for (let index = openIndex; index < tokens.length; index += 1) {
@@ -1084,7 +1119,10 @@ function isSetConfigCall(statement: readonly SqlToken[]) {
 
 function containsForbiddenMigrationSql(
   sql: string,
-  options: Readonly<{ allowMediaDerivativeStateExpansion?: boolean }> = {},
+  options: Readonly<{
+    allowMediaDerivativeStateExpansion?: boolean;
+    allowGameLifecycleReceiptKindExpansion?: boolean;
+  }> = {},
 ) {
   const tokens = lexSql(sql);
   for (const token of tokens) {
@@ -1099,6 +1137,11 @@ function containsForbiddenMigrationSql(
   if (options.allowMediaDerivativeStateExpansion) {
     for (const [statementIndex, statement] of statements.entries()) {
       if (isExactMediaDerivativeStateExpansion(statement)) allowedStatements.add(statementIndex);
+    }
+  }
+  if (options.allowGameLifecycleReceiptKindExpansion) {
+    for (const [statementIndex, statement] of statements.entries()) {
+      if (isExactGameLifecycleReceiptKindExpansion(statement)) allowedStatements.add(statementIndex);
     }
   }
   const hasExactMigratorEnvelope =
@@ -1495,6 +1538,7 @@ export async function lintProductionMigrations(
       !isExactKnownRemediation &&
       containsForbiddenMigrationSql(migration.sql, {
         allowMediaDerivativeStateExpansion: migration.filename === "0011_media_ledger.sql",
+        allowGameLifecycleReceiptKindExpansion: migration.filename === "0020_game_trash_restore.sql",
       }) &&
       baseline[migration.filename] !== digest
     ) {

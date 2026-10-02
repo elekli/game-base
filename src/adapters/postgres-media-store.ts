@@ -509,17 +509,31 @@ export class PostgresMediaStore implements MediaStore {
     const caption = clean(command.caption);
     const displayName = clean(command.displayName);
     const description = clean(command.description);
-    const rows = await this.db.execute(sql`
-      update app_private.media_assets
-      set caption = case when ${caption === undefined} then caption else ${caption ?? null} end,
-        display_name = case when ${displayName === undefined} then display_name else ${displayName ?? null} end,
-        description = case when ${description === undefined} then description else ${description ?? null} end
-      where id = ${command.assetId} and authority_state = 'verified' and removed_at is null
-        and purpose in ('gallery_image', 'attachment')
-      returning id as asset_id, game_id, purpose, original_file_name, actual_mime_type,
-        byte_size, width, height, removed_at, created_at, caption, display_name, description
-    `) as Row[];
-    return rows[0] ? assetFrom(rows[0]) : null;
+    return this.db.transaction(async (tx) => {
+      const assets = await tx.execute(sql`
+        select asset.id, asset.game_id
+        from app_private.media_assets asset
+        join app_private.games game on game.id = asset.game_id
+        where asset.id = ${command.assetId} and asset.authority_state = 'verified'
+          and asset.removed_at is null and asset.purpose in ('gallery_image', 'attachment')
+          and game.trashed_at is null
+        for update of game, asset
+      `) as Row[];
+      if (!assets[0]) return null;
+
+      const rows = await tx.execute(sql`
+        update app_private.media_assets
+        set caption = case when ${caption === undefined} then caption else ${caption ?? null} end,
+          display_name = case when ${displayName === undefined} then display_name else ${displayName ?? null} end,
+          description = case when ${description === undefined} then description else ${description ?? null} end
+        where id = ${command.assetId} and game_id = ${String(assets[0].game_id)}
+          and authority_state = 'verified' and removed_at is null
+          and purpose in ('gallery_image', 'attachment')
+        returning id as asset_id, game_id, purpose, original_file_name, actual_mime_type,
+          byte_size, width, height, removed_at, created_at, caption, display_name, description
+      `) as Row[];
+      return rows[0] ? assetFrom(rows[0]) : null;
+    });
   }
 
   async selectManualCover(gameId: string, assetId: string): Promise<boolean> {
