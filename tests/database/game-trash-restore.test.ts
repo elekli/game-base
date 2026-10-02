@@ -173,7 +173,12 @@ describe("Postgres game trash／restore", () => {
     expect(await games.listTrashed()).toContainEqual(expect.objectContaining({ id: game.id, version: current.version + 1 }));
     expect(await notes.list(game.id)).toEqual([]);
     expect((await lists.get(list.resourceId))?.members).toContainEqual(expect.objectContaining({ resolvedGameId: game.id, trashed: true }));
-    expect(await relations.forGame(game.id)).toContainEqual(expect.objectContaining({ id: expect.any(String), leftTrashed: true }));
+    const trashedRelation = (await relations.forGame(game.id)).find((item) => item.id === relation.resourceId);
+    expect(trashedRelation).toBeDefined();
+    expect(
+      trashedRelation?.leftGameId === game.id && trashedRelation.leftTrashed
+      || trashedRelation?.rightGameId === game.id && trashedRelation.rightTrashed,
+    ).toBe(true);
     expect(await games.getTrashConfirmation(game.id)).toMatchObject({ counts: { notes: 1, photos: 1, attachments: 0, lists: 1, relations: 1 } });
     await expect(games.edit(game.id, { displayName: "不可寫入" })).rejects.toBeInstanceOf(SourceGameUnavailableError);
     await expect(relations.describe({ ownerId, commandId: randomUUID(), relationId: relation.resourceId, expectedVersion: 2, description: "不可寫入" })).rejects.toBeInstanceOf(RelationStateConflictError);
