@@ -27,7 +27,11 @@ const foreignKeyBlock = /^\tforeignKey\(\{\n(?:^\t{3}[^\n]*\n)+^\t{2}\}\)(?:\.on
 const relationEntryBoundary = /\n(?=^\t[A-Za-z_$][\w$]*:)/m;
 
 export function normalizeSchemaOrdering(schema: string): string {
-  return schema.replace(/\}, \(table\) => \[\n([\s\S]*?)\n\]\);/g, (table, body: string) => {
+  // Drizzle does not guarantee CHECK constraint order; migrations and pgTAP remain canonical.
+  const withoutUnstableChecks = schema
+    .replace(/^\tcheck\([^\n]+\),\n/gm, "")
+    .replace(", check,", ",");
+  return withoutUnstableChecks.replace(/\}, \(table\) => \[\n([\s\S]*?)\n\]\);/g, (table, body: string) => {
     const normalizedBody = sortMatchedSlots(body, foreignKeyBlock, constraintName);
     return table.replace(body, () => normalizedBody);
   });

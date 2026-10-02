@@ -20,6 +20,22 @@ const reverseRelation = (name: string) => `\t${name}Children: many(children, {
 `;
 
 describe("Drizzle schema normalization", () => {
+  it("removes unstable CHECK constraints before comparing generated output", () => {
+    const first = `import { pgTable, check } from "drizzle-orm/pg-core";
+export const identities = table("identities", {}, (table) => [
+\tcheck("identities_z_check", sql\`true\`),
+\tcheck("identities_a_check", sql\`true\`),
+]);`;
+    const second = first.replace(
+      `\tcheck("identities_z_check", sql\`true\`),\n\tcheck("identities_a_check", sql\`true\`),\n`,
+      `\tcheck("identities_a_check", sql\`true\`),\n\tcheck("identities_z_check", sql\`true\`),\n`,
+    );
+
+    expect(normalizeSchemaOrdering(first)).toBe(normalizeSchemaOrdering(second));
+    expect(normalizeSchemaOrdering(first)).not.toContain("check(");
+    expect(normalizeSchemaOrdering(first)).not.toContain(", check,");
+  });
+
   it("sorts foreign keys within their table without moving other declarations", () => {
     const first = `export const children = table("children", {}, (table) => [
 \tindex("children_idx"),
