@@ -111,6 +111,17 @@ export type GameRecord = Readonly<{
   createdAt: string;
 }>;
 
+export type TrashConfirmation = Readonly<{
+  game: GameRecord;
+  counts: Readonly<{
+    notes: number;
+    photos: number;
+    attachments: number;
+    lists: number;
+    relations: number;
+  }>;
+}>;
+
 export type Confirmation = Readonly<{
   candidate: NormalizedSearchCandidate;
   snapshot: SourceSnapshot;

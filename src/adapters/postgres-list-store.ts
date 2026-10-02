@@ -135,6 +135,14 @@ export class PostgresListStore implements ListStore {
       const member = rows[0];
       if (Number(member.version) !== command.expectedVersion) throw new CommandVersionConflictError(Number(member.version), member.removed_at === null ? "active" : "removed");
       if (kind === "list.member.remove" && member.removed_at !== null || kind === "list.member.restore" && member.removed_at === null || kind === "list.member.describe" && member.removed_at !== null) throw new ListStateConflictError();
+      if (kind === "list.member.describe") {
+        const games = await tx.execute(sql`
+          select id, trashed_at from app_private.games
+          where id = ${member.game_id} or external_game_identity_id = ${member.external_game_identity_id}
+          order by id for update
+        `) as Row[];
+        if (games.some((game) => game.trashed_at !== null)) throw new ListStateConflictError();
+      }
       if (kind === "list.member.restore") {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('source-link-reference-collision', 0))`);
         const targetRows = await tx.execute(sql`

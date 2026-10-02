@@ -3,6 +3,7 @@ import { assertReference, type ContributorMatch, type GamesService } from "@/mod
 import type { LibraryService } from "@/modules/library";
 import { handlePrivateAction, type PrivateActionDependencies, type PrivateActionResult } from "@/shared/auth/private-action";
 import type { OwnerIdentity } from "@/shared/auth/verify-access-token";
+import type { VersionedCommandResult } from "@/modules/commands";
 
 const addContributionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("new"), gameId: z.uuid(), name: z.string().trim().min(1).max(200), entityKind: z.enum(["person", "company"]), role: z.enum(["design", "art", "publisher"]), allowDuplicate: z.boolean() }),
@@ -15,6 +16,7 @@ type AddManualContributionSuccess = Readonly<
 const removeContributionSchema = z.object({ gameId: z.uuid(), contributionId: z.uuid() });
 const canonicalUuidSchema = z.uuid().transform((value) => value.toLowerCase());
 const editGameSchema = z.object({ commandId: canonicalUuidSchema, expectedVersion: z.number().int().positive(), gameId: canonicalUuidSchema, displayName: z.string().trim().max(200).nullable().optional(), actualPlatforms: z.array(z.string().trim().max(100)).max(20).optional(), tags: z.array(z.string().trim().max(100)).max(50).optional(), playerCountNote: z.string().trim().max(500).nullable().optional() });
+const lifecycleSchema = z.object({ commandId: canonicalUuidSchema, expectedVersion: z.number().int().positive(), gameId: canonicalUuidSchema });
 const linkExternalSourceSchema = z.object({ gameId: z.uuid(), provider: z.enum(["bgg", "igdb"]), sourceId: z.string(), confirmationFingerprint: z.string().min(1) });
 const refreshExternalMetadataSchema = z.object({ gameId: z.uuid(), operationId: z.uuid() });
 const sharedNameSchema = z.object({ name: z.string().trim().min(1).max(100) });
@@ -22,21 +24,25 @@ const sharedNameSchema = z.object({ name: z.string().trim().min(1).max(100) });
 type AdapterDependencies = Readonly<{
   getHeaders: () => Promise<Headers>;
   getPrivateDependencies: () => PrivateActionDependencies;
-  gamesService: Pick<GamesService, "linkExternalSource" | "refreshExternalMetadata">;
-  libraryService: Pick<LibraryService, "addManualContribution" | "removeManualContribution" | "editGameCommand" | "deletePlatform" | "deleteTag">;
+  getServices: () => Promise<Readonly<{
+    gamesService: Pick<GamesService, "linkExternalSource" | "refreshExternalMetadata" | "moveGameToTrash" | "restoreGame">;
+    libraryService: Pick<LibraryService, "addManualContribution" | "removeManualContribution" | "editGameCommand" | "deletePlatform" | "deleteTag">;
+  }>>;
 }>;
 
 export type PrivateMutationAdapter = Readonly<{
   addManualContribution(input: unknown): Promise<PrivateActionResult<AddManualContributionSuccess>>;
   removeManualContribution(input: unknown): Promise<PrivateActionResult>;
   editGame(input: unknown): Promise<PrivateActionResult>;
+  moveGameToTrash(input: unknown): Promise<PrivateActionResult<VersionedCommandResult>>;
+  restoreGame(input: unknown): Promise<PrivateActionResult<VersionedCommandResult>>;
   linkExternalSource(input: unknown): Promise<PrivateActionResult>;
   refreshExternalMetadata(input: unknown): Promise<PrivateActionResult>;
   deletePlatform(input: unknown): Promise<PrivateActionResult>;
   deleteTag(input: unknown): Promise<PrivateActionResult>;
 }>;
 
-export function createPrivateMutationAdapter({ getHeaders, getPrivateDependencies, gamesService, libraryService }: AdapterDependencies): PrivateMutationAdapter {
+export function createPrivateMutationAdapter({ getHeaders, getPrivateDependencies, getServices }: AdapterDependencies): PrivateMutationAdapter {
   function boundary<Input, Success extends object>(options: { input: unknown; schema: z.ZodType<Input>; inputErrorMessage: string; operation: (input: Input, owner: OwnerIdentity) => Promise<Success> }) {
     return getHeaders().then((headers) => handlePrivateAction(headers, {
       ...getPrivateDependencies(),
@@ -50,6 +56,7 @@ export function createPrivateMutationAdapter({ getHeaders, getPrivateDependencie
   return {
     addManualContribution(input) {
       return boundary({ input, schema: addContributionSchema, inputErrorMessage: "貢獻關係參數無效。", operation: async (parsed) => {
+        const { libraryService } = await getServices();
         const result = await libraryService.addManualContribution(parsed);
         return result.status === "created"
           ? { status: "created" }
@@ -58,37 +65,57 @@ export function createPrivateMutationAdapter({ getHeaders, getPrivateDependencie
     },
     removeManualContribution(input) {
       return boundary({ input, schema: removeContributionSchema, inputErrorMessage: "貢獻關係參數無效。", operation: async ({ gameId, contributionId }) => {
+        const { libraryService } = await getServices();
         await libraryService.removeManualContribution(gameId, contributionId);
         return {};
       } });
     },
     editGame(input) {
       return boundary({ input, schema: editGameSchema, inputErrorMessage: "遊戲資料參數無效。", operation: async ({ commandId, expectedVersion, gameId, ...payload }, owner) => {
+        const { libraryService } = await getServices();
         await libraryService.editGameCommand({ ownerId: owner.sub, commandId, expectedVersion, gameId, payload });
         return {};
+      } });
+    },
+    moveGameToTrash(input) {
+      return boundary({ input, schema: lifecycleSchema, inputErrorMessage: "移入資源回收區參數無效。", operation: async (parsed, owner) => {
+        const { gamesService } = await getServices();
+        const result = await gamesService.moveGameToTrash({ ...parsed, ownerId: owner.sub });
+        return result;
+      } });
+    },
+    restoreGame(input) {
+      return boundary({ input, schema: lifecycleSchema, inputErrorMessage: "還原遊戲參數無效。", operation: async (parsed, owner) => {
+        const { gamesService } = await getServices();
+        const result = await gamesService.restoreGame({ ...parsed, ownerId: owner.sub });
+        return result;
       } });
     },
     linkExternalSource(input) {
       return boundary({ input, schema: linkExternalSourceSchema, inputErrorMessage: "來源連結參數無效。", operation: async ({ gameId, provider, sourceId, confirmationFingerprint }) => {
         const ref = provider === "bgg" ? assertReference({ provider: "bgg", medium: "board_game", sourceId }) : assertReference({ provider: "igdb", medium: "video_game", sourceId });
+        const { gamesService } = await getServices();
         await gamesService.linkExternalSource({ gameId, ref, confirmationFingerprint });
         return {};
       } });
     },
     refreshExternalMetadata(input) {
       return boundary({ input, schema: refreshExternalMetadataSchema, inputErrorMessage: "重新整理參數無效。", operation: async (parsed) => {
+        const { gamesService } = await getServices();
         await gamesService.refreshExternalMetadata(parsed);
         return {};
       } });
     },
     deletePlatform(input) {
       return boundary({ input, schema: sharedNameSchema, inputErrorMessage: "平台參數無效。", operation: async ({ name }) => {
+        const { libraryService } = await getServices();
         await libraryService.deletePlatform(name);
         return {};
       } });
     },
     deleteTag(input) {
       return boundary({ input, schema: sharedNameSchema, inputErrorMessage: "標籤參數無效。", operation: async ({ name }) => {
+        const { libraryService } = await getServices();
         await libraryService.deleteTag(name);
         return {};
       } });

@@ -75,7 +75,7 @@ describe("PostgresGameStore SQLSTATE", () => {
   it("將被包裝的 23505 轉為貢獻關係衝突", async () => {
     const wrapped = new Error("query failed", { cause: { cause: { code: "23505" } } });
     const executor: QueryExecutor = {
-      execute: vi.fn().mockResolvedValueOnce([{ id: "game-1" }]).mockRejectedValueOnce(wrapped),
+      execute: vi.fn().mockResolvedValueOnce([{ id: "game-1", trashed_at: null }]).mockRejectedValueOnce(wrapped),
     };
     const store = new PostgresGameStore({
       execute: executor.execute,

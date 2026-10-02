@@ -21,8 +21,8 @@ export function AddGameClient({ query, results }: Readonly<{ query: string; resu
       const payload = await confirmation.json() as { fingerprint: string };
       const created = await fetch("/api/private/games/create", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...ref, confirmationFingerprint: payload.fingerprint }) });
       if (!created.ok) { setMessage(created.status === 409 ? "來源內容已更新或已存在，請重新確認。" : "建立失敗，請稍後再試。"); return; }
-      const result = await created.json() as { identityConflict?: string | null };
-      if (result.identityConflict === "trashed") { setMessage("此來源在資源回收區，請先還原。"); return; }
+      const result = await created.json() as { identityConflict?: string | null; game?: { id?: string } };
+      if (result.identityConflict === "trashed" && result.game?.id) { router.push(`/games/${result.game.id}`); return; }
       router.push("/");
     } catch { setMessage("網路暫時無法使用，請稍後再試。"); }
     finally {

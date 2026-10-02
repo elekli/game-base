@@ -7,8 +7,9 @@ import type { NormalizedSearchCandidate } from "@/modules/games";
 import type { GameRelation, RelationTarget } from "@/modules/relations";
 import { addGameRelation, describeGameRelation, removeGameRelation, restoreGameRelation, searchRelationTargets } from "@/app/private-relation-actions";
 import { retryExternalListThumbnail } from "@/app/private-list-actions";
+import { GameLifecycleClient } from "@/app/games/game-lifecycle-client";
 
-type LibraryOption = Readonly<{ id: string; displayName: string }>;
+type LibraryOption = Readonly<{ id: string; displayName: string; version: number; trashed: boolean }>;
 type UndoRelation = Readonly<{ id: string; version: number }>;
 
 function isFailure<T extends { ok: boolean }>(value: T): value is Extract<T, { ok: false }> {
@@ -65,8 +66,9 @@ export function RelationsClient({ gameId, initialRelations, libraryGames }: Read
     setUndo(null); setConflict(null); router.refresh();
   });
 
-  const describe = (relation: GameRelation, event: FormEvent<HTMLFormElement>) => {
+  const describe = (relation: GameRelation, event: FormEvent<HTMLFormElement>, trashed: boolean) => {
     event.preventDefault();
+    if (trashed) return;
     const form = new FormData(event.currentTarget);
     startTransition(async () => {
       setMessage("");
@@ -90,7 +92,7 @@ export function RelationsClient({ gameId, initialRelations, libraryGames }: Read
     <div className="mt-4 grid gap-3 sm:grid-cols-2">
       <label className="grid gap-1 text-sm font-medium">收藏庫遊戲
         <select value={selectedGameId} onChange={(event) => setSelectedGameId(event.target.value)} className="min-h-11 rounded-xl border border-slate-300 px-3" disabled={pending}>
-          <option value="">選擇遊戲</option>{libraryGames.filter((game) => game.id !== gameId).map((game) => <option key={game.id} value={game.id}>{game.displayName}</option>)}
+          <option value="">選擇遊戲</option>{libraryGames.filter((game) => game.id !== gameId && !game.trashed).map((game) => <option key={game.id} value={game.id}>{game.displayName}</option>)}
         </select>
       </label>
       <button type="button" onClick={() => selectedGameId && add({ kind: "game", gameId: selectedGameId })} disabled={!selectedGameId || pending} className="min-h-11 self-end rounded-xl bg-emerald-900 px-4 font-semibold text-white disabled:opacity-50">新增關聯</button>
@@ -108,9 +110,10 @@ export function RelationsClient({ gameId, initialRelations, libraryGames }: Read
       const otherIsLeft = relation.leftGameId === gameId;
       const other = otherIsLeft ? relation.right : relation.left;
       const otherGameId = otherIsLeft ? relation.rightGameId : relation.leftGameId;
-      const trashed = otherIsLeft ? relation.rightTrashed : relation.leftTrashed;
+      const otherGame = otherGameId ? libraryGames.find((game) => game.id === otherGameId) : undefined;
+      const trashed = (otherIsLeft ? relation.rightTrashed : relation.leftTrashed) || (otherGame?.trashed ?? false);
       const title = otherGameId ? names.get(otherGameId) ?? "收藏庫遊戲" : other.kind === "external" ? other.name : "收藏庫遊戲";
-      return <li key={relation.id} className="py-3"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-start gap-3">{other.kind === "external" && other.thumbnailUrl && <Image unoptimized src={other.thumbnailUrl} alt="" width={48} height={64} className="h-16 w-12 shrink-0 rounded object-cover" />}{other.kind === "external" && !other.thumbnailUrl && <div aria-hidden="true" className="h-16 w-12 shrink-0 rounded bg-slate-100" /> }<div><p className={`font-medium ${trashed ? "text-slate-500" : "text-slate-900"}`}>{title}{trashed && <span className="ml-2 text-xs">已移入資源回收區</span>}</p>{other.kind === "external" && <><p className="text-sm text-slate-600">{other.ref.provider.toUpperCase()}・{other.releaseYear ?? "年份未知"}・庫外引用</p>{other.thumbnailState === "pending" && <p className="text-xs text-slate-600">封面縮圖處理中；若稍後仍未完成，可重新檢查。</p>}{other.thumbnailState === "missing" && <p className="text-xs text-slate-600">封面縮圖尚未保存；可重新檢查。</p>}{(other.thumbnailState === "failed" || other.thumbnailState === "pending" || other.thumbnailState === "missing") && <button type="button" disabled={pending} onClick={() => retryThumbnail(other)} className="mt-1 text-sm text-emerald-900 underline">{other.thumbnailState === "pending" ? "重新檢查封面縮圖" : other.thumbnailState === "missing" ? "檢查封面縮圖" : "重試封面縮圖"}</button>}</>}</div></div><button type="button" disabled={pending} onClick={() => remove(relation)} className="min-h-10 shrink-0 rounded-xl border border-slate-300 px-3 text-sm">解除</button></div><form onSubmit={(event) => describe(relation, event)} className="mt-2 flex gap-2"><label className="sr-only" htmlFor={`relation-note-${relation.id}`}>關聯說明</label><input id={`relation-note-${relation.id}`} name="description" defaultValue={relation.description ?? ""} maxLength={1000} placeholder="選填關聯說明" className="min-h-10 min-w-0 flex-1 rounded-xl border border-slate-300 px-3 text-sm" /><button type="submit" disabled={pending} className="min-h-10 shrink-0 rounded-xl border border-slate-300 px-3 text-sm">儲存</button></form></li>;
+      return <li key={relation.id} className={`py-3 ${trashed ? "grayscale" : ""}`}><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-start gap-3">{other.kind === "external" && other.thumbnailUrl && <Image unoptimized src={other.thumbnailUrl} alt="" width={48} height={64} className="h-16 w-12 shrink-0 rounded object-cover" />}{other.kind === "external" && !other.thumbnailUrl && <div aria-hidden="true" className="h-16 w-12 shrink-0 rounded bg-slate-100" /> }<div><p className={`font-medium ${trashed ? "text-slate-500" : "text-slate-900"}`}>{title}{trashed && <span className="ml-2 text-xs">已移入資源回收區</span>}</p>{other.kind === "external" && <><p className="text-sm text-slate-600">{other.ref.provider.toUpperCase()}・{other.releaseYear ?? "年份未知"}・庫外引用</p>{other.thumbnailState === "pending" && <p className="text-xs text-slate-600">封面縮圖處理中；若稍後仍未完成，可重新檢查。</p>}{other.thumbnailState === "missing" && <p className="text-xs text-slate-600">封面縮圖尚未保存；可重新檢查。</p>}{(other.thumbnailState === "failed" || other.thumbnailState === "pending" || other.thumbnailState === "missing") && <button type="button" disabled={pending} onClick={() => retryThumbnail(other)} className="mt-1 text-sm text-emerald-900 underline">{other.thumbnailState === "pending" ? "重新檢查封面縮圖" : other.thumbnailState === "missing" ? "檢查封面縮圖" : "重試封面縮圖"}</button>}</>}</div></div>{trashed && otherGameId && otherGame ? <GameLifecycleClient gameId={otherGameId} version={otherGame.version} state="trashed" compact /> : <button type="button" disabled={pending} onClick={() => remove(relation)} className="min-h-10 shrink-0 rounded-xl border border-slate-300 px-3 text-sm">解除</button>}</div><form onSubmit={(event) => describe(relation, event, trashed)} className="mt-2 flex gap-2"><label className="sr-only" htmlFor={`relation-note-${relation.id}`}>關聯說明</label><input id={`relation-note-${relation.id}`} name="description" defaultValue={relation.description ?? ""} disabled={pending || trashed} maxLength={1000} placeholder="選填關聯說明" className="min-h-10 min-w-0 flex-1 rounded-xl border border-slate-300 px-3 text-sm" /><button type="submit" disabled={pending || trashed} className="min-h-10 shrink-0 rounded-xl border border-slate-300 px-3 text-sm disabled:opacity-50">儲存</button></form></li>;
     })}</ul>}
   </section>;
 }
