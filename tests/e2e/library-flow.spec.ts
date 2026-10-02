@@ -235,9 +235,10 @@ test("#40 board-only facets apply OR／AND and clear when switching to multiple 
     await page.goto("/games/new");
     await page.getByLabel("搜尋遊戲").fill(title);
     await page.getByRole("button", { name: "同時搜尋" }).click();
-    await page.waitForLoadState("networkidle");
+    const addButton = page.getByRole("button", { name: "展開確認並加入" });
+    await expect(page.locator('section[aria-live="polite"]')).toHaveAttribute("data-client-ready", "true");
     const creation = page.waitForResponse((response) => response.url().endsWith("/api/private/games/create") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "展開確認並加入" }).click();
+    await addButton.click();
     expect((await creation).ok()).toBe(true);
     await expect(page).toHaveURL(/\/$/);
   }
