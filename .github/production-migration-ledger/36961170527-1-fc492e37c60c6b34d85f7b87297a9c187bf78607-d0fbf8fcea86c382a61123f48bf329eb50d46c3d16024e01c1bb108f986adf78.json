@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "repository": "elekli/game-base",
+  "workflow": ".github/workflows/production-release.yml",
+  "releaseIdentity": "36961170527-1-fc492e37c60c6b34d85f7b87297a9c187bf78607-d0fbf8fcea86c382a61123f48bf329eb50d46c3d16024e01c1bb108f986adf78",
+  "commit": "fc492e37c60c6b34d85f7b87297a9c187bf78607",
+  "migrations": [
+    {
+      "version": "0019",
+      "name": "symmetric_game_relations",
+      "filename": "0019_symmetric_game_relations.sql",
+      "sha256": "4df668eda5a247eac4d2a5ab811bd3ca6753fa17e70d7d26e0a3de2af5b882bb"
+    },
+    {
+      "version": "0020",
+      "name": "game_trash_restore",
+      "filename": "0020_game_trash_restore.sql",
+      "sha256": "ed858b723b111da7cbed7c2b3be60b7ad8fec453a10aad31e299907a2390a4e0"
+    }
+  ],
+  "pendingSetSha256": "d0fbf8fcea86c382a61123f48bf329eb50d46c3d16024e01c1bb108f986adf78",
+  "sourceReleaseRun": {
+    "id": "36961170527",
+    "attempt": 1
+  },
+  "successBasis": "strict-exact-target",
+  "actor": "elekli",
+  "utcTime": "2026-10-02T08:27:28.375Z",
+  "result": "success",
+  "recoveryAction": {
+    "missingLedgerAfterSuccess": "ledger-recovery",
+    "incompatibleDatabase": "forward-fix",
+    "destructiveRollback": "never-reset"
+  },
+  "evidenceSha256": "63ca9ffe19b568c8e825bbe7e76be5beb4ed7218536aedc5192702fae0374bef"
+}
