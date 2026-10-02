@@ -16,7 +16,9 @@ import type {
   NormalizedSearchCandidate,
   Provider,
   SourceCatalogPort,
+  TrashConfirmation,
 } from "./internal/types";
+import type { GameLifecycleCommand, VersionedCommandResult } from "@/modules/commands";
 
 export type GamesService = Readonly<{
   searchExternalGames(input: Readonly<{ query: string }>): Promise<Readonly<{ groups: readonly { provider: Provider; items: readonly NormalizedSearchCandidate[]; errorCode: string | null }[] }>>;
@@ -28,6 +30,10 @@ export type GamesService = Readonly<{
   createManualGame(input: Readonly<{ displayName: string; medium: Medium }>): Promise<GameRecord>;
   listGames(query?: string): Promise<readonly GameRecord[]>;
   getGame(id: string): Promise<GameRecord | null>;
+  getTrashConfirmation(id: string): Promise<TrashConfirmation | null>;
+  listTrashedGames(): Promise<readonly GameRecord[]>;
+  moveGameToTrash(command: GameLifecycleCommand): Promise<VersionedCommandResult>;
+  restoreGame(command: GameLifecycleCommand): Promise<VersionedCommandResult>;
 }>;
 
 export function createGamesService(catalogs: Readonly<Record<Provider, SourceCatalogPort>>, store: GameStore = new InMemoryGameStore()): GamesService {
@@ -92,6 +98,10 @@ export function createGamesService(catalogs: Readonly<Record<Provider, SourceCat
     async createManualGame(input) { return store.createManual(input.displayName, input.medium); },
     async listGames(query) { return store.list(query); },
     async getGame(id) { return store.get(id); },
+    async getTrashConfirmation(id) { return store.getTrashConfirmation(id); },
+    async listTrashedGames() { return store.listTrashed(); },
+    async moveGameToTrash(command) { return store.moveToTrashWithCommand(command); },
+    async restoreGame(command) { return store.restoreWithCommand(command); },
   };
 }
 

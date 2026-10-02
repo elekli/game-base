@@ -436,6 +436,45 @@ describe("production migration safety lint", () => {
     await expect(lintProductionMigrations(root)).resolves.toEqual({ migrationCount: 1 });
   });
 
+  it("只接受 0020 對 command receipt 種類約束的精確擴充", async () => {
+    const root = await migrationFixture({
+      "0020_game_trash_restore.sql": `
+        grant app_migrator to postgres;
+        set local role app_migrator;
+        alter table app_private.command_receipts
+          drop constraint command_receipts_command_kind_check,
+          add constraint command_receipts_command_kind_check
+            check (command_kind in ('game.edit', 'game.trash', 'game.restore'));
+        reset role;
+        revoke app_migrator from postgres;
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).resolves.toEqual({ migrationCount: 1 });
+  });
+
+  it.each([
+    ["wrong migration", "0019_game_trash_restore.sql", "app_private.command_receipts", "command_receipts_command_kind_check", "command_kind in ('game.edit', 'game.trash', 'game.restore')"],
+    ["wrong table", "0020_game_trash_restore.sql", "app_private.games", "command_receipts_command_kind_check", "command_kind in ('game.edit', 'game.trash', 'game.restore')"],
+    ["wrong constraint", "0020_game_trash_restore.sql", "app_private.command_receipts", "other_check", "command_kind in ('game.edit', 'game.trash', 'game.restore')"],
+    ["unexpected command kind", "0020_game_trash_restore.sql", "app_private.command_receipts", "command_receipts_command_kind_check", "command_kind in ('game.edit', 'game.trash', 'game.admin')"],
+    ["unbounded replacement", "0020_game_trash_restore.sql", "app_private.command_receipts", "command_receipts_command_kind_check", "true"],
+  ])("仍拒絕非精確 command receipt 約束擴充：%s", async (_case, filename, table, constraint, expression) => {
+    const root = await migrationFixture({
+      [filename]: `
+        grant app_migrator to postgres;
+        set local role app_migrator;
+        alter table ${table}
+          drop constraint ${constraint},
+          add constraint ${constraint} check (${expression});
+        reset role;
+        revoke app_migrator from postgres;
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).rejects.toThrow("ProductionMigrationSafetyError");
+  });
+
   it("只允許精確收緊兩張 reconcile 帳表的 DELETE 權限", async () => {
     const exact = await migrationFixture({
       "0001_revoke_media_delete.sql": "revoke delete on app_private.media_reconciliation_runs, app_private.media_cleanup_jobs from app_runtime, anon, authenticated, service_role;",

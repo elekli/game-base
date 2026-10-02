@@ -2,7 +2,7 @@ import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
 import { referenceKey } from "./reference-key";
-import type { ContributorFacet, ContributorMatch, GameStore, GameEditInput, LegacyManualContributionInput, LibraryGameQuery, ManualContributionInput, ManualContributionResult, SharedLibraryItem } from "@/modules/games";
+import type { ContributorFacet, ContributorMatch, GameStore, GameEditInput, LegacyManualContributionInput, LibraryGameQuery, ManualContributionInput, ManualContributionResult, SharedLibraryItem, TrashConfirmation } from "@/modules/games";
 import type { ExternalGameRef, GameContribution, GameRecord, Medium, SourceCategory, SourceSnapshot } from "@/modules/games";
 import { SourceGameUnavailableError, SourceIdentityConflictError, SourceLinkReferenceConflictError, SourceMediumMismatchError, SourcePersistenceFailedError, SourceRefreshIdempotencyConflictError } from "@/modules/games";
 import { beginSourceCoverIngest, isAllowedSourceCoverUrl } from "@/modules/media/internal/source-cover-ingest";
@@ -14,6 +14,7 @@ import {
   commandPayloadSha256,
   normalizeGameEditPayload,
   type GameEditCommand,
+  type GameLifecycleCommand,
   type VersionedCommandResult,
 } from "@/modules/commands";
 
@@ -272,6 +273,26 @@ export class PostgresGameStore implements GameStore {
 
   async get(id: string): Promise<GameRecord | null> { return this.readGame(this.db, id); }
 
+  async listTrashed(): Promise<readonly GameRecord[]> {
+    const rows = await this.db.execute(this.selectFrom(sql`where g.trashed_at is not null order by g.trashed_at desc, g.id asc`)) as Row[];
+    return rows.map(record);
+  }
+
+  async getTrashConfirmation(id: string): Promise<TrashConfirmation | null> {
+    const game = await this.get(id);
+    if (!game) return null;
+    const rows = await this.db.execute(sql`
+      select
+        (select count(*)::int from app_private.notes where game_id = ${id} and removed_at is null) as notes,
+        (select count(*)::int from app_private.media_assets where game_id = ${id} and purpose in ('gallery_image', 'custom_cover') and removed_at is null and superseded_at is null) as photos,
+        (select count(*)::int from app_private.media_assets where game_id = ${id} and purpose = 'attachment' and removed_at is null and superseded_at is null) as attachments,
+        (select count(*)::int from app_private.list_memberships where removed_at is null and (game_id = ${id} or external_game_identity_id = ${game.externalIdentityId})) as lists,
+        (select count(*)::int from app_private.game_relations where removed_at is null and (left_game_id = ${id} or right_game_id = ${id} or left_external_game_identity_id = ${game.externalIdentityId} or right_external_game_identity_id = ${game.externalIdentityId})) as relations
+    `) as Row[];
+    const counts = rows[0] ?? {};
+    return { game, counts: { notes: Number(counts.notes ?? 0), photos: Number(counts.photos ?? 0), attachments: Number(counts.attachments ?? 0), lists: Number(counts.lists ?? 0), relations: Number(counts.relations ?? 0) } };
+  }
+
   async createManual(displayName: string, medium: Medium): Promise<GameRecord> {
     const title = displayName.trim();
     if (!title) throw new Error("手動遊戲名稱不可為空。");
@@ -474,6 +495,9 @@ export class PostgresGameStore implements GameStore {
     assertVideoGamePlatforms(current.medium, actualPlatforms);
     const tags = input.tags === undefined ? current.tags : uniqueNames(input.tags);
     const run = async (tx: QueryExecutor) => {
+      const locked = await tx.execute(sql`select id, trashed_at from app_private.games where id = ${gameId} for update`) as Row[];
+      if (!locked[0]) throw new SourcePersistenceFailedError();
+      if (locked[0].trashed_at !== null) throw new SourceGameUnavailableError();
       if (input.displayName !== undefined) {
         if (input.displayName === null || !input.displayName.trim()) await tx.execute(sql`delete from app_private.game_names where game_id = ${gameId} and name_kind = 'custom'`);
         else await tx.execute(sql`insert into app_private.game_names (game_id, name, name_kind) values (${gameId}, ${input.displayName.trim()}, 'custom') on conflict (game_id, name_kind) where name_kind = 'custom' do update set name = excluded.name`);
@@ -585,7 +609,7 @@ export class PostgresGameStore implements GameStore {
       const game = gameRows[0];
       if (!game) throw new CommandTargetNotFoundError();
       const state = game.trashed_at === null ? "active" as const : "trashed" as const;
-      if (Number(game.version) !== command.expectedVersion) throw new CommandVersionConflictError(Number(game.version), state);
+      if (Number(game.version) !== command.expectedVersion || state !== "active") throw new CommandVersionConflictError(Number(game.version), state);
 
       const actualPlatforms = payload.actualPlatforms ?? undefined;
       if (actualPlatforms !== undefined) assertVideoGamePlatforms(game.medium as Medium, actualPlatforms);
@@ -635,6 +659,70 @@ export class PostgresGameStore implements GameStore {
     });
   }
 
+  private async changeTrashState(command: GameLifecycleCommand, commandKind: "game.trash" | "game.restore"): Promise<VersionedCommandResult> {
+    const commandId = command.commandId.toLowerCase();
+    const gameId = command.gameId.toLowerCase();
+    const payloadSha256 = commandPayloadSha256({});
+    return this.db.transaction(async (tx) => {
+      let receiptRows = await tx.execute(sql`
+        select owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256, result_version, result_state
+        from app_private.command_receipts where command_id = ${commandId} for update
+      `) as Row[];
+      let receipt = receiptRows[0];
+      let claimed = false;
+      if (!receipt) {
+        receiptRows = await tx.execute(sql`
+          insert into app_private.command_receipts (command_id, owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256)
+          values (${commandId}, ${command.ownerId}, ${commandKind}, 'game', ${gameId}, ${command.expectedVersion}, ${payloadSha256})
+          on conflict (command_id) do nothing
+          returning owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256, result_version, result_state
+        `) as Row[];
+        receipt = receiptRows[0];
+        claimed = Boolean(receipt);
+        if (!receipt) {
+          receiptRows = await tx.execute(sql`select owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256, result_version, result_state from app_private.command_receipts where command_id = ${commandId} for update`) as Row[];
+          receipt = receiptRows[0];
+        }
+      }
+      if (!receipt) throw new SourcePersistenceFailedError();
+      if (!claimed && receipt.result_version !== null) {
+        const expiryRows = await tx.execute(sql`select expires_at <= clock_timestamp() as expired from app_private.command_receipts where command_id = ${commandId}`) as Row[];
+        if (expiryRows[0]?.expired === true) {
+          await tx.execute(sql`delete from app_private.command_receipts where command_id = ${commandId}`);
+          receiptRows = await tx.execute(sql`
+            insert into app_private.command_receipts (command_id, owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256)
+            values (${commandId}, ${command.ownerId}, ${commandKind}, 'game', ${gameId}, ${command.expectedVersion}, ${payloadSha256})
+            returning owner_id, command_kind, target_kind, target_id, expected_version, payload_sha256, result_version, result_state
+          `) as Row[];
+          receipt = receiptRows[0];
+          claimed = true;
+          if (!receipt) throw new SourcePersistenceFailedError();
+        }
+      }
+      if (String(receipt.owner_id) !== command.ownerId || receipt.command_kind !== commandKind || receipt.target_kind !== "game" || String(receipt.target_id) !== gameId || Number(receipt.expected_version) !== command.expectedVersion || receipt.payload_sha256 !== payloadSha256) throw new CommandIdempotencyConflictError();
+      if (!claimed && receipt.result_version !== null && receipt.result_state !== null) return { resourceId: gameId, version: Number(receipt.result_version), state: receipt.result_state as VersionedCommandResult["state"], replayed: true };
+
+      const gameRows = await tx.execute(sql`select id, version, trashed_at from app_private.games where id = ${gameId} for update`) as Row[];
+      const game = gameRows[0];
+      if (!game) throw new CommandTargetNotFoundError();
+      const state = game.trashed_at === null ? "active" as const : "trashed" as const;
+      const required = commandKind === "game.trash" ? "active" : "trashed";
+      if (Number(game.version) !== command.expectedVersion || state !== required) throw new CommandVersionConflictError(Number(game.version), state);
+      const updatedRows = commandKind === "game.trash"
+        ? await tx.execute(sql`update app_private.games set trashed_at = clock_timestamp(), version = version + 1 where id = ${gameId} returning version, trashed_at`) as Row[]
+        : await tx.execute(sql`update app_private.games set trashed_at = null, version = version + 1 where id = ${gameId} returning version, trashed_at`) as Row[];
+      const updated = updatedRows[0];
+      if (!updated) throw new SourcePersistenceFailedError();
+      const result = { resourceId: gameId, version: Number(updated.version), state: updated.trashed_at === null ? "active" as const : "trashed" as const, replayed: false };
+      await tx.execute(sql`update app_private.command_receipts set result_version = ${result.version}, result_state = ${result.state} where command_id = ${commandId}`);
+      await this.deleteExpiredCommandReceipts(tx, 100);
+      return result;
+    });
+  }
+
+  moveToTrashWithCommand(command: GameLifecycleCommand) { return this.changeTrashState(command, "game.trash"); }
+  restoreWithCommand(command: GameLifecycleCommand) { return this.changeTrashState(command, "game.restore"); }
+
   async cleanupExpiredCommandReceipts(limit: number): Promise<number> {
     const boundedLimit = Math.max(0, Math.min(Math.trunc(limit), 500));
     if (boundedLimit === 0) return 0;
@@ -678,8 +766,9 @@ export class PostgresGameStore implements GameStore {
       : { kind: "new", gameId: input.gameId, name: input.name, entityKind: input.entityKind, role: input.role, allowDuplicate: false };
     try {
       const result = await this.db.transaction(async (tx) => {
-        const gameRows = await tx.execute(sql`select id from app_private.games where id = ${manualInput.gameId} for update`) as Row[];
+        const gameRows = await tx.execute(sql`select id, trashed_at from app_private.games where id = ${manualInput.gameId} for update`) as Row[];
         if (!gameRows[0]) throw new SourcePersistenceFailedError();
+        if (gameRows[0].trashed_at !== null) throw new SourceGameUnavailableError();
 
         if (manualInput.kind === "new") {
           const name = manualInput.name.trim();
@@ -713,17 +802,22 @@ export class PostgresGameStore implements GameStore {
       });
       return result;
     } catch (error) {
-      if (error instanceof LibraryConflictError || error instanceof SourcePersistenceFailedError) throw error;
+      if (error instanceof LibraryConflictError || error instanceof SourcePersistenceFailedError || error instanceof SourceGameUnavailableError) throw error;
       if (sqlState(error) === "23505") throw new LibraryConflictError("library_contribution_exists", "此貢獻者已在此遊戲擁有相同分類。");
       throw new SourcePersistenceFailedError();
     }
   }
 
   async removeManualContribution(gameId: string, contributionId: string): Promise<GameRecord> {
-    await this.db.execute(sql`delete from app_private.manual_contributions where game_id = ${gameId} and id = ${contributionId}`);
-    const game = await this.get(gameId);
-    if (!game) throw new SourcePersistenceFailedError();
-    return game;
+    return this.db.transaction(async (tx) => {
+      const games = await tx.execute(sql`select id, trashed_at from app_private.games where id = ${gameId} for update`) as Row[];
+      if (!games[0]) throw new SourcePersistenceFailedError();
+      if (games[0].trashed_at !== null) throw new SourceGameUnavailableError();
+      await tx.execute(sql`delete from app_private.manual_contributions where game_id = ${gameId} and id = ${contributionId}`);
+      const game = await this.readGame(tx, gameId);
+      if (!game) throw new SourcePersistenceFailedError();
+      return game;
+    });
   }
 
   async deletePlatform(name: string): Promise<void> {

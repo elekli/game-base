@@ -7,11 +7,12 @@ import { useRouter } from "next/navigation";
 import { addListMember, archiveList, describeListMember, removeListMember, restoreList, restoreListMember, retryExternalListThumbnail } from "@/app/private-list-actions";
 import type { NormalizedSearchCandidate } from "@/modules/games/internal/types";
 import { shouldRetainListCommand, type ListMember, type ListRecord, type ListTarget } from "@/modules/lists";
+import { GameLifecycleClient } from "@/app/games/game-lifecycle-client";
 
 type SearchResponse = { groups: readonly { items: readonly NormalizedSearchCandidate[]; errorCode: string | null }[] };
 type Initial = Readonly<{ list: ListRecord; members: readonly ListMember[] }>;
 
-export function ListDetailClient({ initial, games }: { initial: Initial; games: readonly { id: string; name: string; trashed: boolean }[] }) {
+export function ListDetailClient({ initial, games }: { initial: Initial; games: readonly { id: string; name: string; version: number; trashed: boolean }[] }) {
   const router = useRouter();
   const [record, setRecord] = useState(initial.list);
   const [members, setMembers] = useState(initial.members);
@@ -65,8 +66,8 @@ export function ListDetailClient({ initial, games }: { initial: Initial; games: 
     finally { setBusy(false); }
   }
 
-  async function saveDescription(member: ListMember) {
-    if (busy || member.removed) return;
+  async function saveDescription(member: ListMember, trashed: boolean) {
+    if (busy || member.removed || trashed) return;
     const description = descriptions[member.id]?.trim() || null;
     setBusy(true); setMessage("");
     try {
@@ -125,23 +126,25 @@ export function ListDetailClient({ initial, games }: { initial: Initial; games: 
       <h2 id="members-heading" className="text-xl font-semibold">清單成員</h2>
       <ul className="mt-3 space-y-3">{members.map((member) => {
         const name = memberName(member);
-        return <li key={member.id} className={`rounded-2xl border bg-white p-4 ${member.removed ? "border-dashed opacity-70" : "border-slate-200"}`}>
+        const resolvedGame = member.resolvedGameId ? games.find((game) => game.id === member.resolvedGameId) : undefined;
+        const trashed = member.trashed || (resolvedGame?.trashed ?? false);
+        return <li key={member.id} className={`rounded-2xl border bg-white p-4 ${member.removed ? "border-dashed opacity-70" : trashed ? "border-slate-200 grayscale" : "border-slate-200"}`}>
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 gap-3">
               {member.thumbnailUrl && <Image unoptimized src={member.thumbnailUrl} alt="" width={64} height={64} className="h-16 w-16 shrink-0 rounded-lg object-cover" />}
               <div className="min-w-0">
                 {member.resolvedGameId ? <Link href={`/games/${member.resolvedGameId}`} className="font-semibold underline">{name}</Link> : <p className="font-semibold">{name}</p>}
-                <p className="mt-1 text-sm text-slate-500">{member.target.kind === "external" ? `${member.target.ref.provider.toUpperCase()}　${member.target.releaseYear ?? "年份未知"}` : "收藏庫"}{member.thumbnailState === "pending" ? "　封面處理中" : member.thumbnailState === "failed" ? "　封面處理失敗" : ""}{member.trashed ? "　已移入資源回收區" : ""}{member.removed ? "　已移除" : ""}</p>
+                <p className="mt-1 text-sm text-slate-500">{member.target.kind === "external" ? `${member.target.ref.provider.toUpperCase()}　${member.target.releaseYear ?? "年份未知"}` : "收藏庫"}{member.thumbnailState === "pending" ? "　封面處理中" : member.thumbnailState === "failed" ? "　封面處理失敗" : ""}{trashed ? "　已移入資源回收區" : ""}{member.removed ? "　已移除" : ""}</p>
                 {member.thumbnailState === "failed" && member.target.kind === "external" && <button type="button" disabled={busy} onClick={() => void retryThumbnail(member)} className="mt-2 text-sm font-semibold text-emerald-900 underline disabled:opacity-50">重試封面</button>}
               </div>
             </div>
-            <button type="button" disabled={busy || record.archived} onClick={() => void changeMember(member, member.removed)} className="min-h-11 shrink-0 rounded-xl border border-slate-300 px-3 text-sm disabled:opacity-50">{member.removed ? "立即復原" : "移除"}</button>
+            <div className="shrink-0">{trashed && member.resolvedGameId && resolvedGame ? <GameLifecycleClient gameId={member.resolvedGameId} version={resolvedGame.version} state="trashed" compact /> : <button type="button" disabled={busy || record.archived} onClick={() => void changeMember(member, member.removed)} className="min-h-11 rounded-xl border border-slate-300 px-3 text-sm disabled:opacity-50">{member.removed ? "立即復原" : "移除"}</button>}</div>
           </div>
           <div className="mt-3">
             <label className="block text-sm font-semibold">{name}的描述
-              <textarea value={descriptions[member.id] ?? ""} onChange={(event) => setDescriptions((current) => ({ ...current, [member.id]: event.target.value }))} disabled={busy || record.archived || member.removed} maxLength={1000} rows={2} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 font-normal disabled:bg-slate-100" />
+              <textarea value={descriptions[member.id] ?? ""} onChange={(event) => setDescriptions((current) => ({ ...current, [member.id]: event.target.value }))} disabled={busy || record.archived || member.removed || trashed} maxLength={1000} rows={2} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 font-normal disabled:bg-slate-100" />
             </label>
-            <button type="button" disabled={busy || record.archived || member.removed || (descriptions[member.id]?.trim() || null) === member.description} onClick={() => void saveDescription(member)} className="mt-2 rounded-xl border border-emerald-900 px-3 py-2 text-sm font-semibold text-emerald-900 disabled:opacity-50">儲存描述</button>
+            <button type="button" disabled={busy || record.archived || member.removed || trashed || (descriptions[member.id]?.trim() || null) === member.description} onClick={() => void saveDescription(member, trashed)} className="mt-2 rounded-xl border border-emerald-900 px-3 py-2 text-sm font-semibold text-emerald-900 disabled:opacity-50">儲存描述</button>
           </div>
         </li>;
       })}</ul>

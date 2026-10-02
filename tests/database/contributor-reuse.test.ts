@@ -96,7 +96,8 @@ describe("PostgresGameStore contributor 重用", () => {
     if (duplicate.status !== "created") throw new Error("duplicate contributor was not created");
     const contributorIds = duplicate.game.contributors.filter((item) => item.origin === "manual").map((item) => item.contributorId);
     expect(contributorIds).toHaveLength(2);
-    expect(contributorIds[1]).not.toBe(first.game.contributors[0].contributorId);
+    expect(new Set(contributorIds).size).toBe(2);
+    expect(contributorIds).toContain(first.game.contributors[0].contributorId);
     expect(await counts(`${testPrefix}允許同名`)).toEqual({ contributors: 2, relationships: 2 });
   });
 });

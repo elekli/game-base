@@ -124,6 +124,18 @@ export class PostgresRelationStore implements RelationStore {
   restore(command: RelationCommand) { return this.change(command, "relation.restore", "removed_at = null", "active"); }
   describe(command: RelationCommand & { description: string | null }) {
     return this.execute({ ownerId: command.ownerId, commandId: command.commandId, kind: "relation.describe", targetId: command.relationId, expectedVersion: command.expectedVersion, payload: { description: command.description } }, async (tx) => {
+      const relations = await tx.execute(sql`select left_game_id, left_external_game_identity_id, right_game_id, right_external_game_identity_id from app_private.game_relations where id = ${command.relationId}`) as Row[];
+      if (relations[0]) {
+        const relation = relations[0];
+        const games = await tx.execute(sql`
+          select id, trashed_at from app_private.games
+          where id in (${relation.left_game_id}, ${relation.right_game_id})
+             or external_game_identity_id in (${relation.left_external_game_identity_id}, ${relation.right_external_game_identity_id})
+          order by id for update
+        `) as Row[];
+        if (games.some((game) => game.trashed_at !== null)) throw new RelationStateConflictError();
+        await tx.execute(sql`select id from app_private.game_relations where id = ${command.relationId} for update`);
+      }
       const rows = await tx.execute(sql`update app_private.game_relations set description = ${command.description}, version = version + 1, updated_at = clock_timestamp() where id = ${command.relationId} and version = ${command.expectedVersion} and removed_at is null returning id, version, removed_at`) as Row[];
       return rows[0] ? this.result(rows[0], false) : this.throwMissingOrConflict(tx, command.relationId, command.expectedVersion, "active");
     });

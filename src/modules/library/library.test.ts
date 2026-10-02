@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 import { cleanSharedNames, normalizeSharedName } from "./internal/names";
 import { clearIncompatibleSourceCategories, filterAndSortGames } from "./internal/filters";
@@ -354,6 +356,9 @@ describe("library service", () => {
     await expect(service.deletePlatform("舊平台")).rejects.toThrow("仍有遊戲使用");
     await expect(service.deleteTag("舊標籤")).rejects.toThrow("仍有遊戲使用");
 
+    const trashed = await store.get(game.id);
+    if (!trashed) throw new Error("missing trashed game");
+    await store.restoreWithCommand({ ownerId: "test-owner", commandId: randomUUID(), gameId: game.id, expectedVersion: trashed.version });
     await service.editGame(game.id, { actualPlatforms: [], tags: [] });
     expect(await service.listPlatforms()).toEqual(expect.arrayContaining([{ name: "舊平台", usageCount: 0, isSystem: false }]));
     expect(await service.listTags()).toEqual([{ name: "舊標籤", usageCount: 0, isSystem: false }]);

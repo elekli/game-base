@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { normalizeRelationsOrdering, normalizeSchemaOrdering } from "../../scripts/drizzle-schema-normalization";
 
 const directDatabaseUrl = process.env.DIRECT_DATABASE_URL;
 
@@ -39,8 +40,8 @@ function pullWithDelayedTable(tableName: string, outputName: string) {
   });
 
   return {
-    schema: readFileSync(join(outputDirectory, "schema.ts"), "utf8"),
-    relations: readFileSync(join(outputDirectory, "relations.ts"), "utf8"),
+    schema: normalizeSchemaOrdering(readFileSync(join(outputDirectory, "schema.ts"), "utf8")),
+    relations: normalizeRelationsOrdering(readFileSync(join(outputDirectory, "relations.ts"), "utf8")),
   };
 }
 

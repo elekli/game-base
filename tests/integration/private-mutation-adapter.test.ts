@@ -4,6 +4,7 @@ import type { ContributorMatch, GameRecord, GamesService, ManualContributionResu
 import type { LibraryService } from "@/modules/library";
 import { createPrivateMutationAdapter } from "@/app/private-mutation-adapter";
 import type { PrivateActionDependencies } from "@/shared/auth/private-action";
+import { AccessDeniedError } from "@/shared/auth/access-denied-error";
 import { CommandIdempotencyConflictError, CommandVersionConflictError } from "@/modules/commands";
 
 const gameId = "11111111-1111-4111-8111-111111111111";
@@ -15,7 +16,7 @@ const commandId = "66666666-6666-4666-8666-666666666666";
 const emptyGame = {} as GameRecord;
 
 type TestLibraryService = Pick<LibraryService, "addManualContribution" | "removeManualContribution" | "editGameCommand" | "deletePlatform" | "deleteTag">;
-type TestGamesService = Pick<GamesService, "linkExternalSource" | "refreshExternalMetadata">;
+type TestGamesService = Pick<GamesService, "linkExternalSource" | "refreshExternalMetadata" | "moveGameToTrash" | "restoreGame">;
 
 function makeSetup() {
   const addManualContribution = vi.fn(async (): Promise<ManualContributionResult> => ({ status: "created", game: emptyGame, possibleDuplicate: false }));
@@ -29,7 +30,10 @@ function makeSetup() {
   const gamesService: TestGamesService = {
     linkExternalSource: vi.fn(async () => emptyGame),
     refreshExternalMetadata: vi.fn(async () => emptyGame),
+    moveGameToTrash: vi.fn(async () => ({ resourceId: gameId, version: 2, state: "trashed" as const, replayed: false })),
+    restoreGame: vi.fn(async () => ({ resourceId: gameId, version: 3, state: "active" as const, replayed: false })),
   };
+  const getServices = vi.fn(async () => ({ gamesService, libraryService }));
   const privateDependencies: PrivateActionDependencies = {
     verifyAccessToken: vi.fn(async () => ({ sub: "owner-subject" })),
     onAccessDenied: vi.fn(async () => undefined),
@@ -41,20 +45,30 @@ function makeSetup() {
       "x-request-id": requestId,
     }),
     getPrivateDependencies: () => privateDependencies,
-    gamesService,
-    libraryService,
+    getServices,
   });
-  return { adapter, gamesService, libraryService };
+  return { adapter, gamesService, libraryService, getServices, privateDependencies };
 }
 
 describe("private mutation adapter", () => {
   it("rejects invalid input before calling the service", async () => {
-    const { adapter, libraryService } = makeSetup();
+    const { adapter, libraryService, getServices } = makeSetup();
 
     const result = await adapter.editGame({ gameId: "not-a-uuid" });
 
     expect(result).toEqual({ ok: false, code: "invalid_input", message: "遊戲資料參數無效。", requestId });
     expect(libraryService.editGameCommand).not.toHaveBeenCalled();
+    expect(getServices).not.toHaveBeenCalled();
+  });
+
+  it("擁有者驗證失敗時不載入遊戲或資料庫 store", async () => {
+    const { adapter, getServices, privateDependencies } = makeSetup();
+    vi.mocked(privateDependencies.verifyAccessToken).mockRejectedValueOnce(new AccessDeniedError());
+
+    const result = await adapter.moveGameToTrash({ commandId, expectedVersion: 1, gameId });
+
+    expect(result).toMatchObject({ ok: false, code: "access_denied" });
+    expect(getServices).not.toHaveBeenCalled();
   });
 
   it("confirmation_required 只回傳候選 matches，不宣稱已建立且不帶 game", async () => {
@@ -129,6 +143,16 @@ describe("private mutation adapter", () => {
 
     expect(result).toEqual({ ok: true });
     expect(libraryService.editGameCommand).toHaveBeenCalledWith({ ownerId: "owner-subject", commandId, expectedVersion: 1, gameId, payload: { displayName: "新名稱", actualPlatforms: ["Steam"], tags: ["合作"], playerCountNote: "備註" } });
+  });
+
+  it("authenticates and binds trash／restore commands to the owner", async () => {
+    const { adapter, gamesService } = makeSetup();
+
+    await expect(adapter.moveGameToTrash({ commandId, expectedVersion: 1, gameId })).resolves.toEqual({ ok: true, resourceId: gameId, version: 2, state: "trashed", replayed: false });
+    await expect(adapter.restoreGame({ commandId: operationId, expectedVersion: 2, gameId })).resolves.toEqual({ ok: true, resourceId: gameId, version: 3, state: "active", replayed: false });
+
+    expect(gamesService.moveGameToTrash).toHaveBeenCalledWith({ ownerId: "owner-subject", commandId, expectedVersion: 1, gameId });
+    expect(gamesService.restoreGame).toHaveBeenCalledWith({ ownerId: "owner-subject", commandId: operationId, expectedVersion: 2, gameId });
   });
 
   it("canonicalizes command and target UUIDs before entering the domain", async () => {

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { SourceGameUnavailableError, SourceIdentityConflictError, SourceMediumMismatchError, SourcePersistenceFailedError } from "./errors";
 import { LibraryConflictError } from "@/modules/library/internal/errors";
-import type { ContributionRole, ExternalGameRef, GameContribution, GameRecord, LibraryGameQuery, Medium, SourceCategory, SourceSnapshot } from "./types";
+import type { ContributionRole, ExternalGameRef, GameContribution, GameRecord, LibraryGameQuery, Medium, SourceCategory, SourceSnapshot, TrashConfirmation } from "./types";
 import { filterAndSortLibraryGames, sourceCategoryFacets } from "./library-query";
 import {
   CommandIdempotencyConflictError,
@@ -10,6 +10,7 @@ import {
   commandPayloadSha256,
   normalizeGameEditPayload,
   type GameEditCommand,
+  type GameLifecycleCommand,
   type VersionedCommandResult,
 } from "@/modules/commands";
 
@@ -67,12 +68,16 @@ export type GameStore = {
   listSourceCategoryFacets(medium: Medium): Promise<readonly SourceCategory[]>;
   listContributorFacets(): Promise<readonly ContributorFacet[]>;
   get(id: string): Promise<GameRecord | null>;
+  listTrashed(): Promise<readonly GameRecord[]>;
+  getTrashConfirmation(id: string): Promise<TrashConfirmation | null>;
   createManual(displayName: string, medium: Medium): Promise<GameRecord>;
   createFromSource(ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<{ game: GameRecord; created: boolean }>;
   linkFromSource(gameId: string, ref: ExternalGameRef, snapshot: SourceSnapshot): Promise<GameRecord>;
   refreshSource(gameId: string, snapshot: SourceSnapshot, operationId: string): Promise<GameRecord>;
   edit(gameId: string, input: GameEditInput): Promise<GameRecord>;
   editWithCommand(command: GameEditCommand): Promise<VersionedCommandResult>;
+  moveToTrashWithCommand(command: GameLifecycleCommand): Promise<VersionedCommandResult>;
+  restoreWithCommand(command: GameLifecycleCommand): Promise<VersionedCommandResult>;
   cleanupExpiredCommandReceipts(limit: number): Promise<number>;
   findContributorMatches(gameId: string, name: string): Promise<readonly ContributorMatch[]>;
   addManualContribution(input: ManualContributionInput | LegacyManualContributionInput): Promise<ManualContributionResult>;
@@ -125,6 +130,7 @@ export class InMemoryGameStore implements GameStore {
   private readonly customTags = new Map<string, string>();
   private readonly commandReceipts = new Map<string, Readonly<{
     ownerId: string;
+    commandKind: "game.edit" | "game.trash" | "game.restore";
     gameId: string;
     expectedVersion: number;
     payloadSha256: string;
@@ -212,6 +218,15 @@ export class InMemoryGameStore implements GameStore {
 
   async get(id: string) { return this.games.get(id) ?? null; }
 
+  async listTrashed(): Promise<readonly GameRecord[]> {
+    return [...this.games.values()].filter((game) => game.trashedAt !== null).sort((left, right) => left.displayName.localeCompare(right.displayName, "zh-Hant"));
+  }
+
+  async getTrashConfirmation(id: string): Promise<TrashConfirmation | null> {
+    const game = this.games.get(id);
+    return game ? { game, counts: { notes: 0, photos: 0, attachments: 0, lists: 0, relations: 0 } } : null;
+  }
+
   async createManual(displayName: string, medium: Medium): Promise<GameRecord> {
     const title = displayName.trim();
     if (!title) throw new Error("手動遊戲名稱不可為空。");
@@ -280,6 +295,7 @@ export class InMemoryGameStore implements GameStore {
   async edit(gameId: string, input: GameEditInput): Promise<GameRecord> {
     const game = this.games.get(gameId);
     if (!game) throw new Error("找不到遊戲條目。");
+    if (game.trashedAt) throw new SourceGameUnavailableError();
     const actualPlatforms = input.actualPlatforms === undefined ? game.actualPlatforms : uniqueNames(input.actualPlatforms);
     assertVideoGamePlatforms(game.medium, actualPlatforms);
     const tags = input.tags === undefined ? game.tags : uniqueNames(input.tags);
@@ -309,7 +325,7 @@ export class InMemoryGameStore implements GameStore {
         existing = undefined;
       }
       if (existing) {
-        if (existing.ownerId !== command.ownerId || existing.gameId !== gameId || existing.expectedVersion !== command.expectedVersion || existing.payloadSha256 !== payloadSha256) {
+        if (existing.ownerId !== command.ownerId || existing.commandKind !== "game.edit" || existing.gameId !== gameId || existing.expectedVersion !== command.expectedVersion || existing.payloadSha256 !== payloadSha256) {
           throw new CommandIdempotencyConflictError();
         }
         return { ...existing.result, replayed: true };
@@ -317,14 +333,40 @@ export class InMemoryGameStore implements GameStore {
       const game = this.games.get(gameId);
       if (!game) throw new CommandTargetNotFoundError();
       const state = game.trashedAt === null ? "active" as const : "trashed" as const;
-      if (game.version !== command.expectedVersion) throw new CommandVersionConflictError(game.version, state);
+      if (game.version !== command.expectedVersion || state !== "active") throw new CommandVersionConflictError(game.version, state);
       const updated = await this.edit(gameId, payload);
       const result = { resourceId: updated.id, version: updated.version + 1, state: updated.trashedAt === null ? "active" as const : "trashed" as const };
       this.games.set(gameId, { ...updated, version: result.version });
-      this.commandReceipts.set(commandId, { ownerId: command.ownerId, gameId, expectedVersion: command.expectedVersion, payloadSha256, result, expiresAt: Date.now() + 90 * 24 * 60 * 60 * 1_000 });
+      this.commandReceipts.set(commandId, { ownerId: command.ownerId, commandKind: "game.edit", gameId, expectedVersion: command.expectedVersion, payloadSha256, result, expiresAt: Date.now() + 90 * 24 * 60 * 60 * 1_000 });
       return { ...result, replayed: false };
     }));
   }
+
+  private async changeTrashState(command: GameLifecycleCommand, commandKind: "game.trash" | "game.restore"): Promise<VersionedCommandResult> {
+    const commandId = command.commandId.toLowerCase();
+    const gameId = command.gameId.toLowerCase();
+    return this.withLock(`command:${commandId}`, async () => this.withLock(`game:${gameId}`, async () => {
+      const payloadSha256 = commandPayloadSha256({});
+      const existing = this.commandReceipts.get(commandId);
+      if (existing) {
+        if (existing.ownerId !== command.ownerId || existing.commandKind !== commandKind || existing.gameId !== gameId || existing.expectedVersion !== command.expectedVersion || existing.payloadSha256 !== payloadSha256) throw new CommandIdempotencyConflictError();
+        return { ...existing.result, replayed: true };
+      }
+      const game = this.games.get(gameId);
+      if (!game) throw new CommandTargetNotFoundError();
+      const state = game.trashedAt === null ? "active" as const : "trashed" as const;
+      const required = commandKind === "game.trash" ? "active" : "trashed";
+      if (game.version !== command.expectedVersion || state !== required) throw new CommandVersionConflictError(game.version, state);
+      const updated = { ...game, trashedAt: commandKind === "game.trash" ? new Date().toISOString() : null, version: game.version + 1 };
+      this.games.set(gameId, updated);
+      const result = { resourceId: gameId, version: updated.version, state: updated.trashedAt === null ? "active" as const : "trashed" as const };
+      this.commandReceipts.set(commandId, { ownerId: command.ownerId, commandKind, gameId, expectedVersion: command.expectedVersion, payloadSha256, result, expiresAt: Date.now() + 90 * 24 * 60 * 60 * 1_000 });
+      return { ...result, replayed: false };
+    }));
+  }
+
+  moveToTrashWithCommand(command: GameLifecycleCommand) { return this.changeTrashState(command, "game.trash"); }
+  restoreWithCommand(command: GameLifecycleCommand) { return this.changeTrashState(command, "game.restore"); }
 
   async cleanupExpiredCommandReceipts(limit: number): Promise<number> {
     const boundedLimit = Math.max(0, Math.min(Math.trunc(limit), 500));
@@ -345,6 +387,7 @@ export class InMemoryGameStore implements GameStore {
   async addManualContribution(input: ManualContributionInput | LegacyManualContributionInput): Promise<ManualContributionResult> {
     const game = this.games.get(input.gameId);
     if (!game) throw new Error("找不到遊戲條目。");
+    if (game.trashedAt) throw new SourceGameUnavailableError();
     if (!("kind" in input) || input.kind === "new") {
       const name = input.name.trim();
       if (!name) throw new Error("貢獻者名稱不可為空。");
@@ -371,6 +414,7 @@ export class InMemoryGameStore implements GameStore {
   async removeManualContribution(gameId: string, contributionId: string): Promise<GameRecord> {
     const game = this.games.get(gameId);
     if (!game) throw new Error("找不到遊戲條目。");
+    if (game.trashedAt) throw new SourceGameUnavailableError();
     const updated = { ...game, contributors: game.contributors.filter((contribution) => contribution.id !== contributionId || contribution.origin !== "manual") };
     this.games.set(game.id, updated);
     return updated;
@@ -425,12 +469,16 @@ export class UnavailableGameStore implements GameStore {
   async listSourceCategoryFacets(): Promise<readonly SourceCategory[]> { return this.fail(); }
   async listContributorFacets(): Promise<readonly ContributorFacet[]> { return this.fail(); }
   async get(): Promise<GameRecord | null> { return this.fail(); }
+  async listTrashed(): Promise<readonly GameRecord[]> { return this.fail(); }
+  async getTrashConfirmation(): Promise<TrashConfirmation | null> { return this.fail(); }
   async createManual(): Promise<GameRecord> { return this.fail(); }
   async createFromSource(): Promise<{ game: GameRecord; created: boolean }> { return this.fail(); }
   async linkFromSource(): Promise<GameRecord> { return this.fail(); }
   async refreshSource(): Promise<GameRecord> { return this.fail(); }
   async edit(): Promise<GameRecord> { return this.fail(); }
   async editWithCommand(): Promise<VersionedCommandResult> { return this.fail(); }
+  async moveToTrashWithCommand(): Promise<VersionedCommandResult> { return this.fail(); }
+  async restoreWithCommand(): Promise<VersionedCommandResult> { return this.fail(); }
   async cleanupExpiredCommandReceipts(): Promise<number> { return this.fail(); }
   async findContributorMatches(): Promise<readonly ContributorMatch[]> { return this.fail(); }
   async addManualContribution(): Promise<ManualContributionResult> { return this.fail(); }

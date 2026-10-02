@@ -207,6 +207,46 @@ describe("MediaService 與真 PostgreSQL", () => {
     }
   });
 
+  it("trash 先取得遊戲列鎖時，媒體說明更新等待提交後拒絕", async () => {
+    const storage = objects();
+    const service = serviceFor(storage);
+    const grant = grantFrom(await service.beginMediaUpload(owner, beginCommand()));
+    await service.finalizeMediaUpload(owner, { idempotencyKey: key });
+
+    const applicationName = "media_metadata_trash_race";
+    const raceDatabase = createDatabase(namedRoleUrl("app_runtime", applicationName));
+    const raceService = createMediaService({ store: new PostgresMediaStore(raceDatabase.db), objects: storage });
+    const trashed = deferred();
+    const releaseTrash = deferred();
+    const trash = runtime.begin(async (tx) => {
+      await tx.unsafe("update app_private.games set trashed_at = now() where id = $1", [gameId]);
+      trashed.resolve();
+      await releaseTrash.promise;
+    });
+
+    try {
+      await trashed.promise;
+      const metadataOutcome = raceService.updateMediaMetadata(owner, { assetId: grant.assetId, caption: "回收後不得改寫" }).then(
+        (value) => ({ status: "fulfilled" as const, value }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      );
+      const didWaitForGameLock = await waitForDatabaseLock(applicationName).then(() => true, () => false);
+      releaseTrash.resolve();
+      await trash;
+
+      expect(didWaitForGameLock).toBe(true);
+      const outcome = await metadataOutcome;
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") expect(outcome.reason).toBeInstanceOf(MediaAssetUnavailableError);
+      const rows = await control.unsafe<{ caption: string | null }[]>("select caption from app_private.media_assets where id = $1", [grant.assetId]);
+      expect(rows[0]?.caption).toBeNull();
+    } finally {
+      releaseTrash.resolve();
+      await trash.catch(() => undefined);
+      await raceDatabase.close();
+    }
+  });
+
   it("資產移除先鎖定時，人工封面指標等待後不得指向已移除資產", async () => {
     const grant = grantFrom(await serviceFor().beginMediaUpload(owner, beginCommand({ purpose: "custom_cover" })));
     await serviceFor().finalizeMediaUpload(owner, { idempotencyKey: key });

@@ -3,14 +3,12 @@
 import "server-only";
 import { headers } from "next/headers";
 import { getPrivateDependencies } from "@/app/api/private/games/_private";
-import { gamesService, libraryService } from "@/app/games/service";
 import { createPrivateMutationAdapter } from "@/app/private-mutation-adapter";
 
 const privateMutationAdapter = createPrivateMutationAdapter({
   getHeaders: async () => new Headers(await headers()),
   getPrivateDependencies,
-  gamesService,
-  libraryService,
+  getServices: async () => import("@/app/games/service"),
 });
 
 export async function addManualContribution(input: unknown) {
@@ -23,6 +21,14 @@ export async function removeManualContribution(input: unknown) {
 
 export async function editGame(input: unknown) {
   return privateMutationAdapter.editGame(input);
+}
+
+export async function moveGameToTrash(input: unknown) {
+  return privateMutationAdapter.moveGameToTrash(input);
+}
+
+export async function restoreGame(input: unknown) {
+  return privateMutationAdapter.restoreGame(input);
 }
 
 export async function linkExternalSource(input: unknown) {

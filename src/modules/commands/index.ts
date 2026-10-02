@@ -19,6 +19,13 @@ export type GameEditCommand = Readonly<{
   }>;
 }>;
 
+export type GameLifecycleCommand = Readonly<{
+  ownerId: string;
+  commandId: string;
+  expectedVersion: number;
+  gameId: string;
+}>;
+
 function uniqueNames(values: readonly string[]): readonly string[] {
   const seen = new Set<string>();
   const result: string[] = [];
