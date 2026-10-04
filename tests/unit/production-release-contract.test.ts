@@ -117,7 +117,7 @@ describe("production release contract", () => {
       productionDeploymentEvidenceWriterSha256:
         "eead0cd0d62d9692df37cedcba7e513e6edafcc01b7c3b61e8dbc63e28d8e307",
       productionDeploymentWriterSha256:
-        "e9aecd21e93451143e4fc0e9a6ad222908109e2fe1622703ddde550935c62cb5",
+        "f74571bace91e6218833cc7211c02105018bcaf4fc9465981fe3fbc73dbf2b59",
       productionSupabaseFingerprintHelper: "scripts/fingerprint-supabase-api-keys.mjs",
       productionSupabaseFingerprintHelperSha256:
         "e5046bdc858d1cd3777115d1e277d8995d2a594bc5c902ff13a15969154d0ba9",

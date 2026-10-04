@@ -1,6 +1,6 @@
 # Issue #73：正式環境寫入 canary 設計
 
-狀態：設計草案，待文件審查及使用者檢視。此文件定義意圖、不變式與架構，不代表功能已實作或正式驗收完成。
+狀態：已由使用者核准，實作與正式驗收進行中。此文件定義意圖、不變式與架構；未取得正式 workflow 證據前，不代表正式驗收完成。
 
 ## 目標與範圍
 
@@ -68,7 +68,7 @@ phase 轉成 `cleanup_pending` 的第一個 cleanup transaction 以 `FOR UPDATE`
 | owner 寫入已通過 generation guard，cleanup 同時開始 | 寫入交易持有註冊列 `FOR SHARE`；cleanup 的 `FOR UPDATE` 等待該交易提交／回滾後才清理。若 cleanup 先持鎖，寫入等候後因 phase／註冊列不符而拒絕。 | S2、S10 |
 | owner token 無效或 SHA 已非目前正式部署 | 在領取／準備 fixture 前拒絕，產品列零變更。 | S3、S8 |
 | 建立筆記／清單／關聯已提交但瀏覽器未收到回應 | `request_pending` 保留原 command ID；先等該版本 route／DB 期限結束，再用同一 payload 檢查 receipt 或重播原命令。不送不同命令，不盲目新建。 | S2、S5、S10 |
-| 同 command ID 改變 payload | 回 `command_idempotency_conflict`，保留原結果及草稿，不執行清理以外的後續產品操作。 | S5、S7 |
+| 同 command ID 改變 payload | 回 `command_idempotency_conflict`，保留原結果及草稿；這是 canary 最後一個產品寫入，之後只做證據截圖與 runner 清理。 | S5、S7 |
 | expected version 過期 | 回 `command_version_conflict`；資料庫內容不變，本機草稿保留，等待使用者明確選擇。 | S6、S7 |
 | trash 已提交但回應遺失 | 同代重播後核對 trashed state，再繼續 restore；不得對恢復後的資料套用舊命令。 | S2、S4、S5 |
 | restore 後檢查到筆記、成員或關聯消失 | canary 失敗；僅清理可證明屬本代的剩餘資料，保留失敗證據。 | S3、S4、S9 |

@@ -377,7 +377,7 @@ select json_build_object(
               )
               or (
                 c.relkind <> 'S'
-                and c.relname not in ('media_cleanup_jobs', 'media_reconciliation_runs', 'production_smoke_canaries')
+                and c.relname not in ('media_cleanup_jobs', 'media_reconciliation_runs', 'production_smoke_canaries', 'production_product_canaries')
                 and privilege.privilege_type in ('SELECT', 'INSERT', 'UPDATE', 'DELETE')
               )
             )
@@ -406,7 +406,16 @@ select json_build_object(
               to_regprocedure('app_private.inspect_production_smoke_canary()'),
               to_regprocedure('app_private.claim_production_smoke_canary(text,text,text,bigint)'),
               to_regprocedure('app_private.transition_production_smoke_canary(text,text,text,bigint,text,bigint,text)'),
-              to_regprocedure('app_private.cleanup_production_smoke_canary(text,text,text,bigint,text)')
+              to_regprocedure('app_private.cleanup_production_smoke_canary(text,text,text,bigint,text)'),
+              to_regprocedure('app_private.claim_production_product_canary(uuid,text)'),
+              to_regprocedure('app_private.begin_production_product_canary_command(uuid,text,uuid,text,uuid[])'),
+              to_regprocedure('app_private.guard_production_product_canary_command(uuid,text,uuid,text,uuid[])'),
+              to_regprocedure('app_private.complete_production_product_canary_command(uuid,uuid)'),
+              to_regprocedure('app_private.require_production_product_canary_recovery(uuid,uuid)'),
+              to_regprocedure('app_private.prepare_production_product_canary_cleanup(uuid)'),
+              to_regprocedure('app_private.cleanup_production_product_canary(uuid)'),
+              to_regprocedure('app_private.inspect_production_product_canary()'),
+              to_regprocedure('app_private.list_production_product_canary_games(uuid,text)')
             ])
           )
         )
@@ -571,7 +580,7 @@ select json_build_object(
       case when has_schema_privilege('app_runtime', 'app_private', 'USAGE') then 0 else 1 end
       + count(*) filter (
           where c.relkind in ('r', 'p')
-            and c.relname not in ('media_cleanup_jobs', 'media_reconciliation_runs', 'production_smoke_canaries')
+            and c.relname not in ('media_cleanup_jobs', 'media_reconciliation_runs', 'production_smoke_canaries', 'production_product_canaries')
             and (
               not has_table_privilege('app_runtime', c.oid, 'SELECT')
               or not has_table_privilege('app_runtime', c.oid, 'INSERT')
@@ -630,6 +639,70 @@ select json_build_object(
             and (privilege.grantee = 0 or granted_role.rolname in ('anon', 'authenticated', 'service_role'))
         )
     ),
+    canary_routine_drift as (
+      with expected_routine(signature, definition_sha256, runtime_execute) as (
+        values
+          ('app_private.claim_production_product_canary(uuid,text)', '2d4244f9c3d5c15587a3f184ef3bb1787aa12a9c3cda54585c3e45ed01167cd4', false),
+          ('app_private.begin_production_product_canary_command(uuid,text,uuid,text,uuid[])', '28189c4214ef305993161e6a3690a46222601f0a441774b4d9137241ff2e264f', true),
+          ('app_private.guard_production_product_canary_command(uuid,text,uuid,text,uuid[])', 'a826006776a00ff5c7fe6856c7f9f2f7cf500f728ed972804431bf5e0529dc31', true),
+          ('app_private.complete_production_product_canary_command(uuid,uuid)', 'bbb026a60784b44bdacc55593ce2ab04997a869a4a88fcd3e280604a2d46dd00', true),
+          ('app_private.require_production_product_canary_recovery(uuid,uuid)', 'a1a0a083e5b739aa07042290cbab6562317ee015c108b73ba5c8c6b01f83dcd4', true),
+          ('app_private.prepare_production_product_canary_cleanup(uuid)', 'a5aaa2f326520cc5ab1105fe1b9196c7ffa3389ed9ebc520595b2feb9c059029', true),
+          ('app_private.cleanup_production_product_canary(uuid)', 'cb21d0a4b4f8fd650ec019d6eb0e4d1290ede5f17a859b5df6f372021ee50091', true),
+          ('app_private.inspect_production_product_canary()', '5ee1896f3409df197d49db3e70646cf80340b9ffd9eca298bc148e45c116bbcc', true),
+          ('app_private.list_production_product_canary_games(uuid,text)', 'c0db6a25a40521c2bb9fb9808933ae0f2e681665a946a9cdfbe2ac5f3bea6639', true)
+      )
+      select count(*) as drift_count
+      from expected_routine expected
+      left join pg_proc procedure on procedure.oid = to_regprocedure(expected.signature)
+      left join pg_roles owner on owner.oid = procedure.proowner
+      where procedure.oid is null
+        or owner.rolname is distinct from 'app_migrator'
+        or not procedure.prosecdef
+        or procedure.proconfig is distinct from array['search_path=pg_catalog, app_private']::text[]
+        or encode(extensions.digest(convert_to(pg_get_functiondef(procedure.oid), 'UTF8'), 'sha256'), 'hex') is distinct from expected.definition_sha256
+        or has_function_privilege('app_runtime', procedure.oid, 'EXECUTE') is distinct from expected.runtime_execute
+        or exists (
+          select 1
+          from aclexplode(coalesce(procedure.proacl, acldefault('f', procedure.proowner))) privilege
+          left join pg_roles granted_role on granted_role.oid = privilege.grantee
+          where privilege.privilege_type = 'EXECUTE'
+            and (privilege.grantee = 0 or granted_role.rolname in ('anon', 'authenticated', 'service_role'))
+        )
+    ),
+    canary_internal_routine_drift as (
+      select count(*) as drift_count
+      from pg_proc procedure
+      join pg_namespace n on n.oid = procedure.pronamespace
+      where n.nspname = 'app_private'
+        and procedure.proname in ('guard_current_production_product_canary_command', 'assert_production_product_canary_write')
+        and (
+          has_function_privilege('app_runtime', procedure.oid, 'EXECUTE')
+          or exists (
+            select 1
+            from aclexplode(coalesce(procedure.proacl, acldefault('f', procedure.proowner))) privilege
+            left join pg_roles granted_role on granted_role.oid = privilege.grantee
+            where privilege.privilege_type = 'EXECUTE'
+              and (privilege.grantee = 0 or granted_role.rolname in ('anon', 'authenticated', 'service_role'))
+          )
+        )
+    ),
+    canary_table_drift as (
+      select case
+        when table_relation.oid is null then 1
+        when table_owner.rolname is distinct from 'app_migrator'
+          or not table_relation.relrowsecurity
+          or not table_relation.relforcerowsecurity
+          or has_table_privilege('app_runtime', table_relation.oid, 'SELECT')
+          or has_table_privilege('app_runtime', table_relation.oid, 'INSERT')
+          or has_table_privilege('app_runtime', table_relation.oid, 'UPDATE')
+          or has_table_privilege('app_runtime', table_relation.oid, 'DELETE')
+        then 1 else 0
+      end as drift_count
+      from (values (to_regclass('app_private.production_product_canaries'))) expected_table(oid)
+      left join pg_class table_relation on table_relation.oid = expected_table.oid
+      left join pg_roles table_owner on table_owner.oid = table_relation.relowner
+    ),
     table_drift as (
       select case
         when table_relation.oid is null then 1
@@ -652,6 +725,15 @@ select json_build_object(
         where version = '0015' and name = 'production_smoke_canary'
       )
       then (select drift_count from routine_drift) + (select drift_count from table_drift)
+      else 0
+    end + case
+      when exists (
+        select 1 from supabase_migrations.schema_migrations
+        where version = '0021' and name = 'production_product_canary'
+      )
+      then (select drift_count from canary_routine_drift)
+        + (select drift_count from canary_internal_routine_drift)
+        + (select drift_count from canary_table_drift)
       else 0
     end
   ),
@@ -1031,14 +1113,15 @@ function revokedRoutineIdentity(statement: readonly SqlToken[]) {
   const closeIndex = matchingParenIndex(statement, 7);
   if (!identity || closeIndex < 0) return null;
   const suffix = statement.slice(closeIndex + 1);
-  return isExactWordStatement(
-    suffix.filter((token) => token.value !== ","),
-    ["from", "public", "anon", "authenticated", "service_role"],
-  ) &&
-    suffix.length === 8 &&
-    suffix[2]?.value === "," &&
-    suffix[4]?.value === "," &&
-    suffix[6]?.value === ","
+  const normalizedSuffix = suffix.map((token) => token.value).join(" ");
+  const ordinaryRevocation = normalizedSuffix === "from public , anon , authenticated , service_role";
+  const triggerGuardRevocation = statement[4]?.value === "app_private" &&
+    statement[6]?.value === "guard_current_production_product_canary_command" &&
+    normalizedSuffix === "from public , anon , authenticated , service_role , app_runtime";
+  const canaryClaimRevocation = statement[4]?.value === "app_private" &&
+    statement[6]?.value === "claim_production_product_canary" &&
+    normalizedSuffix === "from public , anon , authenticated , service_role , app_runtime";
+  return ordinaryRevocation || triggerGuardRevocation || canaryClaimRevocation
     ? identity
     : null;
 }
@@ -1055,7 +1138,10 @@ function grantedRoutineIdentity(statement: readonly SqlToken[]) {
   const identity = routineIdentityKey(statement, 3);
   const closeIndex = matchingParenIndex(statement, 7);
   if (!identity || closeIndex < 0) return null;
-  return isExactWordStatement(statement.slice(closeIndex + 1), ["to", "app_runtime"])
+  const suffix = statement.slice(closeIndex + 1);
+  if (isExactWordStatement(suffix, ["to", "app_runtime"])) return identity;
+  return identity === "word:function|word:app_private|symbol:.|word:claim_production_product_canary|symbol:(|word:uuid|symbol:,|word:text|symbol:)" &&
+    isExactWordStatement(suffix, ["to", "postgres"])
     ? identity
     : null;
 }
@@ -1117,11 +1203,46 @@ function isSetConfigCall(statement: readonly SqlToken[]) {
   });
 }
 
+function isAllowedProductionProductCanarySetConfig(statement: readonly SqlToken[]) {
+  const callIndexes = statement.flatMap((token, index) =>
+    (token.kind === "word" || token.kind === "identifier") &&
+    (token.kind === "identifier" ? token.value.slice(1, -1).replaceAll('""', '"') : token.value) === "set_config" &&
+    statement[index + 1]?.value === "("
+      ? [index]
+      : []
+  );
+  if (callIndexes.length !== 1) return false;
+  const [callIndex] = callIndexes;
+  const setting = statement[callIndex + 2];
+  if (setting?.kind !== "string" || !new Set([
+    "'app.production_canary_setup_generation'",
+    "'app.production_canary_generation'",
+    "'app.production_canary_owner_id'",
+    "'app.production_canary_command_id'",
+    "'app.production_canary_operation'",
+    "'app.production_canary_target_ids'",
+    "'app.production_canary_cleanup_generation'",
+  ]).has(setting.value)) return false;
+  const closeIndex = matchingParenIndex(statement, callIndex + 1);
+  if (closeIndex < 0) return false;
+  const args: SqlToken[][] = [[]];
+  let depth = 0;
+  for (const token of statement.slice(callIndex + 2, closeIndex)) {
+    if (token.value === "(" || token.value === "[") depth += 1;
+    if ((token.value === ")" || token.value === "]") && depth > 0) depth -= 1;
+    if (token.value === "," && depth === 0) args.push([]);
+    else args[args.length - 1]!.push(token);
+  }
+  return args.length === 3 && args[2]?.length === 1 && args[2][0]?.kind === "word" && args[2][0]?.value === "true";
+}
+
 function containsForbiddenMigrationSql(
   sql: string,
   options: Readonly<{
     allowMediaDerivativeStateExpansion?: boolean;
     allowGameLifecycleReceiptKindExpansion?: boolean;
+    allowProductionProductCanaryContext?: boolean;
+    isProductionProductCanaryRoutineBody?: boolean;
   }> = {},
 ) {
   const tokens = lexSql(sql);
@@ -1209,7 +1330,10 @@ function containsForbiddenMigrationSql(
   }
   for (const [statementIndex, statement] of statements.entries()) {
     if (allowedStatements.has(statementIndex)) continue;
-    if (isSetConfigCall(statement)) return true;
+    if (isSetConfigCall(statement) && (
+      !options.isProductionProductCanaryRoutineBody ||
+      !isAllowedProductionProductCanarySetConfig(statement)
+    )) return true;
     const words = statement
       .filter((token) => token.kind === "word")
       .map((token) => token.value);
@@ -1270,11 +1394,21 @@ function containsForbiddenMigrationSql(
     }
     const bodySql = body.value;
     const bodyTokens = lexSql(bodySql);
+    const routineName = statement[4]?.value;
+    const canonicalIdentity = createdRoutineIdentity(statement);
+    const canaryContextRoutine = options.allowProductionProductCanaryContext && (
+      (routineName === "claim_production_product_canary" && canonicalIdentity === "word:function|word:app_private|symbol:.|word:claim_production_product_canary|symbol:(|word:uuid|symbol:,|word:text|symbol:)") ||
+      (routineName === "guard_production_product_canary_command" && canonicalIdentity === "word:function|word:app_private|symbol:.|word:guard_production_product_canary_command|symbol:(|word:uuid|symbol:,|word:text|symbol:,|word:uuid|symbol:,|word:text|symbol:,|word:uuid|symbol:[|symbol:]|symbol:)") ||
+      (routineName === "cleanup_production_product_canary" && canonicalIdentity === "word:function|word:app_private|symbol:.|word:cleanup_production_product_canary|symbol:(|word:uuid|symbol:)")
+    );
     if (
       bodyTokens.some(
         (token) => token.kind === "word" && token.value === "execute",
       ) ||
-      containsForbiddenMigrationSql(bodySql)
+      containsForbiddenMigrationSql(bodySql, {
+        allowProductionProductCanaryContext: canaryContextRoutine,
+        isProductionProductCanaryRoutineBody: canaryContextRoutine,
+      })
     ) {
       return true;
     }
@@ -1539,6 +1673,7 @@ export async function lintProductionMigrations(
       containsForbiddenMigrationSql(migration.sql, {
         allowMediaDerivativeStateExpansion: migration.filename === "0011_media_ledger.sql",
         allowGameLifecycleReceiptKindExpansion: migration.filename === "0020_game_trash_restore.sql",
+        allowProductionProductCanaryContext: migration.filename === "0021_production_product_canary.sql",
       }) &&
       baseline[migration.filename] !== digest
     ) {

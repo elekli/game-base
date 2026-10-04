@@ -165,7 +165,7 @@ export class PostgresGameStore implements GameStore {
   }
 
   async listLibraryGames(query: LibraryGameQuery = {}): Promise<readonly GameRecord[]> {
-    const clauses: SQL[] = [sql`g.trashed_at is null`];
+    const clauses: SQL[] = [sql`g.trashed_at is null`, sql`g.is_production_canary is not true`];
     const search = query.search?.trim().replace(/[\\%_]/g, "\\$&");
     if (search) {
       const needle = `%${search}%`;
@@ -274,7 +274,7 @@ export class PostgresGameStore implements GameStore {
   async get(id: string): Promise<GameRecord | null> { return this.readGame(this.db, id); }
 
   async listTrashed(): Promise<readonly GameRecord[]> {
-    const rows = await this.db.execute(this.selectFrom(sql`where g.trashed_at is not null order by g.trashed_at desc, g.id asc`)) as Row[];
+    const rows = await this.db.execute(this.selectFrom(sql`where g.trashed_at is not null and g.is_production_canary is not true order by g.trashed_at desc, g.id asc`)) as Row[];
     return rows.map(record);
   }
 

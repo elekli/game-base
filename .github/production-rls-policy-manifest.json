@@ -2,6 +2,17 @@
   "schema": "app_private",
   "policies": [
     {
+      "table": "production_product_canaries",
+      "name": "migrator_production_product_canaries_all",
+      "validFrom": "0021",
+      "validUntilExclusive": null,
+      "permissiveness": "PERMISSIVE",
+      "command": "ALL",
+      "roles": ["app_migrator"],
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
       "table": "bgg_current_metrics",
       "name": "runtime_bgg_current_metrics",
       "validFrom": "0005",

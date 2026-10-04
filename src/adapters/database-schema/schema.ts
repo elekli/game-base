@@ -1,4 +1,4 @@
-import { pgTable, type AnyPgColumn, pgSchema, index, foreignKey, pgPolicy, uuid, numeric, integer, timestamp, text, bigint, uniqueIndex, jsonb, date, boolean } from "drizzle-orm/pg-core"
+import { pgTable, type AnyPgColumn, pgSchema, index, foreignKey, pgPolicy, uuid, numeric, integer, timestamp, text, bigint, uniqueIndex, jsonb, boolean, date } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 export const appPrivate = pgSchema("app_private");
@@ -243,6 +243,7 @@ export const gamesInAppPrivate = appPrivate.table("games", {
 	manualCoverSelectedAt: timestamp("manual_cover_selected_at", { withTimezone: true, mode: 'string' }).default(sql`'-infinity'`),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	version: bigint({ mode: "number" }).default(1),
+	isProductionCanary: boolean("is_production_canary").default(false),
 }, (table) => [
 	index("games_display_name_idx").using("btree", table.displayName.asc().nullsLast().op("text_ops")).where(sql`(trashed_at IS NULL)`),
 	foreignKey({
@@ -318,6 +319,8 @@ export const listsInAppPrivate = appPrivate.table("lists", {
 	archivedAt: timestamp("archived_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+	isProductionCanary: boolean("is_production_canary").default(false),
+	productionCanaryGeneration: uuid("production_canary_generation"),
 }, (table) => [
 	pgPolicy("runtime_lists", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
 ]);
@@ -565,6 +568,21 @@ export const platformsInAppPrivate = appPrivate.table("platforms", {
 	isSystem: boolean("is_system").default(false).notNull(),
 }, (table) => [
 	pgPolicy("runtime_platforms", { as: "permissive", for: "all", to: ["app_runtime"], using: sql`true`, withCheck: sql`true`  }),
+]);
+
+export const productionProductCanariesInAppPrivate = appPrivate.table("production_product_canaries", {
+	id: uuid().notNull(),
+	ownerId: text("owner_id").notNull(),
+	generation: uuid().notNull(),
+	phase: text().notNull(),
+	commandId: uuid("command_id"),
+	operation: text(),
+	targetIds: uuid("target_ids").array().default(sql`'{}'::uuid[]`).notNull(),
+	deadlineAt: timestamp("deadline_at", { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).default(sql`clock_timestamp()`).notNull(),
+}, (table) => [
+	pgPolicy("migrator_production_product_canaries_all", { as: "permissive", for: "all", to: ["app_migrator"], using: sql`true`, withCheck: sql`true`  }),
 ]);
 
 export const productionSmokeCanariesInAppPrivate = appPrivate.table("production_smoke_canaries", {

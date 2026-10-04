@@ -4,6 +4,7 @@ import type { LibraryService } from "@/modules/library";
 import { handlePrivateAction, type PrivateActionDependencies, type PrivateActionResult } from "@/shared/auth/private-action";
 import type { OwnerIdentity } from "@/shared/auth/verify-access-token";
 import type { VersionedCommandResult } from "@/modules/commands";
+import { attachProductionCanaryExecutionSha, withProductionProductCanaryMutation } from "@/app/production-canary/owner-mutation";
 
 const addContributionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("new"), gameId: z.uuid(), name: z.string().trim().min(1).max(200), entityKind: z.enum(["person", "company"]), role: z.enum(["design", "art", "publisher"]), allowDuplicate: z.boolean() }),
@@ -43,14 +44,18 @@ export type PrivateMutationAdapter = Readonly<{
 }>;
 
 export function createPrivateMutationAdapter({ getHeaders, getPrivateDependencies, getServices }: AdapterDependencies): PrivateMutationAdapter {
-  function boundary<Input, Success extends object>(options: { input: unknown; schema: z.ZodType<Input>; inputErrorMessage: string; operation: (input: Input, owner: OwnerIdentity) => Promise<Success> }) {
-    return getHeaders().then((headers) => handlePrivateAction(headers, {
+  function boundary<Input, Success extends object>(options: { input: unknown; schema: z.ZodType<Input>; inputErrorMessage: string; operation: (input: Input, owner: OwnerIdentity) => Promise<Success>; canary?: (input: Input) => { commandId: string; operation: "game.trash" | "game.restore"; targetIds: readonly string[] } }) {
+    return getHeaders().then(async (headers) => attachProductionCanaryExecutionSha(headers, await handlePrivateAction(headers, {
       ...getPrivateDependencies(),
       input: options.input,
       schema: options.schema,
       inputErrorMessage: options.inputErrorMessage,
-      operation: async (owner, parsed) => options.operation(parsed, owner),
-    }));
+      operation: async (owner, parsed) => {
+        const execute = () => options.operation(parsed, owner);
+        const scope = options.canary?.(parsed);
+        return scope ? withProductionProductCanaryMutation({ headers, ownerId: owner.sub, ...scope, execute }) : execute();
+      },
+    })));
   }
 
   return {
@@ -78,14 +83,14 @@ export function createPrivateMutationAdapter({ getHeaders, getPrivateDependencie
       } });
     },
     moveGameToTrash(input) {
-      return boundary({ input, schema: lifecycleSchema, inputErrorMessage: "移入資源回收區參數無效。", operation: async (parsed, owner) => {
+      return boundary({ input, schema: lifecycleSchema, inputErrorMessage: "移入資源回收區參數無效。", canary: (parsed) => ({ commandId: parsed.commandId, operation: "game.trash", targetIds: [parsed.gameId] }), operation: async (parsed, owner) => {
         const { gamesService } = await getServices();
         const result = await gamesService.moveGameToTrash({ ...parsed, ownerId: owner.sub });
         return result;
       } });
     },
     restoreGame(input) {
-      return boundary({ input, schema: lifecycleSchema, inputErrorMessage: "還原遊戲參數無效。", operation: async (parsed, owner) => {
+      return boundary({ input, schema: lifecycleSchema, inputErrorMessage: "還原遊戲參數無效。", canary: (parsed) => ({ commandId: parsed.commandId, operation: "game.restore", targetIds: [parsed.gameId] }), operation: async (parsed, owner) => {
         const { gamesService } = await getServices();
         const result = await gamesService.restoreGame({ ...parsed, ownerId: owner.sub });
         return result;

@@ -247,6 +247,76 @@ describe("production migration safety lint", () => {
     );
   });
 
+  it("rejects top-level set_config even in the production canary migration", async () => {
+    const root = await migrationFixture({
+      "0021_production_product_canary.sql": `
+        grant app_migrator to postgres;
+        set local role app_migrator;
+        select set_config('app.production_canary_generation', 'attacker', true);
+        reset role;
+        revoke app_migrator from postgres;
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
+  });
+
+  it("rejects non-canary set_config values inside an allowed canary routine", async () => {
+    const root = await migrationFixture({
+      "0021_production_product_canary.sql": `
+        grant app_migrator to postgres;
+        set local role app_migrator;
+        create function app_private.claim_production_product_canary(uuid, text) returns boolean language plpgsql as $$
+          begin perform set_config('role', 'postgres', true); return true; end
+        $$;
+        reset role;
+        revoke app_migrator from postgres;
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
+  });
+
+  it("rejects nested set_config calls inside an allowed canary routine", async () => {
+    const root = await migrationFixture({
+      "0021_production_product_canary.sql": `
+        grant app_migrator to postgres;
+        set local role app_migrator;
+        create function app_private.claim_production_product_canary(uuid, text) returns boolean language plpgsql as $$
+          begin perform set_config('app.production_canary_generation', set_config('search_path', 'pg_temp', true), true); return true; end
+        $$;
+        reset role;
+        revoke app_migrator from postgres;
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
+  });
+
+  it("rejects session-scoped set_config inside an allowed canary routine", async () => {
+    const root = await migrationFixture({
+      "0021_production_product_canary.sql": `
+        grant app_migrator to postgres;
+        set local role app_migrator;
+        create function app_private.claim_production_product_canary(uuid, text) returns boolean language plpgsql as $$
+          begin perform set_config('app.production_canary_generation', 'fixed', false); return true; end
+        $$;
+        reset role;
+        revoke app_migrator from postgres;
+      `,
+    });
+
+    await expect(lintProductionMigrations(root)).rejects.toThrow(
+      "ProductionMigrationSafetyError",
+    );
+  });
+
   it.each([
     ["uppercase prefix", String.raw`select U&"set\005fconfig"('role', 'postgres', true);`],
     ["lowercase prefix", String.raw`select u&"set\005fconfig"('role', 'postgres', true);`],
