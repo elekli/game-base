@@ -158,7 +158,17 @@ jobs:
       - name: Prepare isolated canary evidence identity
         id: canary
         run: |
-          generation=$(node -e 'const {createHash}=require("node:crypto");const b=createHash("sha256").update(`${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}`).digest();b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;const h=b.subarray(0,16).toString("hex");process.stdout.write(`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`)')
+          generation=$(node <<'NODE'
+          const { createHash } = require("node:crypto");
+          const bytes = createHash("sha256")
+            .update(`${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}`)
+            .digest();
+          bytes[6] = (bytes[6] & 15) | 64;
+          bytes[8] = (bytes[8] & 63) | 128;
+          const hex = bytes.subarray(0, 16).toString("hex");
+          process.stdout.write(`${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`);
+          NODE
+          )
           echo "generation=$generation" >> "$GITHUB_OUTPUT"
       - name: Install Chromium for protected Production owner acceptance
         run: pnpm exec playwright install --with-deps chromium
