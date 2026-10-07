@@ -2,7 +2,10 @@ import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
 
 const databaseUrl = process.env.DIRECT_DATABASE_URL ?? "postgres://postgres:postgres@127.0.0.1:54322/postgres";
+const adminDatabaseUrl = new URL(databaseUrl);
+adminDatabaseUrl.username = "supabase_admin";
 const database = postgres(databaseUrl, { max: 3, prepare: false, connect_timeout: 5 });
+const adminDatabase = postgres(adminDatabaseUrl.toString(), { max: 1, prepare: false, connect_timeout: 5 });
 const fixedGame = "21b1553c-bcc2-4d8b-9ccd-93b54e28ef1d";
 
 function uuid() {
@@ -18,7 +21,27 @@ async function expectSqlError(operation: Promise<unknown>, message: string) {
 }
 
 describe("production product canary fencing on PostgreSQL", () => {
-  afterAll(async () => database.end());
+  afterAll(async () => {
+    await Promise.all([database.end(), adminDatabase.end()]);
+  });
+
+  it("deletes ordinary game rows so test cleanup can release their source identities", async () => {
+    let deleted: Record<string, unknown>[] = [];
+
+    await expect(adminDatabase.begin(async (transaction) => {
+      const inserted = await transaction.unsafe(
+        "insert into app_private.games (medium, display_name) values ('board_game', $1) returning id",
+        [`cleanup-regression-${uuid()}`],
+      );
+      deleted = await transaction.unsafe(
+        "delete from app_private.games where id = $1::uuid returning id",
+        [inserted[0]?.id],
+      );
+      throw new Error("rollback cleanup regression fixture");
+    })).rejects.toThrow("rollback cleanup regression fixture");
+
+    expect(deleted).toHaveLength(1);
+  });
 
   it("serializes cleanup behind an admitted write and keeps rollback recoverable", async () => {
     const firstGeneration = uuid();

@@ -617,7 +617,7 @@ export async function checkProductionReleaseContract(root: string) {
       "9c24299b036a9f188641f750d91f7e97ff6d4a37f7fe3d8c2cbcc354a7c2625e",
       "e95dcef3bfedf8b6ab6dcb80891403f9b1c27a9f45e5c3b16fd7506046ec0e4b",
       "57811657afa03e4c71036ac0a877d8eca0217d9b4a3e8bb4e12421509ff05b02",
-      "3f2c078c673b777d279486d9643be98aa04b348e29104f6c92349c78d2e4dc4a",
+      "2d2bab7d41ab901f1907e18ec40c550b84e51c7f46292c71a4be1fefa8f0025f",
       "f78d3201f6b40ea6f10029cd62bb92a949fc078419ea85943afa71d1f3d5beed",
     ]),
     "Production deployment artifact fingerprints must remain fixed",

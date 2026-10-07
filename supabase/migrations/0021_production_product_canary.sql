@@ -217,7 +217,7 @@ begin
         raise exception 'canary_game_write_rejected';
       end if;
     end if;
-    return new;
+    return case when tg_op = 'DELETE' then old else new end;
   elsif tg_table_name = 'notes' then
     game_id := case when tg_op = 'DELETE' then old.game_id else new.game_id end;
     if exists (
