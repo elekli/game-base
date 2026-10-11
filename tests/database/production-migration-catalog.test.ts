@@ -117,6 +117,7 @@ describe("production migration PostgreSQL catalog checks", () => {
         set local role app_migrator;
         create function app_private.acl_probe_postgres_function() returns integer
           language sql as $$ select 1 $$;
+        revoke execute on function app_private.acl_probe_postgres_function() from public;
         grant execute on function app_private.acl_probe_postgres_function() to postgres;
         reset role;
       `);
