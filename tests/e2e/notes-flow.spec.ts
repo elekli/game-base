@@ -198,13 +198,13 @@ test("#69 無 Navigation API 時，取消前進與返回都保留本地文字", 
     return guardedWindow.__puizeruNavigationGuardState?.installed === true
       && typeof window.history.state?.__puizeruHistoryPosition === "number";
   })).toBe(true);
-  await historyPage.evaluate(() => {
-    window.history.pushState(window.history.state, "", "#history-one");
-    window.history.pushState(window.history.state, "", "#history-two");
-    window.history.pushState(window.history.state, "", "#history-three");
-    window.history.pushState(window.history.state, "", "#history-four");
-    window.history.back();
-  });
+  for (const hash of ["#history-one", "#history-two", "#history-three", "#history-four"]) {
+    await historyPage.evaluate((nextHash) => {
+      window.history.pushState(window.history.state, "", nextHash);
+    }, hash);
+    await expect(historyPage).toHaveURL(`${gameUrl}${hash}`);
+  }
+  await historyPage.evaluate(() => window.history.back());
   await expect(historyPage).toHaveURL(`${gameUrl}#history-three`);
   await historyPage.evaluate(() => {
     const originalFetch = window.fetch.bind(window);
