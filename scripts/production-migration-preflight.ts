@@ -399,6 +399,12 @@ select json_build_object(
             and not privilege.is_grantable
           )
           or (
+            privilege.grantee = (select oid from pg_roles where rolname = 'postgres')
+            and privilege.privilege_type = 'EXECUTE'
+            and not privilege.is_grantable
+            and procedure.oid = to_regprocedure('app_private.claim_production_product_canary(uuid,text)')
+          )
+          or (
             privilege.grantee = (select oid from pg_roles where rolname = 'app_runtime')
             and privilege.privilege_type = 'EXECUTE'
             and not privilege.is_grantable

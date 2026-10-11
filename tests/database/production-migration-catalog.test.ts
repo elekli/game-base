@@ -107,6 +107,27 @@ describe("production migration PostgreSQL catalog checks", () => {
     expect(healthy.productionSmokeSecurityDriftCount).toBe(0);
   });
 
+  it("allows postgres to execute only the protected product-canary claim function", async () => {
+    const healthy = await snapshot();
+    expect(healthy.unexpectedAclCount).toBe(0);
+
+    await database.unsafe("begin");
+    try {
+      await database.unsafe(`
+        set local role app_migrator;
+        create function app_private.acl_probe_postgres_function() returns integer
+          language sql as $$ select 1 $$;
+        grant execute on function app_private.acl_probe_postgres_function() to postgres;
+        reset role;
+      `);
+
+      const polluted = await snapshot();
+      expect(polluted.unexpectedAclCount).toBeGreaterThan(healthy.unexpectedAclCount);
+    } finally {
+      await database.unsafe("rollback");
+    }
+  });
+
   it("keeps the repository RLS manifest complete for the replayed catalog", async () => {
     const healthy = await snapshot();
     const manifest = JSON.parse(
