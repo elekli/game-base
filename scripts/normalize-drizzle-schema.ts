@@ -39,6 +39,10 @@ const cyclicMediaReferences = [
 ] as const;
 
 let normalizedSchema = schema;
+normalizedSchema = normalizedSchema.replace(
+  '\ttargetIds: uuid("target_ids").array().default([""]).notNull(),',
+  '\ttargetIds: uuid("target_ids").array().default(sql`\'{}\'::uuid[]`).notNull(),',
+);
 for (const [before, after] of cyclicMediaReferences) normalizedSchema = normalizedSchema.replace(before, after);
 for (const [column, reference] of [
   ['gameId: uuid("game_id").notNull()', "gamesInAppPrivate.id"],

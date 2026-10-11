@@ -71,10 +71,14 @@ export async function GET(request: Request) {
   try {
     const config = getRuntimeConfig();
     const verifyAccessToken = getProductionAccessTokenVerifier(config.cloudflare);
+    const executionSha = process.env.VERCEL_GIT_COMMIT_SHA;
 
     return handlePrivateRequest(request, {
       verifyAccessToken,
-      operation: async () => ({ status: "ready" }),
+      operation: async () => ({
+        status: "ready",
+        executionSha: executionSha && /^[a-f0-9]{40}$/.test(executionSha) ? executionSha : null,
+      }),
       onAccessDenied: ({ requestId }) => {
         console.warn(
           serializePrivatePingAccessDenied(requestId, config.environment),

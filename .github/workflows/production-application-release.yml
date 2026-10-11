@@ -155,10 +155,40 @@ jobs:
         env:
           RELEASE_EVIDENCE_PATH: ${{ runner.temp }}/evidence/application-release.json
         run: pnpm release:application:run
+      - name: Prepare isolated canary evidence identity
+        id: canary
+        run: |
+          generation=$(node <<'NODE'
+          const { createHash } = require("node:crypto");
+          const bytes = createHash("sha256")
+            .update(`${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}`)
+            .digest();
+          bytes[6] = (bytes[6] & 15) | 64;
+          bytes[8] = (bytes[8] & 63) | 128;
+          const hex = bytes.subarray(0, 16).toString("hex");
+          process.stdout.write(`${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`);
+          NODE
+          )
+          echo "generation=$generation" >> "$GITHUB_OUTPUT"
+      - name: Install Chromium for protected Production owner acceptance
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run fixed Production product canary
+        env:
+          PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
+          PRODUCTION_CANARY_EXECUTION_SHA: ${{ needs.verify-release-candidate.outputs.execution_sha }}
+          PRODUCTION_CANARY_GENERATION: ${{ steps.canary.outputs.generation }}
+          PRODUCTION_CANARY_EVIDENCE_PATH: ${{ runner.temp }}/evidence/production-canary.json
+          PRODUCTION_CANARY_SCREENSHOT_PATH: ${{ runner.temp }}/production-canary-playwright/production-canary-390.png
+          PRODUCTION_CANARY_SCREENSHOT_OUTPUT_PATH: ${{ runner.temp }}/evidence/production-canary-390.png
+          PRODUCTION_CANARY_OUTPUT_DIR: ${{ runner.temp }}/production-canary-playwright
+        run: pnpm exec tsx scripts/production-product-canary.ts
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: production-application-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/evidence/application-release.json
+          path: |
+            ${{ runner.temp }}/evidence/application-release.json
+            ${{ runner.temp }}/evidence/production-canary.json
+            ${{ runner.temp }}/evidence/production-canary-390.png
           retention-days: 90
           if-no-files-found: warn

@@ -5,6 +5,7 @@ import type { GamesService } from "@/modules/games";
 import { handlePrivateAction, type PrivateActionDependencies } from "@/shared/auth/private-action";
 import { ExternalReferenceThumbnailUnavailableError, type ExternalReferenceThumbnailService } from "@/modules/lists/external-reference-thumbnail";
 import { getRequestId } from "@/shared/observability/request-id";
+import { attachProductionCanaryExecutionSha, withProductionProductCanaryMutation } from "@/app/production-canary/owner-mutation";
 
 const uuid = z.uuid().transform((value) => value.toLowerCase());
 const target = z.discriminatedUnion("kind", [
@@ -35,17 +36,21 @@ export function createPrivateListAdapter(input: Readonly<{ getHeaders: () => Pro
       catch { console.error("external_reference_thumbnail_observer_failed"); }
     }
   };
-  const boundary = <Value, Success extends object>(value: unknown, schema: z.ZodType<Value>, operation: (parsed: Value, ownerId: string, requestId: string) => Promise<Success>) => input.getHeaders().then((headers) => handlePrivateAction(headers, {
+  const boundary = <Value, Success extends object>(value: unknown, schema: z.ZodType<Value>, operation: (parsed: Value, ownerId: string, requestId: string) => Promise<Success>, canary?: (parsed: Value) => { commandId: string; targetIds: readonly string[] }) => input.getHeaders().then(async (headers) => attachProductionCanaryExecutionSha(headers, await handlePrivateAction(headers, {
     ...input.getPrivateDependencies(), input: value, schema, inputErrorMessage: "清單參數無效。",
-    operation: async (owner, parsed) => operation(parsed, owner.sub, getRequestId(headers)),
-  }));
+    operation: async (owner, parsed) => {
+      const execute = () => operation(parsed, owner.sub, getRequestId(headers));
+      const scope = canary?.(parsed);
+      return scope ? withProductionProductCanaryMutation({ headers, ownerId: owner.sub, operation: "list.create", ...scope, execute }) : execute();
+    },
+  })));
   return {
     create: (value: unknown) => boundary(value, create, async (parsed, ownerId, requestId) => {
       const verified = await verifiedTarget(parsed.firstMember);
       const result = await input.listsService.create({ ...parsed, firstMember: verified.target, ownerId });
       await persistThumbnail(verified, requestId);
       return result;
-    }),
+    }, (parsed) => ({ commandId: parsed.commandId, targetIds: parsed.firstMember.kind === "game" ? [parsed.firstMember.gameId] : [] })),
     add: (value: unknown) => boundary(value, add, async (parsed, ownerId, requestId) => {
       const verified = await verifiedTarget(parsed.member);
       const result = await input.listsService.add({ ...parsed, member: verified.target, ownerId });

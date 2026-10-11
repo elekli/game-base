@@ -27,7 +27,7 @@ export class PostgresListStore implements ListStore {
   constructor(private readonly db: ProductionExecutor, private readonly issueThumbnailRead?: (objectKey: string) => Promise<string>) {}
 
   async list(): Promise<readonly ListRecord[]> {
-    const rows = await this.db.execute(sql`select l.id, l.name, l.version, l.archived_at, count(m.id) filter (where m.removed_at is null) as member_count from app_private.lists l left join app_private.list_memberships m on m.list_id = l.id where l.archived_at is null group by l.id order by lower(l.name), l.id`) as Row[];
+    const rows = await this.db.execute(sql`select l.id, l.name, l.version, l.archived_at, count(m.id) filter (where m.removed_at is null) as member_count from app_private.lists l left join app_private.list_memberships m on m.list_id = l.id where l.archived_at is null and l.is_production_canary is not true group by l.id order by lower(l.name), l.id`) as Row[];
     return rows.map(asList);
   }
 
@@ -38,7 +38,7 @@ export class PostgresListStore implements ListStore {
       from app_private.lists l
       join app_private.list_memberships member on member.list_id = l.id and member.removed_at is null
       left join app_private.list_memberships all_members on all_members.list_id = l.id
-      where l.archived_at is not null and (
+      where l.archived_at is not null and l.is_production_canary is not true and (
         member.game_id = ${gameId}
         or member.external_game_identity_id = (select external_game_identity_id from app_private.games where id = ${gameId})
       )
@@ -49,7 +49,7 @@ export class PostgresListStore implements ListStore {
   }
 
   async findName(name: string): Promise<ListRecord | null> {
-    const rows = await this.db.execute(sql`select l.id, l.name, l.version, l.archived_at, count(m.id) filter (where m.removed_at is null) as member_count from app_private.lists l left join app_private.list_memberships m on m.list_id = l.id where l.name_key = lower(${name.trim()}) collate "C" group by l.id`) as Row[];
+    const rows = await this.db.execute(sql`select l.id, l.name, l.version, l.archived_at, count(m.id) filter (where m.removed_at is null) as member_count from app_private.lists l left join app_private.list_memberships m on m.list_id = l.id where l.name_key = lower(${name.trim()}) collate "C" and l.is_production_canary is not true group by l.id`) as Row[];
     return rows[0] ? asList(rows[0]) : null;
   }
 

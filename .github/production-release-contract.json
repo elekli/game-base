@@ -13,7 +13,7 @@
   "vercelSettingsReadAdapter": "scripts/vercel-read-only-rest-client.ts",
   "vercelSettingsReadStatus": "ready-official-rest-read-only",
   "productionDeploymentWriter": ".github/workflows/production-application-release.yml",
-  "productionDeploymentWriterSha256": "e9aecd21e93451143e4fc0e9a6ad222908109e2fe1622703ddde550935c62cb5",
+  "productionDeploymentWriterSha256": "3a7157d2d131008c98ed65cd6c0467026e985fb4dfd587a75c14c9dc7e67bd41",
   "productionSupabaseFingerprintHelper": "scripts/fingerprint-supabase-api-keys.mjs",
   "productionSupabaseFingerprintHelperSha256": "e5046bdc858d1cd3777115d1e277d8995d2a594bc5c902ff13a15969154d0ba9",
   "productionLiveSettingsChecker": "scripts/check-live-production-settings.ts",
@@ -103,5 +103,15 @@
   "vercelGitDeployment": false,
   "hostedPreview": false,
   "productionReleaseFailureDiagnostics": "scripts/production-release-failure-diagnostics.ts",
-  "productionReleaseFailureDiagnosticsSha256": "15d015bba5c5fc558b7196428096476ba95f67465e5a90b3ce78a6099f350eae"
+  "productionReleaseFailureDiagnosticsSha256": "15d015bba5c5fc558b7196428096476ba95f67465e5a90b3ce78a6099f350eae",
+  "productionProductCanaryRunnerSha256": "9c24299b036a9f188641f750d91f7e97ff6d4a37f7fe3d8c2cbcc354a7c2625e",
+  "productionProductCanaryRecoveryRunnerSha256": "e95dcef3bfedf8b6ab6dcb80891403f9b1c27a9f45e5c3b16fd7506046ec0e4b",
+  "productionProductCanaryRecoveryWorkflowSha256": "57811657afa03e4c71036ac0a877d8eca0217d9b4a3e8bb4e12421509ff05b02",
+  "productionProductCanaryMigrationSha256": "2d2bab7d41ab901f1907e18ec40c550b84e51c7f46292c71a4be1fefa8f0025f",
+  "productionProductCanaryPgtapSha256": "f78d3201f6b40ea6f10029cd62bb92a949fc078419ea85943afa71d1f3d5beed",
+  "productionProductCanaryRunner": "scripts/production-product-canary.ts",
+  "productionProductCanaryRecoveryRunner": "scripts/production-product-canary-recovery.ts",
+  "productionProductCanaryRecoveryWorkflow": ".github/workflows/production-product-canary-recovery.yml",
+  "productionProductCanaryMigration": "supabase/migrations/0021_production_product_canary.sql",
+  "productionProductCanaryPgtap": "supabase/tests/0021_production_product_canary.pgtap.sql"
 }

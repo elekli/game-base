@@ -1,0 +1,132 @@
+name: Production Product Canary Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Failed Production Application Release run ID
+        required: true
+        type: string
+      source_run_attempt:
+        description: Exact failed run attempt
+        required: true
+        type: string
+      source_generation:
+        description: Generation UUID from that run's canary evidence
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  verify-source:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      - name: Verify failed canary release run and evidence artifact
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ inputs.source_run_attempt }}
+          SOURCE_GENERATION: ${{ inputs.source_generation }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ && "$SOURCE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_GENERATION" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]]
+          run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/attempts/${SOURCE_RUN_ATTEMPT}")"
+          echo "$run" | jq -e --arg repository "$GITHUB_REPOSITORY" '
+            .repository.full_name == $repository and
+            .path == ".github/workflows/production-application-release.yml" and
+            .head_branch == "main" and .event == "workflow_dispatch" and
+            .status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled")
+          ' >/dev/null
+          source_sha="$(echo "$run" | jq -r .head_sha)"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          git merge-base --is-ancestor "$source_sha" origin/main
+          artifact_name="production-application-evidence-${SOURCE_RUN_ID}-${SOURCE_RUN_ATTEMPT}"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts?per_page=100" |
+            jq -e --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | length == 1' >/dev/null
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+  recover:
+    needs: verify-source
+    runs-on: ubuntu-latest
+    environment:
+      name: Production
+    env:
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      SOURCE_RUN_ATTEMPT: ${{ inputs.source_run_attempt }}
+      SOURCE_EXECUTION_SHA: ${{ needs.verify-source.outputs.source_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.verify-source.outputs.source_sha }}
+      - name: Confirm source commit and current main ancestry
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$SOURCE_EXECUTION_SHA"
+          git merge-base --is-ancestor "$SOURCE_EXECUTION_SHA" origin/main
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm release:contract:check
+      - name: Download exact source-run canary evidence
+        run: |
+          set -euo pipefail
+          artifact_name="production-application-evidence-${SOURCE_RUN_ID}-${SOURCE_RUN_ATTEMPT}"
+          artifact="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts?per_page=100" |
+            jq -er --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0].id else error("artifact identity mismatch") end')"
+          mkdir -p "$RUNNER_TEMP/canary-source"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact}/zip" > "$RUNNER_TEMP/canary-source.zip"
+          unzip -q "$RUNNER_TEMP/canary-source.zip" -d "$RUNNER_TEMP/canary-source"
+          mapfile -t files < <(find "$RUNNER_TEMP/canary-source" -type f -name production-canary.json)
+          test "${#files[@]}" -eq 1
+          echo "PRODUCTION_CANARY_SOURCE_EVIDENCE_PATH=${files[0]}" >> "$GITHUB_ENV"
+      - name: Install protected CA file
+        env:
+          PRODUCTION_MIGRATION_CA_CERT: ${{ secrets.PRODUCTION_MIGRATION_CA_CERT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          cert="$RUNNER_TEMP/production-ca.pem"
+          printf '%s' "$PRODUCTION_MIGRATION_CA_CERT" > "$cert"
+          echo "PGSSLROOTCERT=$cert" >> "$GITHUB_ENV"
+      - name: Recover only the evidenced fixed generation
+        env:
+          PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
+          PRODUCTION_CANARY_SOURCE_EXECUTION_SHA: ${{ needs.verify-source.outputs.source_sha }}
+          PRODUCTION_CANARY_SOURCE_GENERATION: ${{ inputs.source_generation }}
+          PRODUCTION_CUSTOM_DOMAIN: ${{ vars.PRODUCTION_CUSTOM_DOMAIN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          PRODUCTION_CANARY_RECOVERY_EVIDENCE_PATH: ${{ runner.temp }}/evidence/production-canary-recovery.json
+        run: pnpm exec tsx scripts/production-product-canary-recovery.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-product-canary-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence/production-canary-recovery.json
+          retention-days: 90
+          if-no-files-found: warn

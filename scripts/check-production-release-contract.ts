@@ -55,6 +55,16 @@ type ProductionReleaseContract = Readonly<{
   productionRestoreWorkflow: string;
   productionRestoreWorkflowSha256: string;
   productionRestoreStatus: string;
+  productionProductCanaryRunner: string;
+  productionProductCanaryRunnerSha256: string;
+  productionProductCanaryRecoveryRunner: string;
+  productionProductCanaryRecoveryRunnerSha256: string;
+  productionProductCanaryRecoveryWorkflow: string;
+  productionProductCanaryRecoveryWorkflowSha256: string;
+  productionProductCanaryMigration: string;
+  productionProductCanaryMigrationSha256: string;
+  productionProductCanaryPgtap: string;
+  productionProductCanaryPgtapSha256: string;
   productionSmokeContract: string;
   productionSmokeContractSha256: string;
   productionSmokeModel: string;
@@ -530,6 +540,12 @@ export async function checkProductionReleaseContract(root: string) {
   await assertPinnedArtifact(root, contract.productionRestoreWorkflow, ".github/workflows/production-restore-drill.yml", contract.productionRestoreWorkflowSha256, "restore workflow");
   await assertPinnedArtifact(root, contract.productionRestoreEvidenceSchema, ".github/production-restore-drill-evidence.schema.json", contract.productionRestoreEvidenceSchemaSha256, "restore evidence schema");
   assertContract(contract.productionRestoreStatus === "ready-protected-manual", "restore runner must be ready behind the protected manual workflow");
+  await assertPinnedArtifact(root, contract.productionProductCanaryRunner, "scripts/production-product-canary.ts", contract.productionProductCanaryRunnerSha256, "production product canary runner");
+  await assertPinnedArtifact(root, contract.productionProductCanaryRecoveryRunner, "scripts/production-product-canary-recovery.ts", contract.productionProductCanaryRecoveryRunnerSha256, "production product canary recovery runner");
+  await assertPinnedArtifact(root, contract.productionProductCanaryRecoveryWorkflow, ".github/workflows/production-product-canary-recovery.yml", contract.productionProductCanaryRecoveryWorkflowSha256, "production product canary recovery workflow");
+  await assertPinnedArtifact(root, contract.productionProductCanaryMigration, "supabase/migrations/0021_production_product_canary.sql", contract.productionProductCanaryMigrationSha256, "production product canary migration");
+  await assertPinnedArtifact(root, contract.productionProductCanaryPgtap, "supabase/tests/0021_production_product_canary.pgtap.sql", contract.productionProductCanaryPgtapSha256, "production product canary pgTAP");
+  assertContract(productionApplicationWorkflow.includes("pnpm exec tsx scripts/production-product-canary.ts"), "protected Production application release must execute the fixed product canary");
   await assertPinnedArtifact(root, contract.vercelDeploymentAdapter, "scripts/vercel-deployment-rest-adapter.ts", contract.vercelDeploymentAdapterSha256, "Vercel deployment adapter");
   await assertPinnedArtifact(root, contract.vercelRestTransport, "scripts/vercel-rest-transport.ts", contract.vercelRestTransportSha256, "Vercel REST transport");
   assertContract(
@@ -563,11 +579,16 @@ export async function checkProductionReleaseContract(root: string) {
       contract.productionRestoreRunnerSha256,
       contract.productionRestoreWorkflowSha256,
       contract.productionRestoreEvidenceSchemaSha256,
+      contract.productionProductCanaryRunnerSha256,
+      contract.productionProductCanaryRecoveryRunnerSha256,
+      contract.productionProductCanaryRecoveryWorkflowSha256,
+      contract.productionProductCanaryMigrationSha256,
+      contract.productionProductCanaryPgtapSha256,
     ]) === JSON.stringify([
       "589afce50b16f0d4e6896ad091b9621a96065ad6f2a15c7d9c16d7e95ed1405a",
       "ae59ff741751d62e5b4a423cd6da6f410b263137453cf00397d5246ad0c7904f",
       "57138896b0f5b1881c22bfde6dbce440e4ec5b2a07c355e843aa4d85644b7b76",
-      "e9aecd21e93451143e4fc0e9a6ad222908109e2fe1622703ddde550935c62cb5",
+      "3a7157d2d131008c98ed65cd6c0467026e985fb4dfd587a75c14c9dc7e67bd41",
       "e5046bdc858d1cd3777115d1e277d8995d2a594bc5c902ff13a15969154d0ba9",
       "4abb9cf071fa261bc54e6facd1b2a43401d4be5d1ce67023a8d8d1089234e831",
       "d3b3be5b75a02d92c5be588720584ddf302c805343c50574a7dccb7e0929420d",
@@ -593,6 +614,11 @@ export async function checkProductionReleaseContract(root: string) {
       "2ae2be12554e82d36220558a17ade62600c823a38efd72bbda8148d6ecbb7558",
       "28cf4c2e32761df2692ef234c103944beb4b267512f577b1a5d3ccbb7c826974",
       "b801b6e3e46f64c3e273c33b5c3c3432ebc152247900e125459f2cecc5613d40",
+      "9c24299b036a9f188641f750d91f7e97ff6d4a37f7fe3d8c2cbcc354a7c2625e",
+      "e95dcef3bfedf8b6ab6dcb80891403f9b1c27a9f45e5c3b16fd7506046ec0e4b",
+      "57811657afa03e4c71036ac0a877d8eca0217d9b4a3e8bb4e12421509ff05b02",
+      "2d2bab7d41ab901f1907e18ec40c550b84e51c7f46292c71a4be1fefa8f0025f",
+      "f78d3201f6b40ea6f10029cd62bb92a949fc078419ea85943afa71d1f3d5beed",
     ]),
     "Production deployment artifact fingerprints must remain fixed",
   );
